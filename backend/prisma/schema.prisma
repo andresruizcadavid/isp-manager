@@ -110,6 +110,7 @@ model Zone {
 
   router      Router?  @relation(fields: [routerId], references: [id])
   clients     Client[]
+  networkDevices NetworkDevice[]
 
   @@index([routerId])
   @@map("zones")
@@ -438,4 +439,106 @@ model SystemConfig {
   type  String // "string", "number", "boolean", "json"
 
   @@map("system_configs")
+}
+
+// ── Network Monitor (style: MikroTik The Dude) ────────────
+// A node placed on the topology map. Position is persisted so the canvas
+// re-renders identically across sessions. status/latency are updated by
+// the ping engine (services/network-monitor.service.js) every 30s.
+model NetworkDevice {
+  id        String       @id @default(cuid())
+  name      String
+  ip        String
+  type      DeviceType   @default(OTHER)
+  zoneId    Int?
+  posX      Float        @default(0)
+  posY      Float        @default(0)
+  status    DeviceStatus @default(UNKNOWN)
+  latency   Float?       // ms, last successful ping (null if down/unknown)
+  lastSeen  DateTime?    // last time the device responded
+  notes     String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  zone        Zone?               @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  outgoing    NetworkConnection[] @relation("source")
+  incoming    NetworkConnection[] @relation("target")
+  events      NetworkEvent[]
+
+  @@index([status])
+  @@index([zoneId])
+  @@map("network_devices")
+}
+
+// Edge between two devices on the map. Both ends cascade on parent delete
+// so we never leave dangling edges. label is freeform (e.g. "fibra", "PtP").
+model NetworkConnection {
+  id        String   @id @default(cuid())
+  sourceId  String
+  targetId  String
+  label     String?
+  createdAt DateTime @default(now())
+
+  source NetworkDevice @relation("source", fields: [sourceId], references: [id], onDelete: Cascade)
+  target NetworkDevice @relation("target", fields: [targetId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, targetId])
+  @@index([sourceId])
+  @@index([targetId])
+  @@map("network_connections")
+}
+
+// One row per state transition. We do NOT persist every ping — only the
+// up→down / down→up / up→unstable transitions, plus the message used in
+// the Telegram alert. Lets the history stay small while keeping the
+// audit trail useful.
+model NetworkEvent {
+  id        String       @id @default(cuid())
+  deviceId  String
+  status    DeviceStatus
+  latency   Float?
+  loss      Float?       // 0..100, packet loss %
+  message   String?
+  notified  Boolean      @default(false) // true once Telegram alert was sent
+  createdAt DateTime     @default(now())
+
+  device NetworkDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId])
+  @@index([createdAt])
+  @@map("network_events")
+}
+
+// Telegram bot config managed from the UI (Monitor de Red → Configuración).
+// Only the row with isActive=true is consulted by telegram.service. When no
+// row is active the monitor still runs but skips notifications.
+model TelegramConfig {
+  id              String    @id @default(cuid())
+  botToken        String
+  chatId          String    // chat_id or @channelname
+  isActive        Boolean   @default(true)
+  alertOnDown     Boolean   @default(true)
+  alertOnRecovery Boolean   @default(true)
+  lastTestedAt    DateTime?
+  lastTestResult  String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("telegram_configs")
+}
+
+enum DeviceType {
+  ROUTER
+  ANTENNA
+  SWITCH
+  ONT
+  SERVER
+  OTHER
+}
+
+enum DeviceStatus {
+  ONLINE
+  OFFLINE
+  UNSTABLE
+  UNKNOWN
 }

@@ -1,7 +1,10 @@
+import http from 'http';
 import app from './app.js';
 import { env } from './config/env.js';
 import { PrismaClient } from '@prisma/client';
 import { createRedisClient } from './services/redis.service.js';
+import { initSocket } from './services/socket.service.js';
+import { startMonitor } from './services/network-monitor.service.js';
 
 // Initialize database connection
 export const prisma = new PrismaClient({
@@ -11,7 +14,11 @@ export const prisma = new PrismaClient({
 // Initialize Redis connection
 export const redis = createRedisClient();
 
-const server = app.listen(env.PORT, async () => {
+// Wrap Express in a Node HTTP server so socket.io can share the port.
+const httpServer = http.createServer(app);
+initSocket(httpServer);
+
+const server = httpServer.listen(env.PORT, async () => {
   console.log(`🚀 ISP Manager API server running on port ${env.PORT}`);
   console.log(`📊 Environment: ${env.NODE_ENV}`);
   console.log(`🔗 API URL: http://localhost:${env.PORT}`);
@@ -35,6 +42,10 @@ const server = app.listen(env.PORT, async () => {
   } catch (e) {
     console.warn('Could not run campaign orphan cleanup:', e.message);
   }
+
+  // Start the ICMP monitor (in-process scheduler). Pings every device on the
+  // map every 30s and pushes live updates via socket.io.
+  startMonitor();
 });
 
 // Graceful shutdown

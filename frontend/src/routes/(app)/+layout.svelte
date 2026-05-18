@@ -7,7 +7,7 @@
   import {
     LayoutDashboard, Users, Router, Network,
     CreditCard, Building2, LogOut, ChevronDown, ChevronRight,
-    Menu, X
+    Menu, X, Activity
   } from 'lucide-svelte';
 
   $: initial = ($user?.name || $user?.email || '?').trim().charAt(0).toUpperCase();
@@ -23,7 +23,7 @@
   $: if ($page.url.pathname) $sidebarOpen = false;
 
   let expanded = {
-    clientes: true, finanzas: false, sistema: false, empresa: false
+    clientes: true, finanzas: false, sistema: false, empresa: false, monitor: false
   };
 
   // Icons per section key (presentation only — role gating lives in permissions.js).
@@ -31,7 +31,8 @@
     clientes: Users,
     finanzas: CreditCard,
     sistema:  Router,
-    empresa:  Building2
+    empresa:  Building2,
+    monitor:  Activity
   };
   const TOP_ITEM_ICONS = {
     '/dashboard': LayoutDashboard
@@ -59,6 +60,9 @@
       '/plans': 'Planes de Servicio',
       '/mikrotik/routers': 'Routers / NOC',
       '/mikrotik/accounts': 'Cuentas MikroTik',
+      '/network/events':   'Historial de Eventos',
+      '/network/settings': 'Alertas Telegram',
+      '/network':          'Monitor de Red',
       '/reports': 'Reportes',
       '/settings': 'Configuración',
     };

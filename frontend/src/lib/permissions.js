@@ -45,6 +45,7 @@ const ROUTE_ROLES = {
   '/settings':          ADMIN_TIER,
   '/users':             ADMIN_TIER,
   '/notifications':     ADMIN_TIER,
+  '/network':           OPERATIONAL_TIER,
 };
 
 /** Decide if a role can navigate to a path. */
@@ -94,6 +95,15 @@ export const MENU = [
       { href: '/mikrotik/routers',  label: 'Routers / NOC',     roles: ADMIN_TIER },
       { href: '/plans',             label: 'Planes de Servicio', roles: ADMIN_TIER },
       { href: '/mikrotik/accounts', label: 'Cuentas MikroTik',  roles: ADMIN_TIER },
+    ]
+  },
+  {
+    key: 'monitor', label: 'Monitor de Red',
+    roles: OPERATIONAL_TIER,
+    items: [
+      { href: '/network',          label: 'Mapa de Red',           roles: OPERATIONAL_TIER },
+      { href: '/network/events',   label: 'Historial de Eventos',  roles: OPERATIONAL_TIER },
+      { href: '/network/settings', label: 'Alertas Telegram',      roles: ADMIN_TIER },
     ]
   },
   {

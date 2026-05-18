@@ -19,6 +19,8 @@ import evidenceRoutes from './routes/evidence.routes.js';
 import usersRoutes from './routes/users.routes.js';
 import notificationsRoutes from './routes/notifications.routes.js';
 import smtpRoutes from './routes/smtp.routes.js';
+import networkRoutes from './routes/network.routes.js';
+import telegramRoutes from './routes/telegram.routes.js';
 
 const app = express();
 
@@ -51,6 +53,8 @@ app.use('/api/v1/reports',           authMiddleware, requireAdmin,       reportR
 app.use('/api/v1/users',             authMiddleware,                     usersRoutes);
 app.use('/api/v1/notifications',     authMiddleware, requireAdmin,       notificationsRoutes);
 app.use('/api/v1/smtp',              authMiddleware, requireAdmin,       smtpRoutes);
+app.use('/api/v1/network',           authMiddleware, requireOperational, networkRoutes);
+app.use('/api/v1/telegram',          authMiddleware, requireAdmin,       telegramRoutes);
 
 // ── Static serving of uploaded files ──────────────────────
 // Files are saved under <UPLOADS_PATH> by routes that use multer; expose
