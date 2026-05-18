@@ -1,0 +1,19 @@
+import { api } from './client.js';
+export const routersApi = {
+  getAll:        ()         => api.get('/mikrotik/routers'),
+  getOne:        (id)       => api.get(`/mikrotik/routers/${id}`),
+  create:        (data)     => api.post('/mikrotik/routers', data),
+  update:        (id, data) => api.put(`/mikrotik/routers/${id}`, data),
+  remove:        (id)       => api.delete(`/mikrotik/routers/${id}`),
+  sync:          (id)       => api.post(`/mikrotik/routers/${id}/sync`),
+  testConn:      (id)       => api.post(`/mikrotik/routers/${id}/test`),
+  testCredentials: (creds)  => api.post('/mikrotik/routers/test', creds),
+  availableIps:  (id)       => api.get(`/mikrotik/routers/${id}/available-ips`),
+  pppoeProfiles:        (id)       => api.get(`/mikrotik/routers/${id}/profiles`),
+  pppProfiles:          (id)       => api.get(`/mikrotik/routers/${id}/ppp-profiles`),
+  orphanPppProfiles:    (id)       => api.get(`/mikrotik/routers/${id}/ppp-profiles/orphans`),
+  deletePppProfile:     (id, name) => api.delete(`/mikrotik/routers/${id}/ppp-profiles/${encodeURIComponent(name)}`),
+  importPppoeClients:   (id)       => api.post(`/mikrotik/routers/${id}/import-pppoe-clients`),
+  preview:       (id)       => api.get(`/mikrotik/routers/${id}/pppoe-preview`),
+  import:        (id, data) => api.post(`/mikrotik/routers/${id}/import`, data),
+};

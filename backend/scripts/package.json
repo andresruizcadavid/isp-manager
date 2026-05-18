@@ -1,0 +1,10 @@
+{
+  "name": "isp-manager-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Scripts auxiliares (scraping, sync, herramientas one-off)",
+  "dependencies": {
+    "playwright": "^1.59.1"
+  }
+}

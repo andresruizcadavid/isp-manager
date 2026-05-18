@@ -1,0 +1,131 @@
+import { Router } from 'express';
+import { clientController } from '../controllers/clients.controller.js';
+import { requireOperatorOrAdmin } from '../middleware/auth.middleware.js';
+import { validateBody, validateQuery, validateParams, commonSchemas } from '../middleware/validate.middleware.js';
+import { z } from 'zod';
+
+const router = Router();
+
+// Validation schemas
+//
+// The frontend serializes empty fields as `''` or `null`. The Prisma model
+// accepts `null` for nullable columns, so we normalize "empty" inputs to
+// `undefined` and validate the rest leniently. The controller already does
+// final null/empty-string normalization before persisting.
+
+// String that allows '' / null, treating both as "not provided".
+const optionalString = () =>
+  z.preprocess(
+    (v) => (v === '' || v === null ? undefined : v),
+    z.string().optional()
+  );
+
+// Email that allows '' / null, but requires a valid address when present.
+const optionalEmail = () =>
+  z.preprocess(
+    (v) => (v === '' || v === null ? undefined : v),
+    z.string().email('Email inválido').optional()
+  );
+
+// Number that allows '' / null / numeric strings.
+const optionalNumber = () =>
+  z.preprocess(
+    (v) => {
+      if (v === '' || v === null || v === undefined) return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : v;
+    },
+    z.number().optional()
+  );
+
+// Date strings: accept ISO datetime, yyyy-mm-dd, '' / null. Normalize to ISO.
+const optionalDate = () =>
+  z.preprocess(
+    (v) => {
+      if (v === '' || v === null || v === undefined) return undefined;
+      // yyyy-mm-dd → 2024-05-09T00:00:00.000Z
+      if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+        return new Date(`${v}T00:00:00.000Z`).toISOString();
+      }
+      return v;
+    },
+    z.string().datetime({ message: 'Fecha inválida (se espera ISO o yyyy-mm-dd)' }).optional()
+  );
+
+const mikrotikSubSchema = z.object({
+  routerId:      optionalNumber(),
+  username:      optionalString(),
+  password:      optionalString(),
+  remoteAddress: optionalString(),
+  localAddress:  optionalString(),
+  profileName:   optionalString(),
+  coordinates:   optionalString(),
+  status:        z.enum(['ACTIVE', 'SUSPENDED']).optional()
+}).partial();
+
+const createClientSchema = z.object({
+  fullName:       z.string().min(2, 'Nombre debe tener al menos 2 caracteres'),
+  documentType:   z.enum(['CC', 'NIT', 'CE', 'TI', 'PAS']).optional(),
+  documentNumber: optionalString(),
+  email:          optionalEmail(),
+  phone:          optionalString(),
+  address:        optionalString(),
+  neighborhood:   optionalString(),
+  city:           optionalString(),
+  zoneId:         optionalNumber(),
+  contractDate:   optionalDate(),
+  installationDate: optionalDate(),
+  notes:          optionalString(),
+  planId:         optionalString(),
+  mikrotik:       mikrotikSubSchema.optional()
+});
+
+const updateClientSchema = createClientSchema.partial();
+
+const clientQuerySchema = commonSchemas.pagination.extend({
+  status: z.enum(['ACTIVE', 'SUSPENDED', 'INACTIVE', 'PENDING']).optional(),
+  planId: z.string().optional(),
+  city: z.string().optional()
+});
+
+const deviceSchema = z.object({
+  macAddress: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'MAC address inválida'),
+  ipAddress: z.string().ip('IP address inválida').optional(),
+  hostname: z.string().optional(),
+  deviceType: z.enum(['ROUTER', 'ACCESS_POINT', 'SWITCH', 'OTHER']).default('ROUTER')
+});
+
+// CRUD routes
+router.get('/', validateQuery(clientQuerySchema), clientController.getClients);
+
+// Helper: next sequential number for PPPoE username prefixes (must be defined
+// BEFORE the /:id route so Express does not match it as an id).
+router.get('/next-pppoe-number', clientController.getNextPppoeNumber);
+
+router.get('/:id', validateParams(commonSchemas.idParam), clientController.getClient);
+router.post('/', requireOperatorOrAdmin, validateBody(createClientSchema), clientController.createClient);
+router.put('/:id', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(updateClientSchema), clientController.updateClient);
+router.delete('/:id', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.deleteClient);
+
+// Device management
+router.get('/:id/devices', validateParams(commonSchemas.idParam), clientController.getClientDevices);
+router.post('/:id/devices', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(deviceSchema), clientController.addDevice);
+router.put('/:id/devices/:deviceId', requireOperatorOrAdmin, validateParams(z.object({ id: z.string(), deviceId: z.string() })), validateBody(deviceSchema.partial()), clientController.updateDevice);
+router.delete('/:id/devices/:deviceId', requireOperatorOrAdmin, validateParams(z.object({ id: z.string(), deviceId: z.string() })), clientController.removeDevice);
+
+// Service management
+router.post('/:id/suspend', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.suspendService);
+router.post('/:id/activate', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.activateService);
+router.post('/:id/change-plan', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(z.object({ planId: z.string() })), clientController.changePlan);
+
+// Financial information
+router.get('/:id/invoices', validateParams(commonSchemas.idParam), validateQuery(commonSchemas.pagination), clientController.getClientInvoices);
+router.get('/:id/payments', validateParams(commonSchemas.idParam), validateQuery(commonSchemas.pagination), clientController.getClientPayments);
+router.get('/:id/balance', validateParams(commonSchemas.idParam), clientController.getClientBalance);
+
+// Statistics
+router.get('/stats/overview', clientController.getClientStats);
+router.get('/stats/by-city', clientController.getClientsByCity);
+router.get('/stats/by-plan', clientController.getClientsByPlan);
+
+export default router;

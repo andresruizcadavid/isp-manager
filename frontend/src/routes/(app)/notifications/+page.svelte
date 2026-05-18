@@ -1,0 +1,1638 @@
+<script>
+  import { onMount, onDestroy } from 'svelte';
+  import { notificationsApi } from '$lib/api/notifications.api.js';
+  import { smtpApi, SMTP_PRESETS } from '$lib/api/smtp.api.js';
+  import { zonesApi } from '$lib/api/zones.api.js';
+  import { plansApi } from '$lib/api/plans.api.js';
+  import Sheet from '$lib/components/ui/Sheet.svelte';
+  import {
+    Bell, Send, FileText, History as HistoryIcon, Plus, Pencil, Trash2,
+    Mail, MessageSquare, Layers, CheckCircle2, AlertCircle, Loader2,
+    Save, X, Filter, RefreshCw, Eye, Server, Lock, User as UserIcon,
+    Eye as EyeIcon, EyeOff, ChevronDown, ChevronUp, Copy, Stethoscope
+  } from 'lucide-svelte';
+
+  let tab = 'campaigns'; // campaigns | templates | history | smtp
+
+  // ── Shared lookups ──────────────────────────────────────
+  let zones = [];
+  let plans = [];
+
+  onMount(async () => {
+    [zones, plans] = await Promise.all([
+      zonesApi.getAll().catch(() => []),
+      plansApi.getAll().catch(() => [])
+    ]);
+    await Promise.all([loadTemplates(), loadCampaigns(), loadHistory()]);
+  });
+
+  // ── Templates ───────────────────────────────────────────
+  let templates = [];
+  let tplLoading = false;
+  async function loadTemplates() {
+    tplLoading = true;
+    try { templates = await notificationsApi.listTemplates(); }
+    catch (e) { console.error(e); }
+    finally { tplLoading = false; }
+  }
+
+  let tplModalOpen = false;
+  let tplEditing = null;
+  let tplForm = emptyTpl();
+  let tplSaving = false;
+  let tplError = '';
+
+  // Email presets — must mirror EMAIL_PRESETS in backend/src/services/email-base.template.js
+  const EMAIL_PRESETS = [
+    { key: '',                     icon: '📣', title: 'Aviso importante (por defecto)' },
+    { key: 'invoice',              icon: '💳', title: 'Tu factura está lista' },
+    { key: 'reminder',             icon: '⏰', title: 'Recuerda pagar antes de vencer' },
+    { key: 'service_suspended',    icon: '⛔', title: 'Tu servicio ha sido suspendido' },
+    { key: 'service_activated',    icon: '✅', title: 'Tu servicio está activo' },
+    { key: 'payment_received',     icon: '✅', title: 'Pago registrado correctamente' },
+    { key: 'welcome',              icon: '🎉', title: 'Bienvenida' },
+    { key: 'general_announcement', icon: '📣', title: 'Aviso importante' }
+  ];
+
+  // Suggested subject + body per preset. Used to seed the form when the
+  // operator picks a preset and the body is still empty (or via the
+  // "Usar contenido sugerido" button to override).
+  const PRESET_SAMPLES = {
+    invoice: {
+      subject: 'Tu factura {{plan}} está lista',
+      body: `Estimado(a) {{name}},
+
+Hemos generado tu factura por el plan {{plan}}.
+
+• Monto a pagar: {{amount}}
+• Fecha de vencimiento: {{dueDate}}
+
+Realiza tu pago antes de la fecha de corte para mantener tu servicio activo.
+
+Datos de contacto:
+WhatsApp: 323 6329425
+Email: contacto@internetonline.co
+
+— Equipo internet-online`
+    },
+    reminder: {
+      subject: 'Recuerda pagar antes del {{dueDate}}',
+      body: `Estimado(a) {{name}},
+
+Tu pago de internet está próximo a vencer.
+
+• Plan: {{plan}}
+• Monto pendiente: {{amount}}
+• Fecha de vencimiento: {{dueDate}}
+
+Realiza tu pago antes de la fecha de corte para evitar la suspensión del servicio.
+
+Formas de pago:
+Banco: xxx xxxx
+
+Contacto:
+WhatsApp: 323 6329425
+Email: contacto@internetonline.co
+
+Horarios: Lunes a Sábado, 8:00 am a 6:00 pm
+
+— Equipo internet-online`
+    },
+    service_suspended: {
+      subject: 'Tu servicio de internet fue suspendido',
+      body: `Estimado(a) {{name}},
+
+Te informamos que tu servicio de internet fue suspendido temporalmente por falta de pago.
+
+Para reactivarlo:
+1. Realiza el pago de la factura pendiente ({{amount}}).
+2. Comunícate con nosotros para confirmarlo.
+3. Reactivaremos tu servicio en menos de 24 horas.
+
+WhatsApp: 323 6329425
+Email: contacto@internetonline.co
+
+— Equipo internet-online`
+    },
+    service_activated: {
+      subject: 'Tu servicio está activo nuevamente',
+      body: `Estimado(a) {{name}},
+
+¡Bienvenido(a) de vuelta! Tu servicio de internet ya está activo y puedes navegar con normalidad.
+
+Si presentas algún problema técnico, contáctanos:
+WhatsApp: 323 6329425
+Email: contacto@internetonline.co
+
+— Equipo internet-online`
+    },
+    payment_received: {
+      subject: 'Recibimos tu pago — Gracias',
+      body: `Estimado(a) {{name}},
+
+Confirmamos la recepción de tu pago por {{amount}}. ¡Gracias!
+
+Tu servicio continúa activo sin interrupciones.
+
+Para cualquier consulta:
+WhatsApp: 323 6329425
+Email: contacto@internetonline.co
+
+— Equipo internet-online`
+    },
+    welcome: {
+      subject: '¡Bienvenido(a) a internet-online!',
+      body: `Estimado(a) {{name}},
+
+¡Bienvenido(a) a internet-online! Ya formas parte de nuestra red.
+
+• Plan contratado: {{plan}}
+• IP asignada: {{ip}}
+• Zona: {{zone}}
+
+Si necesitas soporte técnico o tienes preguntas:
+WhatsApp: 323 6329425
+Email: contacto@internetonline.co
+
+Horarios: Lunes a Sábado, 8:00 am a 6:00 pm
+
+— Equipo internet-online`
+    },
+    general_announcement: {
+      subject: 'Aviso importante',
+      body: `Estimado(a) {{name}},
+
+[Escribe aquí tu mensaje]
+
+Si tienes alguna pregunta:
+WhatsApp: 323 6329425
+Email: contacto@internetonline.co
+
+— Equipo internet-online`
+    }
+  };
+
+  // Auto-fill subject + body when the preset changes AND the body is still
+  // empty (so we never overwrite the operator's work silently). If they want
+  // to overwrite an existing body, they use the "Usar sugerido" button.
+  function onPresetChange() {
+    if (!tplForm.preset) return;
+    const sample = PRESET_SAMPLES[tplForm.preset];
+    if (!sample) return;
+    if (!tplForm.body || tplForm.body.trim() === '') {
+      tplForm.body = sample.body;
+    }
+    if (!tplForm.subject || tplForm.subject.trim() === '') {
+      tplForm.subject = sample.subject;
+    }
+  }
+
+  function useSampleNow() {
+    const sample = PRESET_SAMPLES[tplForm.preset];
+    if (!sample) return;
+    if (tplForm.body && tplForm.body.trim() !== '') {
+      if (!confirm('Se reemplazará el contenido actual del cuerpo y asunto con el ejemplo. ¿Continuar?')) return;
+    }
+    tplForm.body = sample.body;
+    tplForm.subject = sample.subject;
+  }
+
+  function emptyTpl() {
+    return { name: '', channel: 'EMAIL', subject: '', body: '', preset: '', isActive: true };
+  }
+  function openNewTpl() {
+    tplEditing = null;
+    tplForm = emptyTpl();
+    tplError = '';
+    tplModalOpen = true;
+  }
+  function openEditTpl(t) {
+    tplEditing = t;
+    tplForm = {
+      name: t.name, channel: t.channel,
+      subject: t.subject || '', body: t.body,
+      preset: t.preset || '',
+      isActive: t.isActive
+    };
+    tplError = '';
+    tplModalOpen = true;
+  }
+  async function saveTpl() {
+    if (!tplForm.name.trim() || !tplForm.body.trim()) {
+      tplError = 'Nombre y cuerpo son obligatorios.';
+      return;
+    }
+    tplSaving = true; tplError = '';
+    try {
+      const payload = {
+        name: tplForm.name.trim(),
+        channel: tplForm.channel,
+        subject: tplForm.channel === 'EMAIL' ? (tplForm.subject || '') : null,
+        body: tplForm.body,
+        preset: tplForm.channel === 'EMAIL' ? (tplForm.preset || null) : null,
+        isActive: tplForm.isActive
+      };
+      if (tplEditing) {
+        const updated = await notificationsApi.updateTemplate(tplEditing.id, payload);
+        templates = templates.map(t => t.id === tplEditing.id ? updated : t);
+      } else {
+        const created = await notificationsApi.createTemplate(payload);
+        templates = [created, ...templates];
+      }
+      tplModalOpen = false;
+    } catch (e) { tplError = e.message || 'No se pudo guardar.'; }
+    finally { tplSaving = false; }
+  }
+  async function removeTpl(t) {
+    if (!confirm(
+      `¿Eliminar la plantilla "${t.name}"?\n\n` +
+      `Esta acción no se puede deshacer. Las campañas históricas conservarán su contenido ` +
+      `enviado, pero perderán el enlace a esta plantilla.`
+    )) return;
+    try {
+      await notificationsApi.removeTemplate(t.id);
+      templates = templates.filter(x => x.id !== t.id);
+    } catch (e) { alert(e.message); }
+  }
+
+  // ── Campaigns ───────────────────────────────────────────
+  let campaigns = [];
+  let cmpLoading = false;
+  async function loadCampaigns() {
+    cmpLoading = true;
+    try { campaigns = await notificationsApi.listCampaigns(); }
+    catch (e) { console.error(e); }
+    finally { cmpLoading = false; }
+  }
+
+  let cmpModalOpen = false;
+  let cmpForm = emptyCmp();
+  let cmpSaving = false;
+  let cmpError = '';
+  let audiencePreview = null;
+  let previewLoading = false;
+  let audienceList = [];           // first 200 matched clients (for review)
+  let audienceListLoading = false;
+  let audienceListOpen = false;    // expand/collapse the review list
+
+  function emptyCmp() {
+    return {
+      name: '', templateId: '', channel: 'EMAIL',
+      audience: { zoneId: '', planId: '', status: '', overdue: false }
+    };
+  }
+  function openNewCmp() {
+    cmpForm = emptyCmp();
+    cmpError = '';
+    audiencePreview = null;
+    audienceList = [];
+    audienceListOpen = false;
+    cmpModalOpen = true;
+  }
+
+  // "Editar" pre-fills the new-campaign modal with an existing campaign's
+  // settings (template, channel, audience filter) so the operator can adjust
+  // anything and launch as a NEW run — the original campaign + its history
+  // stay intact. This is the cleanest pattern for our send-immediately model.
+  function openEditCmp(c) {
+    const audience = c.audienceJson
+      ? (typeof c.audienceJson === 'string' ? JSON.parse(c.audienceJson) : c.audienceJson)
+      : {};
+    cmpForm = {
+      name:       `Copia de ${c.name}`,
+      templateId: c.templateId || '',
+      channel:    c.channel || 'EMAIL',
+      audience: {
+        zoneId:  audience.zoneId  ?? '',
+        planId:  audience.planId  ?? '',
+        status:  audience.status  ?? '',
+        overdue: !!audience.overdue
+      }
+    };
+    cmpError = '';
+    audiencePreview = null;
+    audienceList = [];
+    audienceListOpen = false;
+    cmpModalOpen = true;
+  }
+
+  // "Reenviar" launches a fresh campaign with the exact same template +
+  // audience as the source one, without opening the modal. Used for quick
+  // re-runs of a recurring announcement.
+  // ── Campaign diagnostics ────────────────────────────────
+  let diagOpen = false;
+  let diagLoading = false;
+  let diagData = null;
+  let diagError = '';
+
+  async function openDiagnose(c) {
+    diagOpen = true;
+    diagLoading = true;
+    diagError = '';
+    diagData = null;
+    try {
+      diagData = await notificationsApi.diagnoseCampaign(c.id);
+    } catch (e) {
+      diagError = e.message || 'No se pudo cargar el diagnóstico.';
+    } finally {
+      diagLoading = false;
+    }
+  }
+
+  async function resendCmp(c) {
+    if (!confirm(`Reenviar la campaña "${c.name}" con los mismos parámetros?\n\nSe creará una nueva ejecución con la misma plantilla y audiencia.`)) return;
+    try {
+      const audience = c.audienceJson
+        ? (typeof c.audienceJson === 'string' ? JSON.parse(c.audienceJson) : c.audienceJson)
+        : {};
+      const created = await notificationsApi.createCampaign({
+        name:       `${c.name} (reenvío)`,
+        templateId: c.templateId,
+        channel:    c.channel,
+        audience
+      });
+      campaigns = [created, ...campaigns];
+      pollCampaign(created.id);
+    } catch (e) {
+      alert(e.message || 'No se pudo reenviar la campaña.');
+    }
+  }
+
+  async function loadAudienceList() {
+    const filter = {};
+    if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
+    if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
+    if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
+    if (cmpForm.audience.overdue) filter.overdue = true;
+    audienceListLoading = true;
+    try {
+      const res = await notificationsApi.previewClients(filter);
+      audienceList = res?.clients || [];
+    } catch (e) {
+      cmpError = e.message;
+      audienceList = [];
+    } finally { audienceListLoading = false; }
+  }
+  async function previewAudience() {
+    previewLoading = true;
+    try {
+      const filter = {};
+      if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
+      if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
+      if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
+      if (cmpForm.audience.overdue) filter.overdue = true;
+      const res = await notificationsApi.previewAudience(filter);
+      audiencePreview = res?.count ?? 0;
+    } catch (e) { audiencePreview = null; cmpError = e.message; }
+    finally { previewLoading = false; }
+  }
+  // Re-preview whenever audience filter changes. We depend on primitives
+  // (audienceKey) instead of the whole audience object so writes to OTHER
+  // cmpForm fields don't refire the preview.
+  $: audienceKey = `${cmpForm.audience.zoneId}|${cmpForm.audience.planId}|${cmpForm.audience.status}|${cmpForm.audience.overdue}`;
+  $: if (cmpModalOpen && audienceKey) {
+    previewAudience();
+    // Drop the cached client list so the next expand triggers a fresh fetch.
+    audienceList = [];
+    audienceListOpen = false;
+  }
+
+  // tplSelected depends on the primitive templateId — safe to be reactive.
+  $: tplSelected = templates.find(t => t.id === cmpForm.templateId) || null;
+
+  // Auto-pick a compatible channel when the operator selects a template.
+  // Moved out of a reactive `$:` block (which created a cycle with cmpForm)
+  // into an explicit on:change handler on the template <select>.
+  function onTemplateChange() {
+    const tpl = templates.find(t => t.id === cmpForm.templateId);
+    if (!tpl) return;
+    if (cmpForm.channel !== 'BOTH' && cmpForm.channel !== tpl.channel) {
+      cmpForm.channel = tpl.channel;
+    }
+  }
+
+  async function launchCampaign() {
+    if (!cmpForm.name.trim() || !cmpForm.templateId) {
+      cmpError = 'Nombre y plantilla son obligatorios.';
+      return;
+    }
+    if ((audiencePreview ?? 0) === 0) {
+      cmpError = 'La audiencia está vacía. Ajusta los filtros.';
+      return;
+    }
+    cmpSaving = true; cmpError = '';
+    try {
+      const filter = {};
+      if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
+      if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
+      if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
+      if (cmpForm.audience.overdue) filter.overdue = true;
+      const created = await notificationsApi.createCampaign({
+        name: cmpForm.name.trim(),
+        templateId: cmpForm.templateId,
+        channel: cmpForm.channel,
+        audience: filter
+      });
+      campaigns = [created, ...campaigns];
+      cmpModalOpen = false;
+      tab = 'campaigns';
+      // Start polling for live progress
+      pollCampaign(created.id);
+    } catch (e) { cmpError = e.message || 'No se pudo lanzar la campaña.'; }
+    finally { cmpSaving = false; }
+  }
+
+  // Poll running campaigns every 2s for live counter updates.
+  let pollHandles = new Map();
+  function pollCampaign(id) {
+    if (pollHandles.has(id)) return;
+    const tick = async () => {
+      try {
+        const c = await notificationsApi.getCampaign(id);
+        campaigns = campaigns.map(x => x.id === id ? { ...x, ...c } : x);
+        if (c.status === 'running') {
+          pollHandles.set(id, setTimeout(tick, 2000));
+        } else {
+          pollHandles.delete(id);
+          await loadHistory();
+        }
+      } catch { pollHandles.delete(id); }
+    };
+    tick();
+  }
+  // Auto-poll any campaigns that come back from the server already running.
+  $: campaigns.filter(c => c.status === 'running').forEach(c => pollCampaign(c.id));
+  onDestroy(() => { for (const h of pollHandles.values()) clearTimeout(h); });
+
+  async function retryCmp(c) {
+    if (!confirm(`Reintentar los envíos fallidos de "${c.name}"?`)) return;
+    try {
+      await notificationsApi.retryCampaign(c.id);
+      await Promise.all([loadCampaigns(), loadHistory()]);
+    } catch (e) { alert(e.message); }
+  }
+
+  // ── History ────────────────────────────────────────────
+  let history = [];
+  let hisLoading = false;
+  let hisFilter = { campaignId: '', status: '', channel: '' };
+  async function loadHistory() {
+    hisLoading = true;
+    try {
+      const params = {};
+      if (hisFilter.campaignId) params.campaignId = hisFilter.campaignId;
+      if (hisFilter.status)     params.status     = hisFilter.status;
+      if (hisFilter.channel)    params.channel    = hisFilter.channel;
+      history = await notificationsApi.listHistory(params);
+    } catch (e) { console.error(e); }
+    finally { hisLoading = false; }
+  }
+
+  async function removeHisRow(h) {
+    if (!confirm(`¿Eliminar este registro de entrega?\n\nDestinatario: ${h.recipient || '—'}`)) return;
+    try {
+      await notificationsApi.removeHistory(h.id);
+      history = history.filter(x => x.id !== h.id);
+    } catch (e) { alert(e.message); }
+  }
+
+  async function clearHistory() {
+    const params = {};
+    if (hisFilter.campaignId) params.campaignId = hisFilter.campaignId;
+    if (hisFilter.status)     params.status     = hisFilter.status;
+    if (hisFilter.channel)    params.channel    = hisFilter.channel;
+    const hasFilters = Object.keys(params).length > 0;
+    const msg = hasFilters
+      ? `¿Borrar TODOS los registros que coinciden con los filtros actuales?\n\nEsta acción no se puede deshacer.`
+      : `¿Borrar el historial COMPLETO de entregas?\n\nSe perderán todos los registros de envío. Las campañas en sí no se borran.`;
+    if (!confirm(msg)) return;
+    try {
+      const res = await notificationsApi.clearHistory(params);
+      history = [];
+      alert(`${res?.deleted ?? 0} registros eliminados.`);
+    } catch (e) { alert(e.message); }
+  }
+
+  // Inline preview of what was actually sent (subject + body) — used to
+  // verify that the correct template was rendered and the right SMTP path
+  // was used. Backend stores the EXACT content delivered.
+  let previewOpen = null;  // log id whose body is expanded
+
+  // ── SMTP config ────────────────────────────────────────
+  let smtpForm = {
+    id: null, provider: '', host: '', port: 587, secure: false,
+    username: '', password: '', fromEmail: '', fromName: 'ISP Manager', replyTo: '',
+    isVerified: false, lastTestedAt: null, lastTestResult: null
+  };
+  let smtpLoading = false;
+  let smtpLoaded = false;   // becomes true after first attempt (success or empty)
+  let smtpSaving = false;
+  let smtpTesting = false;
+  let smtpPreset = '';
+  let smtpShowPassword = false;
+  let smtpTestEmail = '';
+  let smtpMsg = null; // { type: 'success' | 'error', text }
+
+  async function loadSmtp() {
+    smtpLoading = true;
+    try {
+      const data = await smtpApi.get();
+      if (data) {
+        // Password never travels back from the server — keep blank, write-only.
+        smtpForm = { ...smtpForm, ...data, password: '' };
+        smtpPreset = data.provider || '';
+      }
+      // else: no config yet — keep the empty form so the operator can create one.
+    } catch (e) {
+      smtpMsg = { type: 'error', text: e.message };
+    } finally {
+      smtpLoading = false;
+      smtpLoaded = true;
+    }
+  }
+
+  function applyPreset(name) {
+    const p = SMTP_PRESETS.find(x => x.name === name);
+    if (!p) return;
+    smtpPreset = name;
+    smtpForm = {
+      ...smtpForm,
+      provider: name,
+      // Only overwrite host if the preset gives one — many cPanel hosts
+      // (HostGator, Bluehost, Namecheap) require the operator's own
+      // mail.<their-domain>, so the preset leaves it blank.
+      host: p.host || smtpForm.host,
+      port: p.port,
+      secure: p.secure
+    };
+  }
+
+  // Auto-correct the port↔SSL combination — a very common footgun.
+  // Port 465 requires SSL on (SMTPS); port 587 requires SSL off (STARTTLS).
+  // Watching the user-edited port number and silently flipping the toggle
+  // saves them from "connection timeout" errors that look like network bugs.
+  function onPortChange() {
+    const p = Number(smtpForm.port);
+    if (p === 465 && !smtpForm.secure) smtpForm.secure = true;
+    if (p === 587 &&  smtpForm.secure) smtpForm.secure = false;
+  }
+
+  async function saveSmtp() {
+    smtpMsg = null;
+    if (!smtpForm.host || !smtpForm.username || !smtpForm.fromEmail) {
+      smtpMsg = { type: 'error', text: 'Host, usuario y email remitente son obligatorios.' };
+      return;
+    }
+    if (!smtpForm.id && !smtpForm.password) {
+      smtpMsg = { type: 'error', text: 'La contraseña es obligatoria al crear una nueva configuración.' };
+      return;
+    }
+    smtpSaving = true;
+    try {
+      const payload = {
+        provider:  smtpForm.provider || null,
+        host:      smtpForm.host,
+        port:      Number(smtpForm.port),
+        secure:    !!smtpForm.secure,
+        username:  smtpForm.username,
+        password:  smtpForm.password,  // empty string = keep existing on PUT
+        fromEmail: smtpForm.fromEmail,
+        fromName:  smtpForm.fromName || 'ISP Manager',
+        replyTo:   smtpForm.replyTo || null
+      };
+      const saved = smtpForm.id
+        ? await smtpApi.update(smtpForm.id, payload)
+        : await smtpApi.create(payload);
+      smtpForm = { ...smtpForm, ...saved, password: '' };
+      smtpPreset = saved.provider || '';
+      smtpMsg = { type: 'success', text: 'Configuración guardada correctamente.' };
+    } catch (e) {
+      smtpMsg = { type: 'error', text: e.message || 'No se pudo guardar.' };
+    } finally { smtpSaving = false; }
+  }
+
+  async function testSmtp() {
+    smtpMsg = null;
+    if (!smtpTestEmail) {
+      smtpMsg = { type: 'error', text: 'Indica un email para enviar la prueba.' };
+      return;
+    }
+    smtpTesting = true;
+    try {
+      const result = await smtpApi.test({
+        host:      smtpForm.host,
+        port:      Number(smtpForm.port),
+        secure:    !!smtpForm.secure,
+        username:  smtpForm.username,
+        password:  smtpForm.password,   // empty → backend uses stored password
+        fromEmail: smtpForm.fromEmail,
+        fromName:  smtpForm.fromName,
+        testEmail: smtpTestEmail,
+        configId:  smtpForm.id || undefined
+      });
+      smtpMsg = { type: 'success', text: result?.message || 'Correo enviado.' };
+      if (smtpForm.id) await loadSmtp(); // refresh isVerified + lastTestedAt
+    } catch (e) {
+      smtpMsg = { type: 'error', text: e.message || 'La prueba falló.' };
+    } finally { smtpTesting = false; }
+  }
+
+  // Lazy-load SMTP only when the operator opens that tab. We track `smtpLoaded`
+  // explicitly because checking `smtpForm.id === null` would loop forever when
+  // there is no config in DB yet (id stays null → reactive refires forever).
+  $: if (tab === 'smtp' && !smtpLoaded && !smtpLoading) loadSmtp();
+
+  // ── Helpers ────────────────────────────────────────────
+  const CHANNEL_LABEL = { EMAIL: 'Email', WHATSAPP: 'WhatsApp', BOTH: 'Email + WhatsApp' };
+  const CHANNEL_ICON  = { EMAIL: Mail, WHATSAPP: MessageSquare, BOTH: Send };
+  const STATUS_BADGE = {
+    draft:          'bg-slate-100 text-slate-600 ring-slate-200',
+    running:        'bg-amber-50   text-amber-700   ring-amber-100',
+    completed:      'bg-emerald-50 text-emerald-700 ring-emerald-100',
+    failed:         'bg-red-50     text-red-700     ring-red-100',
+    empty_audience: 'bg-amber-50   text-amber-700   ring-amber-100',
+    sent:           'bg-emerald-50 text-emerald-700 ring-emerald-100',
+    pending:        'bg-amber-50   text-amber-700   ring-amber-100'
+  };
+  const STATUS_LABEL = {
+    draft: 'Borrador',
+    running: 'Enviando',
+    completed: 'Completada',
+    failed: 'Con errores',
+    empty_audience: 'Sin destinatarios',
+    sent: 'Enviado',
+    pending: 'Pendiente'
+  };
+
+  // Build a human-readable summary of the audience filter for inline display.
+  function audienceSummary(c) {
+    let f = {};
+    try { f = c.audienceJson ? (typeof c.audienceJson === 'string' ? JSON.parse(c.audienceJson) : c.audienceJson) : {}; }
+    catch { f = {}; }
+    const parts = [];
+    if (f.zoneId) {
+      const z = zones.find(z => String(z.id) === String(f.zoneId));
+      parts.push(`zona: ${z?.name || f.zoneId}`);
+    }
+    if (f.planId) {
+      const p = plans.find(p => p.id === f.planId);
+      parts.push(`plan: ${p?.name || f.planId}`);
+    }
+    if (f.status)  parts.push(`estado: ${f.status}`);
+    if (f.overdue) parts.push('vencidas');
+    return parts.length ? parts.join(' · ') : 'todos los clientes';
+  }
+
+  function fmtDate(d) {
+    if (!d) return '—';
+    return new Date(d).toLocaleString('es-CO', {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+</script>
+
+<svelte:head><title>Centro de Notificaciones — ISP Manager</title></svelte:head>
+
+<!-- Header -->
+<div class="flex flex-wrap items-start justify-between gap-3 mb-4">
+  <div>
+    <h1 class="text-xl sm:text-2xl font-bold text-text-primary tracking-tight inline-flex items-center gap-2">
+      <Bell size={20} class="text-brand-600" /> Centro de Notificaciones
+    </h1>
+    <p class="hidden sm:block text-sm text-text-secondary mt-1">
+      Envía correos y WhatsApp masivos a tus clientes desde una sola pantalla.
+    </p>
+  </div>
+  {#if tab === 'campaigns'}
+    <div class="flex items-center gap-2">
+      <button type="button" on:click={loadCampaigns}
+              class="btn-secondary" title="Recargar campañas">
+        <RefreshCw size={14} class={cmpLoading ? 'animate-spin' : ''} />
+        Refrescar
+      </button>
+      <button type="button" on:click={openNewCmp} class="btn-primary">
+        <Send size={15} /> Nueva campaña
+      </button>
+    </div>
+  {:else if tab === 'templates'}
+    <button type="button" on:click={openNewTpl} class="btn-primary">
+      <Plus size={15} /> Nueva plantilla
+    </button>
+  {/if}
+</div>
+
+<!-- Tabs -->
+<div class="card mb-4">
+  <div class="flex items-center gap-1 overflow-x-auto p-1.5">
+    {#each [
+      { id: 'campaigns', label: 'Campañas',    icon: Send },
+      { id: 'templates', label: 'Plantillas',  icon: FileText },
+      { id: 'history',   label: 'Historial',   icon: HistoryIcon },
+      { id: 'smtp',      label: 'Correo SMTP', icon: Server },
+    ] as t}
+      <button type="button" on:click={() => tab = t.id}
+              class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg
+                     whitespace-nowrap transition-colors
+                     {tab === t.id
+                       ? 'bg-brand-600 text-white'
+                       : 'text-slate-600 hover:bg-slate-100'}">
+        <svelte:component this={t.icon} size={14} />
+        {t.label}
+      </button>
+    {/each}
+  </div>
+</div>
+
+<!-- ─── CAMPAIGNS ─────────────────────────────────────── -->
+{#if tab === 'campaigns'}
+  <div class="card">
+    {#if cmpLoading}
+      <div class="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
+        <Loader2 size={14} class="animate-spin" /> Cargando...
+      </div>
+    {:else if campaigns.length === 0}
+      <div class="text-center py-16 text-sm text-slate-500">
+        <Send size={32} class="mx-auto mb-3 opacity-40" />
+        Aún no has lanzado ninguna campaña.
+      </div>
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Campaña</th>
+              <th>Canal</th>
+              <th>Estado</th>
+              <th class="text-right">Progreso</th>
+              <th>Lanzada</th>
+              <th class="text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each campaigns as c (c.id)}
+              {@const pct = c.totalCount > 0 ? Math.round(((c.sentCount + c.failedCount) / c.totalCount) * 100) : 0}
+              <tr>
+                <td>
+                  <div class="text-sm font-medium text-slate-900">{c.name}</div>
+                  {#if c.template}
+                    <div class="text-[11px] text-slate-500">Plantilla: {c.template.name}</div>
+                  {/if}
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    Audiencia: <span class="text-slate-500">{audienceSummary(c)}</span>
+                  </div>
+                </td>
+                <td>
+                  <span class="inline-flex items-center gap-1 text-xs text-slate-600">
+                    <svelte:component this={CHANNEL_ICON[c.channel]} size={12} />
+                    {CHANNEL_LABEL[c.channel] ?? c.channel}
+                  </span>
+                </td>
+                <td>
+                  <span class="badge {STATUS_BADGE[c.status]} inline-flex items-center gap-1">
+                    {#if c.status === 'running'}<Loader2 size={10} class="animate-spin" />{/if}
+                    {STATUS_LABEL[c.status] ?? c.status}
+                  </span>
+                </td>
+                <td class="text-right">
+                  <div class="text-xs text-slate-600 tabular-nums">
+                    <span class="text-emerald-700 font-medium">{c.sentCount}</span> /
+                    <span class="text-red-600">{c.failedCount}</span> /
+                    {c.totalCount}
+                  </div>
+                  <div class="h-1 mt-1 bg-slate-100 rounded overflow-hidden w-32 ml-auto">
+                    <div class="h-full bg-brand-600 transition-all" style="width: {pct}%"></div>
+                  </div>
+                </td>
+                <td class="text-xs text-slate-500 whitespace-nowrap">{fmtDate(c.createdAt)}</td>
+                <td class="text-right">
+                  <div class="flex items-center justify-end gap-1">
+                    {#if c.failedCount > 0 && c.status !== 'running'}
+                      <button class="btn-icon" title="Reintentar fallidos" on:click={() => retryCmp(c)}>
+                        <RefreshCw size={14} />
+                      </button>
+                    {/if}
+                    <button class="btn-icon" title="Ver entregas"
+                            on:click={() => { hisFilter.campaignId = c.id; tab = 'history'; loadHistory(); }}>
+                      <Eye size={14} />
+                    </button>
+                    <button class="btn-icon" title="Editar y relanzar (crea una nueva)"
+                            disabled={c.status === 'running'}
+                            on:click={() => openEditCmp(c)}>
+                      <Pencil size={14} />
+                    </button>
+                    <button class="btn-icon" title="Reenviar con los mismos parámetros"
+                            disabled={c.status === 'running'}
+                            on:click={() => resendCmp(c)}>
+                      <Copy size={14} />
+                    </button>
+                    <button class="btn-icon" title="Diagnóstico (debug)"
+                            on:click={() => openDiagnose(c)}>
+                      <Stethoscope size={14} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
+
+<!-- ─── TEMPLATES ─────────────────────────────────────── -->
+{:else if tab === 'templates'}
+  <div class="card">
+    {#if tplLoading}
+      <div class="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
+        <Loader2 size={14} class="animate-spin" /> Cargando...
+      </div>
+    {:else if templates.length === 0}
+      <div class="text-center py-16 text-sm text-slate-500">
+        <FileText size={32} class="mx-auto mb-3 opacity-40" />
+        Crea tu primera plantilla para enviar campañas.
+      </div>
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Plantilla</th>
+              <th>Canal</th>
+              <th>Asunto / Vista previa</th>
+              <th>Estado</th>
+              <th>Actualizada</th>
+              <th class="text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each templates as t (t.id)}
+              <tr class:opacity-60={!t.isActive}>
+                <td class="font-medium text-slate-900">{t.name}</td>
+                <td>
+                  <span class="inline-flex items-center gap-1 text-xs text-slate-600">
+                    <svelte:component this={CHANNEL_ICON[t.channel]} size={12} />
+                    {CHANNEL_LABEL[t.channel] ?? t.channel}
+                  </span>
+                </td>
+                <td>
+                  {#if t.subject}
+                    <div class="text-xs font-medium text-slate-700 truncate max-w-xs" title={t.subject}>{t.subject}</div>
+                  {/if}
+                  <div class="text-[11px] text-slate-500 truncate max-w-xs" title={t.body}>{t.body}</div>
+                </td>
+                <td>
+                  {#if t.isActive}<span class="badge-green">Activa</span>
+                  {:else}<span class="badge-gray">Inactiva</span>{/if}
+                </td>
+                <td class="text-xs text-slate-500 whitespace-nowrap">{fmtDate(t.updatedAt)}</td>
+                <td class="text-right">
+                  <div class="flex items-center justify-end gap-1">
+                    <button class="btn-icon" title="Editar" on:click={() => openEditTpl(t)}>
+                      <Pencil size={14} />
+                    </button>
+                    <button class="btn-icon hover:!text-red-600 hover:!bg-red-50"
+                            title="Desactivar" on:click={() => removeTpl(t)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
+
+<!-- ─── HISTORY ─────────────────────────────────────── -->
+{:else if tab === 'history'}
+  <div class="card mb-4">
+    <div class="p-3 flex flex-wrap items-center gap-2">
+      <span class="text-xs font-medium text-slate-600 inline-flex items-center gap-1">
+        <Filter size={12} /> Filtros
+      </span>
+      {#if hisFilter.campaignId}
+        {@const camp = campaigns.find(c => c.id === hisFilter.campaignId)}
+        <span class="badge bg-brand-50 text-brand-700 ring-brand-100 inline-flex items-center gap-1">
+          Campaña: {camp?.name || hisFilter.campaignId}
+          <button on:click={() => { hisFilter.campaignId = ''; loadHistory(); }} class="hover:text-brand-900">
+            <X size={10} />
+          </button>
+        </span>
+      {/if}
+      <select bind:value={hisFilter.status} on:change={loadHistory} class="select !py-1.5 text-xs max-w-xs">
+        <option value="">Todos los estados</option>
+        <option value="sent">Enviados</option>
+        <option value="failed">Fallidos</option>
+        <option value="pending">Pendientes</option>
+      </select>
+      <select bind:value={hisFilter.channel} on:change={loadHistory} class="select !py-1.5 text-xs max-w-xs">
+        <option value="">Todos los canales</option>
+        <option value="EMAIL">Email</option>
+        <option value="WHATSAPP">WhatsApp</option>
+      </select>
+      <div class="flex-1"></div>
+      {#if history.length > 0}
+        <button type="button" on:click={clearHistory}
+                class="inline-flex items-center gap-1.5 text-xs text-red-600 hover:text-red-700 px-2">
+          <Trash2 size={12} /> Borrar {hisFilter.campaignId || hisFilter.status || hisFilter.channel ? 'filtrados' : 'todo'}
+        </button>
+      {/if}
+    </div>
+  </div>
+
+  <div class="card">
+    {#if hisLoading}
+      <div class="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
+        <Loader2 size={14} class="animate-spin" /> Cargando...
+      </div>
+    {:else if history.length === 0}
+      <div class="text-center py-16 text-sm text-slate-500">
+        <HistoryIcon size={32} class="mx-auto mb-3 opacity-40" />
+        Sin entregas registradas con esos filtros.
+      </div>
+    {:else}
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Fecha</th>
+              <th>Cliente</th>
+              <th>Canal</th>
+              <th>Destinatario</th>
+              <th>Estado</th>
+              <th>Campaña</th>
+              <th class="text-right">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each history as h (h.id)}
+              <tr>
+                <td class="text-xs text-slate-500 whitespace-nowrap">{fmtDate(h.sentAt || h.createdAt)}</td>
+                <td class="text-sm">{h.client?.name || '—'}</td>
+                <td>
+                  <span class="inline-flex items-center gap-1 text-xs text-slate-600">
+                    <svelte:component this={CHANNEL_ICON[h.channel]} size={12} />
+                    {CHANNEL_LABEL[h.channel] ?? h.channel}
+                  </span>
+                </td>
+                <td class="font-mono text-xs text-slate-600 truncate max-w-[180px]" title={h.recipient}>{h.recipient || '—'}</td>
+                <td>
+                  <span class="badge {STATUS_BADGE[h.status]}">{STATUS_LABEL[h.status] ?? h.status}</span>
+                  {#if h.status === 'failed' && h.error}
+                    <div class="text-[10px] text-red-600 mt-0.5 truncate max-w-[180px]" title={h.error}>{h.error}</div>
+                  {/if}
+                </td>
+                <td class="text-xs text-slate-500 truncate max-w-[140px]">{h.campaign?.name || '—'}</td>
+                <td class="text-right">
+                  <div class="flex items-center justify-end gap-1">
+                    <button class="btn-icon"
+                            title={previewOpen === h.id ? 'Ocultar' : 'Ver mensaje enviado'}
+                            on:click={() => previewOpen = previewOpen === h.id ? null : h.id}>
+                      <svelte:component this={previewOpen === h.id ? ChevronUp : Eye} size={14} />
+                    </button>
+                    <button class="btn-icon hover:!text-red-600 hover:!bg-red-50"
+                            title="Eliminar registro"
+                            on:click={() => removeHisRow(h)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+              {#if previewOpen === h.id}
+                <tr class="bg-slate-50/60">
+                  <td colspan="7" class="px-4 py-3">
+                    <div class="space-y-2 text-xs">
+                      {#if h.subject}
+                        <div>
+                          <span class="text-text-secondary uppercase tracking-wide font-semibold text-[10px]">Asunto enviado:</span>
+                          <div class="font-medium text-text-primary">{h.subject}</div>
+                        </div>
+                      {/if}
+                      <div>
+                        <span class="text-text-secondary uppercase tracking-wide font-semibold text-[10px]">
+                          Cuerpo enviado al cliente (variables ya renderizadas):
+                        </span>
+                        <pre class="mt-1 p-3 rounded-lg bg-white border border-slate-200 font-mono text-[11px] text-slate-800 whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto">{h.content}</pre>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              {/if}
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+  </div>
+
+<!-- ─── SMTP CONFIG ──────────────────────────────────── -->
+{:else if tab === 'smtp'}
+  <div class="space-y-4">
+
+    {#if smtpMsg}
+      <div class="flex items-start gap-2 rounded-xl border px-3 py-2.5 text-sm
+                  {smtpMsg.type === 'success'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                    : 'bg-red-50 border-red-200 text-red-700'}">
+        {#if smtpMsg.type === 'success'}
+          <CheckCircle2 size={14} class="mt-0.5 flex-shrink-0" />
+        {:else}
+          <AlertCircle size={14} class="mt-0.5 flex-shrink-0" />
+        {/if}
+        <span class="flex-1">{smtpMsg.text}</span>
+        <button class="text-current/60 hover:text-current" on:click={() => smtpMsg = null}>
+          <X size={14} />
+        </button>
+      </div>
+    {/if}
+
+    <!-- Connection + Sender side-by-side on lg+, stacked below -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+
+    <!-- Connection card -->
+    <div class="card">
+      <div class="card-header">
+        <div class="flex items-center justify-between w-full">
+          <div class="flex items-center gap-2">
+            <Server size={16} class="text-slate-600" />
+            <h3 class="font-semibold text-slate-900">Conexión SMTP</h3>
+          </div>
+          {#if smtpForm.id}
+            {#if smtpForm.isVerified}
+              <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100 inline-flex items-center gap-1">
+                <CheckCircle2 size={10} /> Verificado
+              </span>
+            {:else}
+              <span class="badge bg-amber-50 text-amber-700 ring-amber-100 inline-flex items-center gap-1">
+                <AlertCircle size={10} /> Sin verificar
+              </span>
+            {/if}
+          {/if}
+        </div>
+      </div>
+      <div class="card-body space-y-4">
+        {#if smtpLoading}
+          <div class="flex items-center gap-2 text-sm text-slate-500 py-2">
+            <Loader2 size={14} class="animate-spin" /> Cargando configuración...
+          </div>
+        {:else}
+          <div>
+            <label for="smtp-preset" class="label">Proveedor (preset)</label>
+            <select id="smtp-preset" bind:value={smtpPreset}
+                    on:change={() => applyPreset(smtpPreset)} class="select">
+              <option value="">— Selecciona un preset —</option>
+              {#each SMTP_PRESETS as p}
+                <option value={p.name}>{p.name}</option>
+              {/each}
+            </select>
+            <p class="text-xs text-text-secondary mt-1">
+              El preset solo precarga host/puerto. Puedes editar manualmente cualquier campo.
+            </p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div class="sm:col-span-2">
+              <label for="smtp-host" class="label flex items-center gap-1.5">
+                <Server size={12} /> Servidor SMTP (host)
+              </label>
+              <input id="smtp-host" type="text" bind:value={smtpForm.host}
+                     placeholder="mail.hostgator.com" class="input font-mono" />
+            </div>
+            <div>
+              <label for="smtp-port" class="label">Puerto</label>
+              <input id="smtp-port" type="number" bind:value={smtpForm.port}
+                     on:change={onPortChange}
+                     placeholder="465 (SSL) o 587 (STARTTLS)" class="input font-mono" />
+            </div>
+            <div class="flex flex-col justify-end">
+              <label class="flex items-center gap-2 text-sm pb-1">
+                <input type="checkbox" bind:checked={smtpForm.secure} class="w-4 h-4" />
+                Usar SSL directo (recomendado para puerto 465)
+              </label>
+              <p class="text-[11px] text-text-secondary leading-tight">
+                {Number(smtpForm.port) === 465
+                  ? '✓ Puerto 465 requiere SSL marcado.'
+                  : Number(smtpForm.port) === 587
+                    ? '✓ Puerto 587 usa STARTTLS (sin marcar).'
+                    : ''}
+              </p>
+            </div>
+            <div>
+              <label for="smtp-user" class="label flex items-center gap-1.5">
+                <UserIcon size={12} /> Usuario
+              </label>
+              <input id="smtp-user" type="text" bind:value={smtpForm.username}
+                     placeholder="contacto@dominio.com" class="input" autocomplete="off" />
+            </div>
+            <div>
+              <label for="smtp-pwd" class="label flex items-center gap-1.5">
+                <Lock size={12} /> Contraseña
+              </label>
+              <div class="relative">
+                <input id="smtp-pwd"
+                       type={smtpShowPassword ? 'text' : 'password'}
+                       value={smtpForm.password}
+                       on:input={(e) => smtpForm.password = e.currentTarget.value}
+                       placeholder={smtpForm.id ? '(sin cambios)' : 'mínimo 1 carácter'}
+                       autocomplete="new-password"
+                       class="input pr-10" />
+                <button type="button" on:click={() => smtpShowPassword = !smtpShowPassword}
+                        class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-700"
+                        aria-label="Mostrar/ocultar">
+                  <svelte:component this={smtpShowPassword ? EyeOff : EyeIcon} size={14} />
+                </button>
+              </div>
+              {#if smtpForm.id}
+                <p class="text-xs text-text-secondary mt-1">Deja vacío para mantener la contraseña actual.</p>
+              {/if}
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Sender info card -->
+    {#if !smtpLoading}
+      <div class="card">
+        <div class="card-header">
+          <div class="flex items-center gap-2">
+            <Mail size={16} class="text-slate-600" />
+            <h3 class="font-semibold text-slate-900">Identidad del remitente</h3>
+          </div>
+        </div>
+        <div class="card-body grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="smtp-from-email" class="label">Email remitente *</label>
+            <input id="smtp-from-email" type="email" bind:value={smtpForm.fromEmail}
+                   placeholder="contacto@dominio.com" class="input" />
+          </div>
+          <div>
+            <label for="smtp-from-name" class="label">Nombre remitente</label>
+            <input id="smtp-from-name" type="text" bind:value={smtpForm.fromName}
+                   placeholder="ISP Manager" class="input" />
+          </div>
+          <div class="sm:col-span-2">
+            <label for="smtp-reply" class="label">Reply-To (opcional)</label>
+            <input id="smtp-reply" type="email" bind:value={smtpForm.replyTo}
+                   placeholder="soporte@dominio.com" class="input" />
+          </div>
+        </div>
+        <div class="px-5 py-4 border-t border-slate-100 bg-slate-50/40 flex flex-wrap items-center justify-end gap-2">
+          <button type="button" on:click={saveSmtp} class="btn-primary" disabled={smtpSaving}>
+            {#if smtpSaving}
+              <Loader2 size={15} class="animate-spin" /> Guardando...
+            {:else}
+              <Save size={15} /> Guardar configuración
+            {/if}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    </div> <!-- /grid Connection + Sender -->
+
+    <!-- Test card (full width below) -->
+    {#if !smtpLoading}
+      <div class="card">
+        <div class="card-header">
+          <div class="flex items-center gap-2">
+            <Send size={16} class="text-slate-600" />
+            <h3 class="font-semibold text-slate-900">Probar conexión</h3>
+          </div>
+        </div>
+        <div class="card-body space-y-3">
+          <p class="text-sm text-text-secondary">
+            Envía un email de prueba a una dirección para verificar que la configuración funciona.
+          </p>
+          <div class="flex flex-wrap items-end gap-3">
+            <div class="flex-1 min-w-[200px]">
+              <label for="smtp-test-email" class="label">Email destinatario</label>
+              <input id="smtp-test-email" type="email" bind:value={smtpTestEmail}
+                     placeholder="tu@email.com" class="input" />
+            </div>
+            <button type="button" on:click={testSmtp}
+                    disabled={smtpTesting || !smtpTestEmail}
+                    class="btn-secondary">
+              {#if smtpTesting}
+                <Loader2 size={15} class="animate-spin" /> Enviando...
+              {:else}
+                <Send size={15} /> Enviar prueba
+              {/if}
+            </button>
+          </div>
+          {#if smtpForm.lastTestedAt}
+            <p class="text-xs text-text-secondary">
+              <strong>Última prueba:</strong> {new Date(smtpForm.lastTestedAt).toLocaleString('es-CO')} —
+              {smtpForm.lastTestResult || '—'}
+            </p>
+          {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<!-- ════════════════════════════════════════════════════
+     TEMPLATE MODAL
+     ════════════════════════════════════════════════════ -->
+<Sheet bind:open={tplModalOpen} title={tplEditing ? 'Editar plantilla' : 'Nueva plantilla'} maxWidth="max-w-lg">
+  <form on:submit|preventDefault={saveTpl} id="tpl-form" class="space-y-4">
+    {#if tplError}
+      <div class="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2.5 text-sm">
+        <AlertCircle size={14} class="mt-0.5" /> <span>{tplError}</span>
+      </div>
+    {/if}
+    <div>
+      <label for="tpl-name" class="label">Nombre</label>
+      <input id="tpl-name" type="text" bind:value={tplForm.name} class="input" placeholder="Ej: Recordatorio de pago" />
+    </div>
+    <div>
+      <label class="label">Canal</label>
+      <div class="grid grid-cols-2 gap-2">
+        <label class="flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer
+                      {tplForm.channel === 'EMAIL' ? 'border-brand-600 bg-brand-50/40' : 'border-slate-200 hover:border-slate-300'}">
+          <input type="radio" bind:group={tplForm.channel} value="EMAIL" />
+          <Mail size={14} /> Email
+        </label>
+        <label class="flex items-center gap-2 p-3 rounded-xl border-2 cursor-pointer
+                      {tplForm.channel === 'WHATSAPP' ? 'border-brand-600 bg-brand-50/40' : 'border-slate-200 hover:border-slate-300'}">
+          <input type="radio" bind:group={tplForm.channel} value="WHATSAPP" />
+          <MessageSquare size={14} /> WhatsApp
+        </label>
+      </div>
+    </div>
+    {#if tplForm.channel === 'EMAIL'}
+      <div>
+        <label for="tpl-subject" class="label">Asunto</label>
+        <input id="tpl-subject" type="text" bind:value={tplForm.subject} class="input" placeholder="Ej: Recordatorio: tu pago vence pronto" />
+      </div>
+
+      <div>
+        <label for="tpl-preset" class="label">Estilo visual (header del correo)</label>
+        <select id="tpl-preset" bind:value={tplForm.preset}
+                on:change={onPresetChange} class="select">
+          {#each EMAIL_PRESETS as p}
+            <option value={p.key}>{p.icon} · {p.title}</option>
+          {/each}
+        </select>
+        <div class="flex items-start justify-between gap-2 mt-1.5">
+          <p class="text-[11px] text-text-secondary flex-1">
+            Define el icono y título del header con gradiente azul. Al elegir uno,
+            te proponemos un asunto y cuerpo de ejemplo si el formulario está vacío.
+          </p>
+          {#if tplForm.preset && PRESET_SAMPLES[tplForm.preset]}
+            <button type="button" on:click={useSampleNow}
+                    class="text-[11px] text-brand-600 hover:underline font-medium whitespace-nowrap">
+              ↻ Usar contenido sugerido
+            </button>
+          {/if}
+        </div>
+      </div>
+    {/if}
+    <div>
+      <label for="tpl-body" class="label">Cuerpo del mensaje</label>
+      <textarea id="tpl-body" bind:value={tplForm.body} rows="6" class="input"
+                placeholder="Hola {'{{'}name{'}}'},&#10;&#10;Tu pago de {'{{'}amount{'}}'} vence el {'{{'}dueDate{'}}'}.&#10;Plan: {'{{'}plan{'}}'}"></textarea>
+      <p class="text-[11px] text-slate-500 mt-1.5">
+        Variables: <code>{'{{'}name{'}}'}</code>, <code>{'{{'}plan{'}}'}</code>, <code>{'{{'}amount{'}}'}</code>,
+        <code>{'{{'}dueDate{'}}'}</code>, <code>{'{{'}balance{'}}'}</code>, <code>{'{{'}zone{'}}'}</code>,
+        <code>{'{{'}ip{'}}'}</code>
+      </p>
+    </div>
+    <label class="flex items-center gap-2 text-sm">
+      <input type="checkbox" bind:checked={tplForm.isActive} class="w-4 h-4" />
+      Plantilla activa
+    </label>
+  </form>
+  <svelte:fragment slot="footer">
+    <button type="button" on:click={() => tplModalOpen = false} class="btn-secondary" disabled={tplSaving}>Cancelar</button>
+    <button type="submit" form="tpl-form" class="btn-primary" disabled={tplSaving}>
+      {#if tplSaving}<Loader2 size={15} class="animate-spin" /> Guardando...{:else}<Save size={15} /> Guardar{/if}
+    </button>
+  </svelte:fragment>
+</Sheet>
+
+<!-- ════════════════════════════════════════════════════
+     CAMPAIGN DIAGNOSE MODAL
+     ════════════════════════════════════════════════════ -->
+<Sheet bind:open={diagOpen} title="Diagnóstico de campaña" maxWidth="max-w-3xl">
+  {#if diagLoading}
+    <div class="flex items-center gap-2 text-sm text-text-secondary py-8 justify-center">
+      <Loader2 size={14} class="animate-spin" /> Analizando...
+    </div>
+  {:else if diagError}
+    <div class="flex items-start gap-2 bg-red-50 border border-red-200
+                text-red-700 rounded-lg px-3 py-2.5 text-sm">
+      <AlertCircle size={14} class="mt-0.5" /> <span>{diagError}</span>
+    </div>
+  {:else if diagData}
+    {@const c = diagData.campaign}
+    <div class="space-y-4 text-sm">
+
+      <!-- Campaign summary -->
+      <div class="grid grid-cols-2 gap-3">
+        <div class="rounded-lg bg-slate-50 p-3">
+          <div class="text-[10px] uppercase tracking-wide text-text-secondary font-semibold">Campaña</div>
+          <div class="font-medium">{c.name}</div>
+          <div class="text-xs text-text-secondary">id: <code>{c.id}</code></div>
+        </div>
+        <div class="rounded-lg bg-slate-50 p-3">
+          <div class="text-[10px] uppercase tracking-wide text-text-secondary font-semibold">Estado</div>
+          <span class="badge {STATUS_BADGE[c.status]}">{STATUS_LABEL[c.status] ?? c.status}</span>
+          <div class="text-xs text-text-secondary mt-1">
+            {c.sentCount} enviados · {c.failedCount} fallidos · {c.totalCount} total
+          </div>
+        </div>
+      </div>
+
+      <!-- Template + channel -->
+      <div class="rounded-lg border border-slate-200 p-3">
+        <div class="text-[10px] uppercase tracking-wide text-text-secondary font-semibold mb-1">Plantilla usada</div>
+        {#if c.template}
+          <div><strong>{c.template.name}</strong> <span class="text-xs text-text-secondary">(id: {c.template.id})</span></div>
+          <div class="text-xs text-text-secondary">Canal de plantilla: {c.template.channel} · {c.template.isActive ? 'activa' : 'INACTIVA ⚠️'}</div>
+        {:else}
+          <div class="text-red-600">⚠️ Plantilla no encontrada (id={c.templateId || 'null'}) — la campaña no puede enviarse.</div>
+        {/if}
+        <div class="text-xs text-text-secondary mt-1">Canal seleccionado en campaña: <strong>{c.channel}</strong></div>
+      </div>
+
+      <!-- Audience -->
+      <div class="rounded-lg border border-slate-200 p-3">
+        <div class="text-[10px] uppercase tracking-wide text-text-secondary font-semibold mb-1">Audiencia</div>
+        <div class="text-xs">
+          Filtro guardado:
+          <code class="bg-slate-100 px-1.5 py-0.5 rounded">{JSON.stringify(diagData.audienceFilter)}</code>
+        </div>
+        <div class="text-xs mt-1">
+          Clientes que coinciden AHORA:
+          <strong class="{diagData.currentAudienceCount === 0 ? 'text-red-600' : 'text-emerald-700'}">
+            {diagData.currentAudienceCount}
+          </strong>
+        </div>
+        {#if diagData.currentAudienceCount === 0}
+          <p class="text-xs text-red-600 mt-1">⚠️ El filtro no matchea a ningún cliente. La campaña no puede enviar nada.</p>
+        {/if}
+      </div>
+
+      <!-- SMTP source -->
+      <div class="rounded-lg border border-slate-200 p-3">
+        <div class="text-[10px] uppercase tracking-wide text-text-secondary font-semibold mb-1">SMTP en uso</div>
+        {#if diagData.smtpSource === 'DB' && diagData.smtp}
+          <div class="inline-flex items-center gap-1 text-xs">
+            <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100">DB (Centro de Notificaciones)</span>
+            {#if diagData.smtp.isVerified}
+              <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100">verificado</span>
+            {:else}
+              <span class="badge bg-amber-50 text-amber-700 ring-amber-100">sin verificar</span>
+            {/if}
+          </div>
+          <div class="text-xs text-text-secondary mt-1 font-mono">
+            {diagData.smtp.host}:{diagData.smtp.port} {diagData.smtp.secure ? '(SSL)' : '(STARTTLS)'}
+            · {diagData.smtp.username}
+            · from "{diagData.smtp.fromName} &lt;{diagData.smtp.fromEmail}&gt;"
+          </div>
+        {:else}
+          <div class="text-xs text-amber-700">
+            ⚠️ No hay SMTP configurado en el sistema — está usando los valores de <code>.env</code>.
+          </div>
+        {/if}
+      </div>
+
+      <!-- Logs -->
+      <div class="rounded-lg border border-slate-200 p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-[10px] uppercase tracking-wide text-text-secondary font-semibold">
+            Entregas registradas
+          </span>
+          <span class="text-xs text-text-secondary">
+            {diagData.logSummary.total} logs ·
+            <span class="text-emerald-700">{diagData.logSummary.sent} ok</span> ·
+            <span class="text-red-600">{diagData.logSummary.failed} error</span>
+            {#if diagData.logSummary.systemFailures > 0}
+              · <span class="text-red-700 font-semibold">{diagData.logSummary.systemFailures} system</span>
+            {/if}
+          </span>
+        </div>
+        {#if diagData.logs.length === 0}
+          <p class="text-xs text-amber-700">
+            ⚠️ No hay logs para esta campaña. Posibles causas: audiencia vacía al ejecutar, plantilla nula,
+            o el runner crasheó antes del primer envío. Mira /tmp/isp-backend.log con
+            <code>grep "campaign {c.id}"</code>.
+          </p>
+        {:else}
+          <div class="max-h-64 overflow-y-auto -mx-2">
+            <table class="w-full text-xs">
+              <thead class="bg-slate-50 sticky top-0">
+                <tr class="text-text-secondary">
+                  <th class="text-left px-2 py-1.5 font-medium">Estado</th>
+                  <th class="text-left px-2 py-1.5 font-medium">Cliente</th>
+                  <th class="text-left px-2 py-1.5 font-medium">Destinatario</th>
+                  <th class="text-left px-2 py-1.5 font-medium">Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each diagData.logs as l (l.id)}
+                  <tr class="border-t border-slate-100">
+                    <td class="px-2 py-1">
+                      <span class="badge {STATUS_BADGE[l.status]}">{l.status}</span>
+                    </td>
+                    <td class="px-2 py-1">{l.client?.name || (l.clientId === null ? '(sistema)' : '—')}</td>
+                    <td class="px-2 py-1 font-mono">{l.recipient || '—'}</td>
+                    <td class="px-2 py-1 text-red-600 truncate max-w-[260px]" title={l.error || ''}>
+                      {l.error || ''}
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  <svelte:fragment slot="footer">
+    <button type="button" on:click={() => diagOpen = false} class="btn-primary">Cerrar</button>
+  </svelte:fragment>
+</Sheet>
+
+<!-- ════════════════════════════════════════════════════
+     CAMPAIGN MODAL
+     ════════════════════════════════════════════════════ -->
+<Sheet bind:open={cmpModalOpen} title="Nueva campaña" maxWidth="max-w-2xl">
+  <form on:submit|preventDefault={launchCampaign} id="cmp-form" class="space-y-5">
+    {#if cmpError}
+      <div class="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2.5 text-sm">
+        <AlertCircle size={14} class="mt-0.5" /> <span>{cmpError}</span>
+      </div>
+    {/if}
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div>
+        <label for="cmp-name" class="label">Nombre de la campaña</label>
+        <input id="cmp-name" type="text" bind:value={cmpForm.name} class="input" placeholder="Ej: Aviso mantenimiento octubre" />
+      </div>
+      <div>
+        <label for="cmp-tpl" class="label">Plantilla</label>
+        <select id="cmp-tpl" bind:value={cmpForm.templateId}
+                on:change={onTemplateChange} class="select">
+          <option value="">Seleccionar plantilla...</option>
+          {#each templates.filter(t => t.isActive) as t}
+            <option value={t.id}>{t.name} — {CHANNEL_LABEL[t.channel]}</option>
+          {/each}
+        </select>
+      </div>
+    </div>
+
+    <div>
+      <label class="label">Canal</label>
+      <div class="grid grid-cols-3 gap-2">
+        {#each ['EMAIL', 'WHATSAPP', 'BOTH'] as ch}
+          {@const enabled = !tplSelected || tplSelected.channel === ch || ch === 'BOTH'}
+          <label class="flex items-center gap-2 p-2.5 rounded-xl border-2 text-sm
+                        {!enabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}
+                        {cmpForm.channel === ch ? 'border-brand-600 bg-brand-50/40' : 'border-slate-200 hover:border-slate-300'}">
+            <input type="radio" bind:group={cmpForm.channel} value={ch} disabled={!enabled} />
+            <svelte:component this={CHANNEL_ICON[ch]} size={14} /> {CHANNEL_LABEL[ch]}
+          </label>
+        {/each}
+      </div>
+    </div>
+
+    <div class="border border-slate-200 rounded-xl p-4 space-y-3 bg-slate-50/50">
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-semibold text-text-primary inline-flex items-center gap-1">
+          <Filter size={14} /> Audiencia
+        </span>
+        {#if previewLoading}
+          <span class="text-xs text-slate-500 inline-flex items-center gap-1">
+            <Loader2 size={11} class="animate-spin" /> calculando...
+          </span>
+        {:else if audiencePreview !== null}
+          <span class="badge bg-brand-50 text-brand-700 ring-brand-100">
+            {audiencePreview} {audiencePreview === 1 ? 'cliente' : 'clientes'}
+          </span>
+        {/if}
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label for="aud-zone" class="label">Zona</label>
+          <select id="aud-zone" bind:value={cmpForm.audience.zoneId} class="select">
+            <option value="">Todas</option>
+            {#each zones as z}
+              <option value={z.id}>{z.name}</option>
+            {/each}
+          </select>
+        </div>
+        <div>
+          <label for="aud-plan" class="label">Plan</label>
+          <select id="aud-plan" bind:value={cmpForm.audience.planId} class="select">
+            <option value="">Todos</option>
+            {#each plans as p}
+              <option value={p.id}>{p.name}</option>
+            {/each}
+          </select>
+        </div>
+        <div>
+          <label for="aud-status" class="label">Estado</label>
+          <select id="aud-status" bind:value={cmpForm.audience.status} class="select">
+            <option value="">Todos</option>
+            <option value="ACTIVE">Activos</option>
+            <option value="SUSPENDED">Suspendidos</option>
+            <option value="PENDING">Pendientes</option>
+          </select>
+        </div>
+        <label class="flex items-end gap-2 text-sm pb-1">
+          <input type="checkbox" bind:checked={cmpForm.audience.overdue} class="w-4 h-4" />
+          Solo con facturas vencidas
+        </label>
+      </div>
+
+      <!-- Expandable list of clients matching the audience filter -->
+      {#if (audiencePreview ?? 0) > 0}
+        <div class="border-t border-slate-200 pt-3">
+          <button type="button"
+                  on:click={() => { audienceListOpen = !audienceListOpen; if (audienceListOpen && audienceList.length === 0) loadAudienceList(); }}
+                  class="w-full flex items-center justify-between text-sm font-medium
+                         text-text-primary hover:text-brand-700 transition">
+            <span class="inline-flex items-center gap-1.5">
+              <Eye size={14} />
+              {audienceListOpen ? 'Ocultar' : 'Ver'} clientes que recibirán esta campaña
+            </span>
+            <svelte:component this={audienceListOpen ? ChevronUp : ChevronDown} size={14} />
+          </button>
+
+          {#if audienceListOpen}
+            <div class="mt-2">
+              {#if audienceListLoading}
+                <div class="flex items-center gap-2 text-xs text-text-secondary py-3">
+                  <Loader2 size={12} class="animate-spin" /> Cargando clientes...
+                </div>
+              {:else if audienceList.length === 0}
+                <div class="text-xs text-text-secondary py-2">No hay clientes que coincidan.</div>
+              {:else}
+                <div class="max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white">
+                  <table class="w-full text-xs">
+                    <thead class="bg-slate-50 sticky top-0">
+                      <tr class="text-text-secondary">
+                        <th class="text-left px-3 py-2 font-medium">Cliente</th>
+                        <th class="text-left px-3 py-2 font-medium">Zona / Plan</th>
+                        <th class="text-left px-3 py-2 font-medium">Email</th>
+                        <th class="text-left px-3 py-2 font-medium">Teléfono</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {#each audienceList as c (c.id)}
+                        <tr class="border-t border-slate-100">
+                          <td class="px-3 py-1.5 text-slate-900">{c.name}</td>
+                          <td class="px-3 py-1.5 text-slate-600">
+                            {c.zone?.name || '—'}
+                            {#if c.plan?.name}<span class="text-slate-400"> · {c.plan.name}</span>{/if}
+                          </td>
+                          <td class="px-3 py-1.5 font-mono {!c.email ? 'text-amber-600' : 'text-slate-700'}">
+                            {c.email || '(sin email)'}
+                          </td>
+                          <td class="px-3 py-1.5 font-mono {!c.phone ? 'text-amber-600' : 'text-slate-700'}">
+                            {c.phone || '(sin tel)'}
+                          </td>
+                        </tr>
+                      {/each}
+                    </tbody>
+                  </table>
+                </div>
+                {#if audienceList.length < (audiencePreview ?? 0)}
+                  <p class="text-[11px] text-text-secondary mt-1.5">
+                    Mostrando los primeros {audienceList.length} de {audiencePreview}.
+                  </p>
+                {/if}
+                {#if cmpForm.channel === 'EMAIL' || cmpForm.channel === 'BOTH'}
+                  {@const noEmail = audienceList.filter(c => !c.email).length}
+                  {#if noEmail > 0}
+                    <p class="text-[11px] text-amber-700 mt-1.5 inline-flex items-center gap-1">
+                      <AlertCircle size={11} />
+                      {noEmail} cliente{noEmail === 1 ? '' : 's'} sin email — esos envíos quedarán como "fallidos".
+                    </p>
+                  {/if}
+                {/if}
+              {/if}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </form>
+
+  <svelte:fragment slot="footer">
+    <button type="button" on:click={() => cmpModalOpen = false} class="btn-secondary" disabled={cmpSaving}>Cancelar</button>
+    <button type="submit" form="cmp-form" class="btn-primary"
+            disabled={cmpSaving || (audiencePreview ?? 0) === 0}>
+      {#if cmpSaving}
+        <Loader2 size={15} class="animate-spin" /> Lanzando...
+      {:else}
+        <Send size={15} /> Lanzar a {audiencePreview ?? 0} {audiencePreview === 1 ? 'cliente' : 'clientes'}
+      {/if}
+    </button>
+  </svelte:fragment>
+</Sheet>

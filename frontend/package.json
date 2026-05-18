@@ -1,0 +1,51 @@
+{
+  "name": "isp-manager-frontend",
+  "version": "1.0.0",
+  "description": "ISP Management System Frontend",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --port 5173",
+    "dev:clean": "rimraf .svelte-kit && vite dev --port 5173",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "lint": "prettier --plugin-search-dir . --check . && eslint .",
+    "format": "prettier --plugin-search-dir . --write ."
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^2.0.3",
+    "@sveltejs/kit": "^1.27.4",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "autoprefixer": "^10.5.0",
+    "daisyui": "^5.5.19",
+    "eslint": "^8.28.0",
+    "eslint-config-prettier": "^8.5.0",
+    "eslint-plugin-svelte": "^2.35.1",
+    "postcss": "^8.5.13",
+    "prettier": "^2.8.0",
+    "prettier-plugin-svelte": "^2.10.1",
+    "rimraf": "^5.0.0",
+    "svelte": "^4.2.8",
+    "svelte-check": "^3.6.2",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.0.0",
+    "vite": "^4.4.2"
+  },
+  "dependencies": {
+    "@tanstack/svelte-table": "^8.10.7",
+    "chart.js": "^4.4.0",
+    "lucide-svelte": "^1.0.1",
+    "svelte-chartjs": "^3.1.5",
+    "svelte-sonner": "^0.3.24"
+  },
+  "keywords": [
+    "isp",
+    "management",
+    "sveltekit",
+    "frontend"
+  ],
+  "author": "ISP Manager Team",
+  "license": "MIT"
+}

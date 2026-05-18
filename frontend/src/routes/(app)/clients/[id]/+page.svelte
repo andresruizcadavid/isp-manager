@@ -1,0 +1,1221 @@
+<script>
+  import { onMount } from 'svelte';
+  import { page } from '$app/stores';
+  import { api } from '$lib/api/client.js';
+  import { paymentsApi } from '$lib/api/payments.api.js';
+  import { evidenceApi } from '$lib/api/evidence.api.js';
+  import { goto } from '$app/navigation';
+  import {
+    ArrowLeft, User, Wifi, CreditCard, FileText, AlertCircle, CheckCircle2,
+    Eye, EyeOff, PauseCircle, PlayCircle, Loader2, Trash2, Edit3, X,
+    Calendar, FileCheck, Phone, Mail, MessageSquare, Copy, Check,
+    MapPin, Receipt, ExternalLink, Camera, ImageUp, Image as ImageIcon
+  } from 'lucide-svelte';
+
+  let client = null;
+  let pageError = '';
+
+  onMount(async () => {
+    const id = $page.params.id;
+    try {
+      client = await api.get(`/clients/${id}`);
+    } catch (e) {
+      pageError = e.message || 'Error al cargar el cliente';
+    }
+  });
+
+  let loadingAction = false;
+  let error = '';
+  let success = '';
+  let showPassword = false;
+  let showDeleteModal = false;
+  let showPaymentModal = false;
+  let deleting = false;
+  let deleteConfirmName = '';
+
+  let editPersonal = false;
+  let formPersonal = {};
+
+  // ── Payment details modal (read-only viewer for paid/partial invoices) ──
+  let showPaymentDetails = false;
+  let paymentDetailsInvoice = null; // the invoice whose payments we're viewing
+  let paymentDetailsList = [];      // payments associated with that invoice
+
+  function openPaymentDetails(inv) {
+    paymentDetailsInvoice = inv;
+    paymentDetailsList = paymentsForInvoice(inv);
+    showPaymentDetails = true;
+  }
+  function openPaymentDetailsByInvoiceId(invoiceId) {
+    const inv = client?.invoices?.find(i => i.id === invoiceId);
+    if (inv) openPaymentDetails(inv);
+  }
+
+  $: if (client) {
+    formPersonal = {
+      documentType:   client.documentType   || 'CC',
+      documentNumber: client.documentNumber || '',
+      email:          client.email          || '',
+      phone:          client.phone          || '',
+      address:        client.address        || '',
+      neighborhood:   client.neighborhood   || '',
+      city:           client.city           || '',
+      zoneId:         client.zoneId         || null
+    };
+  }
+
+  // ── Constants ───────────────────────────────────────
+  const PAYMENT_METHOD_PT = {
+    CASH: 'Efectivo',
+    BANK_TRANSFER: 'Transferencia bancaria',
+    CREDIT_CARD: 'Tarjeta de crédito',
+    WOMPI: 'Wompi',
+    OTHER: 'Otro'
+  };
+  const STATUS_PT  = { ACTIVE:'Activo', SUSPENDED:'Suspendido', INACTIVE:'Inactivo', PENDING:'Pendiente' };
+  const STATUS_CLS = {
+    ACTIVE:    'bg-emerald-100 text-emerald-700',
+    SUSPENDED: 'bg-red-100 text-red-700',
+    INACTIVE:  'bg-slate-100 text-slate-600',
+    PENDING:   'bg-amber-100 text-amber-700'
+  };
+  const INVOICE_CLS = {
+    PAID:      'bg-emerald-100 text-emerald-700',
+    PARTIAL:   'bg-blue-100 text-blue-700',
+    PENDING:   'bg-amber-100 text-amber-700',
+    OVERDUE:   'bg-red-100 text-red-700',
+    CANCELLED: 'bg-slate-100 text-slate-600',
+    DRAFT:     'bg-slate-100 text-slate-500',
+    REFUNDED:  'bg-violet-100 text-violet-700'
+  };
+
+  // ── Helpers ─────────────────────────────────────────
+  function fmtMoney(cents) {
+    if (cents == null) return '—';
+    return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(cents / 100);
+  }
+  function fmtDate(s) {
+    if (!s) return '—';
+    return new Date(s).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' });
+  }
+  function fmtDateTime(s) {
+    if (!s) return '—';
+    return new Date(s).toLocaleString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  }
+  // Extract any http(s) URL inside payment notes (likely the receipt/evidencia).
+  function extractUrls(text) {
+    if (!text) return [];
+    const matches = text.match(/https?:\/\/[^\s)<>"']+/gi);
+    return matches ? [...new Set(matches)] : [];
+  }
+  // Find invoice number for a given invoiceId (for payment history rows).
+  function invoiceNumberFor(invoiceId) {
+    return client?.invoices?.find(i => i.id === invoiceId)?.number || null;
+  }
+  // Collect payments associated with an invoice. Prefer inv.payments (eager-loaded),
+  // fall back to scanning client.payments by invoiceId.
+  function paymentsForInvoice(inv) {
+    if (Array.isArray(inv?.payments) && inv.payments.length) return inv.payments;
+    return (client?.payments || []).filter(p => p.invoiceId === inv?.id);
+  }
+  function getClientDuration() {
+    if (!client?.createdAt) return '—';
+    const diff = Date.now() - new Date(client.createdAt);
+    const months = Math.floor(diff / (1000 * 60 * 60 * 24 * 30));
+    const years = Math.floor(months / 12);
+    const m = months % 12;
+    if (years > 0) return `${years} año${years > 1 ? 's' : ''}, ${m} mes${m !== 1 ? 'es' : ''}`;
+    return `${months} mes${months !== 1 ? 'es' : ''}`;
+  }
+  function showToast(type, message) {
+    if (type === 'error') error = message;
+    else success = message;
+    setTimeout(() => { error = ''; success = ''; }, 4000);
+  }
+
+  // Phone helpers (digits-only for tel:/wa.me)
+  function digitsOnly(p) { return (p || '').replace(/\D/g, ''); }
+
+  // Copy with feedback
+  let copied = '';
+  async function copyText(value, key) {
+    try {
+      await navigator.clipboard.writeText(value);
+      copied = key;
+      setTimeout(() => { if (copied === key) copied = ''; }, 1500);
+    } catch (_) { /* clipboard unavailable */ }
+  }
+
+  // ── Actions ─────────────────────────────────────────
+  async function toggleStatus() {
+    loadingAction = true; error = '';
+    try {
+      const action = client.status === 'ACTIVE' ? 'suspend' : 'activate';
+      await api.post(`/clients/${client.id}/${action}`);
+      client.status = client.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+      showToast('success', client.status === 'ACTIVE' ? 'Servicio activado' : 'Servicio suspendido');
+    } catch (e) {
+      showToast('error', e.message || 'Error al cambiar estado');
+    } finally { loadingAction = false; }
+  }
+
+  async function savePersonal() {
+    loadingAction = true;
+    try {
+      await api.put(`/clients/${client.id}`, formPersonal);
+      client = { ...client, ...formPersonal };
+      editPersonal = false;
+      showToast('success', 'Datos actualizados');
+    } catch (e) {
+      showToast('error', e.message || 'Error al guardar');
+    } finally { loadingAction = false; }
+  }
+
+  async function deleteClient() {
+    if (deleteConfirmName !== client?.name) return;
+    deleting = true;
+    try {
+      await api.delete(`/clients/${client.id}`);
+      showDeleteModal = false;
+      goto('/clients');
+    } catch (e) {
+      showToast('error', e.message || 'Error al eliminar');
+    } finally { deleting = false; }
+  }
+
+  // ── Derived ─────────────────────────────────────────
+  $: initials = client?.name?.split(/\s+/).map(n => n[0]).slice(0, 2).join('').toUpperCase() || '??';
+  $: pendingInvoices = client?.invoices?.filter(i => ['PENDING','OVERDUE','PARTIAL'].includes(i.status)) || [];
+  $: paidInvoices    = client?.invoices?.filter(i => i.status === 'PAID') || [];
+  $: recentPayments  = client?.payments || [];
+  $: isOnline        = client?.mikrotikAccount?.status === 'ACTIVE' || client?.status === 'ACTIVE';
+  $: pendingAmount   = pendingInvoices.reduce(
+       (sum, inv) => sum + (inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0)),
+       0
+     );
+  // Next due date among pending invoices (oldest first)
+  $: nextDue = pendingInvoices
+                .filter(i => i.dueDate)
+                .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  function isOverdueInvoice(inv) {
+    if (inv.status === 'OVERDUE') return true;
+    if (!inv.dueDate) return false;
+    return new Date(inv.dueDate) < now && inv.status !== 'PAID';
+  }
+
+  // ── Payment modal ───────────────────────────────────
+  let payInvoiceId = '';
+  let payAmount = '';
+  let payMethod = 'CASH';
+  let payNotes = '';
+  let paySaving = false;
+  let payError = '';
+
+  function openPayment() {
+    payError = '';
+    const sorted = [...pendingInvoices].sort((a, b) => {
+      const aOver = a.status === 'OVERDUE' ? 0 : 1;
+      const bOver = b.status === 'OVERDUE' ? 0 : 1;
+      if (aOver !== bOver) return aOver - bOver;
+      return new Date(a.dueDate) - new Date(b.dueDate);
+    });
+    const first = sorted[0];
+    payInvoiceId = first?.id || '';
+    payAmount = first
+      ? String(Math.round((first.balanceDue > 0 ? first.balanceDue : (first.amount ?? first.total ?? 0)) / 100))
+      : '';
+    payMethod = 'CASH';
+    payNotes = '';
+    showPaymentModal = true;
+  }
+
+  function selectPayInvoice(invoiceId) {
+    payInvoiceId = invoiceId;
+    const inv = pendingInvoices.find(i => i.id === invoiceId);
+    if (inv) {
+      const remaining = inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0);
+      payAmount = String(Math.round(remaining / 100));
+    }
+  }
+
+  async function submitPayment() {
+    if (!payInvoiceId) { payError = 'Selecciona una factura'; return; }
+    const amt = Number(payAmount);
+    if (!amt || amt <= 0) { payError = 'Monto inválido'; return; }
+    paySaving = true; payError = '';
+    try {
+      await paymentsApi.create({
+        invoiceId: payInvoiceId,
+        amount: amt,
+        paymentMethod: payMethod,
+        notes: payNotes || undefined
+      });
+      showPaymentModal = false;
+      const fresh = await api.get(`/clients/${client.id}`);
+      client = fresh;
+      showToast('success', 'Pago registrado correctamente');
+    } catch (e) {
+      payError = e.message || 'Error al registrar pago';
+    } finally { paySaving = false; }
+  }
+
+  // ── Evidence photos ─────────────────────────────────────────────────
+  let evidence = [];
+  let evidenceLoading = false;
+  let evidenceError = '';
+  let cameraInput;     // <input type="file" capture="environment">
+  let galleryInput;    // <input type="file" multiple>
+  let pendingFiles = [];     // files chosen but not yet uploaded
+  let pendingPreviews = [];  // object URLs for previews
+  let evidenceType = 'installation';
+  let evidenceDescription = '';
+  let uploading = false;
+  let lightboxPhoto = null;  // photo currently open in the lightbox
+
+  async function loadEvidence() {
+    if (!client?.id) return;
+    evidenceLoading = true; evidenceError = '';
+    try {
+      evidence = await evidenceApi.list(client.id);
+    } catch (e) {
+      evidenceError = e.message || 'No se pudieron cargar las evidencias';
+    } finally { evidenceLoading = false; }
+  }
+  // Load when client becomes available.
+  $: if (client?.id && evidence.length === 0 && !evidenceLoading && !evidenceError) loadEvidence();
+
+  function onPickFiles(e) {
+    const list = Array.from(e.target.files || []);
+    if (list.length === 0) return;
+    // Filter to images only (defensive — accept attribute may be ignored).
+    const images = list.filter(f => f.type.startsWith('image/'));
+    if (images.length === 0) {
+      showToast('error', 'Solo se aceptan imágenes.');
+      e.target.value = '';
+      return;
+    }
+    // Revoke any old previews to avoid memory leaks.
+    pendingPreviews.forEach(u => URL.revokeObjectURL(u));
+    pendingFiles = images;
+    pendingPreviews = images.map(f => URL.createObjectURL(f));
+    // Reset the input so picking the same file again still triggers change.
+    e.target.value = '';
+  }
+
+  function discardPending() {
+    pendingPreviews.forEach(u => URL.revokeObjectURL(u));
+    pendingFiles = [];
+    pendingPreviews = [];
+    evidenceDescription = '';
+  }
+
+  async function uploadPending() {
+    if (pendingFiles.length === 0) return;
+    uploading = true;
+    try {
+      const created = await evidenceApi.upload(client.id, pendingFiles, {
+        type: evidenceType,
+        description: evidenceDescription
+      });
+      // Prepend new ones (server returns ordered, but local concat is fine).
+      evidence = [...created, ...evidence];
+      showToast('success', `${created.length} ${created.length === 1 ? 'evidencia subida' : 'evidencias subidas'} correctamente.`);
+      discardPending();
+    } catch (e) {
+      showToast('error', e.message || 'No se pudo subir la evidencia.');
+    } finally { uploading = false; }
+  }
+
+  async function deleteEvidence(photo) {
+    if (!confirm('¿Eliminar esta evidencia? No se puede deshacer.')) return;
+    try {
+      await evidenceApi.remove(client.id, photo.id);
+      evidence = evidence.filter(p => p.id !== photo.id);
+      if (lightboxPhoto?.id === photo.id) lightboxPhoto = null;
+      showToast('success', 'Evidencia eliminada.');
+    } catch (e) {
+      showToast('error', e.message || 'No se pudo eliminar.');
+    }
+  }
+
+  const EVIDENCE_TYPE_LABEL = {
+    installation: 'Instalación',
+    support:      'Soporte técnico',
+    visit:        'Visita',
+    other:        'Otro'
+  };
+  function fmtEvDate(s) {
+    if (!s) return '';
+    return new Date(s).toLocaleString('es-CO', {
+      day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+  }
+</script>
+
+<svelte:head><title>{client?.name || 'Cliente'} — ISP Manager</title></svelte:head>
+
+{#if pageError}
+  <div class="flex flex-col items-center justify-center py-24 gap-4">
+    <AlertCircle size={40} class="text-red-400" />
+    <p class="text-slate-700 font-medium">No se pudo cargar el cliente</p>
+    <p class="text-sm text-slate-500">{pageError}</p>
+    <a href="/clients" class="btn-secondary"><ArrowLeft size={14} /> Volver a Clientes</a>
+  </div>
+{:else}
+
+<!-- Toasts -->
+{#if error}
+  <div class="fixed top-4 right-4 z-50 bg-white rounded-xl shadow-lg border border-red-200 p-4 flex items-start gap-3 max-w-sm">
+    <AlertCircle size={18} class="text-red-500 mt-0.5" />
+    <span class="text-sm text-red-700">{error}</span>
+  </div>
+{/if}
+{#if success}
+  <div class="fixed top-4 right-4 z-50 bg-white rounded-xl shadow-lg border border-emerald-200 p-4 flex items-start gap-3 max-w-sm">
+    <CheckCircle2 size={18} class="text-emerald-500 mt-0.5" />
+    <span class="text-sm text-emerald-700">{success}</span>
+  </div>
+{/if}
+
+<!-- Breadcrumb + page header -->
+<div class="text-xs text-slate-500 mb-3">
+  <a href="/" class="hover:text-slate-700">ISP Manager</a>
+  <span class="mx-1">/</span>
+  <a href="/clients" class="hover:text-slate-700">Clientes</a>
+  <span class="mx-1">/</span>
+  <span class="text-slate-700 font-medium">{client?.name || '...'}</span>
+</div>
+
+<div class="page-header">
+  <div class="flex items-center gap-4 min-w-0">
+    <a href="/clients" class="btn-icon" title="Volver a clientes">
+      <ArrowLeft size={18} />
+    </a>
+    {#if client}
+      <div class="w-12 h-12 rounded-full bg-gradient-to-br from-brand-800 to-brand-500 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+        {initials}
+      </div>
+      <div class="min-w-0">
+        <h1 class="page-title truncate">{client.name}</h1>
+        <div class="flex flex-wrap items-center gap-1.5 mt-1">
+          <span class="px-2 py-0.5 rounded-full text-[11px] font-medium {STATUS_CLS[client.status] || 'bg-slate-100 text-slate-600'}">
+            {STATUS_PT[client.status] || client.status}
+          </span>
+          {#if client.plan?.name}
+            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-100 text-blue-700">{client.plan.name}</span>
+          {/if}
+          {#if client.zone?.name}
+            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">{client.zone.name}</span>
+          {/if}
+        </div>
+      </div>
+    {:else}
+      <div class="w-12 h-12 rounded-full bg-slate-200 animate-pulse"></div>
+      <div class="space-y-2">
+        <div class="h-6 w-48 bg-slate-200 rounded animate-pulse"></div>
+        <div class="h-4 w-32 bg-slate-200 rounded animate-pulse"></div>
+      </div>
+    {/if}
+  </div>
+  <div class="flex items-center gap-2 flex-wrap">
+    {#if pendingAmount > 0}
+      <button on:click={openPayment} class="btn-primary">
+        <CreditCard size={15} /> Registrar Pago
+        <span class="bg-white/20 px-2 py-0.5 rounded-md text-xs tabular-nums">{fmtMoney(pendingAmount)}</span>
+      </button>
+    {:else}
+      <button on:click={openPayment}
+              class="btn-secondary"
+              title="Registrar un pago manual">
+        <CreditCard size={15} /> Registrar Pago
+      </button>
+    {/if}
+    <button class="btn-secondary" on:click={() => editPersonal = true}>
+      <Edit3 size={15} /> Editar
+    </button>
+    <button class="btn-secondary" on:click={toggleStatus} disabled={loadingAction}>
+      {#if loadingAction}<Loader2 size={15} class="animate-spin" />
+      {:else if client?.status === 'ACTIVE'}<PauseCircle size={15} />
+      {:else}<PlayCircle size={15} />{/if}
+      {client?.status === 'ACTIVE' ? 'Suspender' : 'Activar'}
+    </button>
+    <button class="btn-danger" on:click={() => { deleteConfirmName = ''; showDeleteModal = true; }}>
+      <Trash2 size={15} /> Eliminar
+    </button>
+  </div>
+</div>
+
+{#if !client}
+  <!-- Skeleton placeholders -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+    {#each Array(4) as _}
+      <div class="card p-3 h-[68px] animate-pulse">
+        <div class="h-3 w-20 bg-slate-200 rounded mb-2"></div>
+        <div class="h-5 w-24 bg-slate-200 rounded"></div>
+      </div>
+    {/each}
+  </div>
+{:else}
+
+<!-- KPI strip (design-system .kpi-tile) -->
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+  <div class="kpi-tile">
+    <div class="icon-square-rose"><CreditCard size={14} /></div>
+    <div class="kpi-tile-text">
+      <div class="kpi-label">Saldo Pendiente</div>
+      <div class="kpi-value {pendingAmount > 0 ? 'text-orange-600' : 'text-emerald-600'}">{fmtMoney(pendingAmount)}</div>
+      <div class="kpi-sub">{pendingInvoices.length} factura{pendingInvoices.length === 1 ? '' : 's'} por cobrar</div>
+    </div>
+  </div>
+  <div class="kpi-tile">
+    <div class="icon-square-{isOnline ? 'green' : 'amber'}">
+      {#if isOnline}<CheckCircle2 size={14} />{:else}<PauseCircle size={14} />{/if}
+    </div>
+    <div class="kpi-tile-text">
+      <div class="kpi-label">Estado servicio</div>
+      <div class="kpi-value text-base {isOnline ? 'text-emerald-600' : 'text-amber-600'}">{isOnline ? 'En línea' : 'Suspendido'}</div>
+      <div class="kpi-sub">{client.pppoeUsername || client.mikrotikAccount?.username || 'Sin PPPoE'}</div>
+    </div>
+  </div>
+  <div class="kpi-tile">
+    <div class="icon-square-amber"><Calendar size={14} /></div>
+    <div class="kpi-tile-text">
+      <div class="kpi-label">Próximo Vencimiento</div>
+      <div class="kpi-value text-base {nextDue && isOverdueInvoice(nextDue) ? 'text-red-600' : 'text-slate-900'}">
+        {nextDue ? fmtDate(nextDue.dueDate) : '—'}
+      </div>
+      <div class="kpi-sub">{nextDue ? (isOverdueInvoice(nextDue) ? 'Vencida' : 'Próxima a vencer') : 'Sin pendientes'}</div>
+    </div>
+  </div>
+  <div class="kpi-tile">
+    <div class="icon-square-blue"><FileCheck size={14} /></div>
+    <div class="kpi-tile-text">
+      <div class="kpi-label">Facturas pagadas</div>
+      <div class="kpi-value">{paidInvoices.length}</div>
+      <div class="kpi-sub">de {client.invoices?.length || 0} totales</div>
+    </div>
+  </div>
+</div>
+
+<!-- Main content: 2/3 + 1/3 -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+
+  <!-- LEFT: Datos personales + Facturas + Pagos -->
+  <div class="lg:col-span-2 space-y-4">
+
+    <!-- Datos Personales -->
+    <div class="card">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <User size={16} class="text-slate-600" />
+          <h2 class="font-semibold text-slate-900">Datos Personales</h2>
+        </div>
+        {#if !editPersonal}
+          <button class="btn-icon" on:click={() => editPersonal = true} title="Editar">
+            <Edit3 size={14} />
+          </button>
+        {/if}
+      </div>
+      <div class="card-body">
+        {#if editPersonal}
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="label" for="ed-doctype">Tipo Documento</label>
+              <select id="ed-doctype" class="select" bind:value={formPersonal.documentType}>
+                <option value="CC">Cédula</option>
+                <option value="NIT">NIT</option>
+                <option value="CE">Cédula Extranjería</option>
+                <option value="PAS">Pasaporte</option>
+              </select>
+            </div>
+            <div>
+              <label class="label" for="ed-docnum">Número</label>
+              <input id="ed-docnum" class="input" bind:value={formPersonal.documentNumber} />
+            </div>
+            <div class="md:col-span-2">
+              <label class="label" for="ed-email">Email</label>
+              <input id="ed-email" type="email" class="input" bind:value={formPersonal.email} />
+            </div>
+            <div class="md:col-span-2">
+              <label class="label" for="ed-phone">Teléfono</label>
+              <input id="ed-phone" class="input" bind:value={formPersonal.phone} />
+            </div>
+            <div class="md:col-span-2">
+              <label class="label" for="ed-addr">Dirección</label>
+              <input id="ed-addr" class="input" bind:value={formPersonal.address} />
+            </div>
+            <div>
+              <label class="label" for="ed-neigh">Barrio</label>
+              <input id="ed-neigh" class="input" bind:value={formPersonal.neighborhood} />
+            </div>
+            <div>
+              <label class="label" for="ed-city">Ciudad</label>
+              <input id="ed-city" class="input" bind:value={formPersonal.city} />
+            </div>
+            <div class="md:col-span-2 flex gap-2 pt-2">
+              <button class="btn-primary" on:click={savePersonal} disabled={loadingAction}>
+                {#if loadingAction}<Loader2 size={14} class="animate-spin" />{/if}
+                Guardar
+              </button>
+              <button class="btn-ghost" on:click={() => editPersonal = false}>Cancelar</button>
+            </div>
+          </div>
+        {:else}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <div class="label !mb-1">Documento</div>
+              <div class="text-sm font-medium text-slate-900">{client.documentType || ''} {client.documentNumber || '—'}</div>
+            </div>
+            <div>
+              <div class="label !mb-1">Zona</div>
+              <div class="text-sm font-medium text-slate-900">{client.zone?.name || '—'}</div>
+            </div>
+
+            <div class="col-span-2">
+              <div class="label !mb-1">Email</div>
+              {#if client.email}
+                <a href="mailto:{client.email}" class="text-sm font-medium text-brand-800 hover:underline inline-flex items-center gap-1.5">
+                  <Mail size={13} /> {client.email}
+                </a>
+              {:else}
+                <div class="text-sm text-slate-400">—</div>
+              {/if}
+            </div>
+
+            <div>
+              <div class="label !mb-1">Teléfono</div>
+              {#if client.phone}
+                <div class="flex items-center gap-2 flex-wrap">
+                  <a href="tel:{digitsOnly(client.phone)}" class="text-sm font-medium text-slate-900 hover:text-brand-800 inline-flex items-center gap-1.5">
+                    <Phone size={13} /> {client.phone}
+                  </a>
+                  <a href="https://wa.me/{digitsOnly(client.phone)}" target="_blank" rel="noopener"
+                     class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                    <MessageSquare size={11} /> WhatsApp
+                  </a>
+                </div>
+              {:else}
+                <div class="text-sm text-slate-400">—</div>
+              {/if}
+            </div>
+
+            <div>
+              <div class="label !mb-1">Dirección</div>
+              <div class="text-sm font-medium text-slate-900 flex items-start gap-1.5">
+                {#if client.address}<MapPin size={13} class="mt-0.5 text-slate-400 flex-shrink-0" />{/if}
+                <span>{client.address || '—'}{client.neighborhood ? `, ${client.neighborhood}` : ''}</span>
+              </div>
+            </div>
+
+            <div class="col-span-2">
+              <div class="label !mb-1">Antigüedad</div>
+              <div class="text-sm text-slate-700" title="Fecha de creación: {fmtDate(client.installationDate || client.createdAt)}">
+                {getClientDuration()}
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+
+    <!-- Facturas -->
+    <div class="card">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <FileText size={16} class="text-slate-600" />
+          <h2 class="font-semibold text-slate-900">Facturas</h2>
+          <span class="text-xs text-slate-500">({client.invoices?.length || 0})</span>
+        </div>
+      </div>
+      {#if !client.invoices || client.invoices.length === 0}
+        <div class="p-8 text-center text-sm text-slate-400">Sin facturas registradas</div>
+      {:else}
+        <div class="overflow-x-auto">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th class="text-right">Monto</th>
+                <th>Vencimiento</th>
+                <th>Estado</th>
+                <th class="text-right">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each client.invoices.slice(0, 8) as inv}
+                <tr>
+                  <td class="font-mono text-xs text-slate-600">{inv.number}</td>
+                  <td class="text-right font-mono font-medium tabular-nums">{fmtMoney(inv.total)}</td>
+                  <td class="{isOverdueInvoice(inv) ? 'text-red-600 font-medium' : 'text-slate-600'}">
+                    {fmtDate(inv.dueDate)}
+                  </td>
+                  <td>
+                    <span class="badge {INVOICE_CLS[inv.status] || 'bg-slate-100 text-slate-600'}">
+                      {inv.status}
+                    </span>
+                  </td>
+                  <td class="text-right">
+                    {#if inv.status === 'PAID' || inv.status === 'PARTIAL'}
+                      <button class="text-xs text-brand-800 hover:underline font-medium inline-flex items-center gap-1"
+                              on:click={() => openPaymentDetails(inv)}
+                              title="Ver detalle del pago">
+                        <Receipt size={12} /> Ver pago
+                      </button>
+                    {:else if inv.status !== 'CANCELLED'}
+                      <button class="text-xs text-emerald-700 hover:underline font-medium"
+                              on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
+                        Pagar
+                      </button>
+                    {/if}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </div>
+
+    <!-- Historial Pagos -->
+    <div class="card">
+      <div class="card-header">
+        <div class="flex items-center gap-2">
+          <CreditCard size={16} class="text-slate-600" />
+          <h2 class="font-semibold text-slate-900">Historial de Pagos</h2>
+          <span class="text-xs text-slate-500">({recentPayments.length})</span>
+        </div>
+      </div>
+      {#if recentPayments.length === 0}
+        <div class="p-8 text-center text-sm text-slate-400">Sin pagos registrados</div>
+      {:else}
+        <div class="overflow-x-auto">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th class="text-right">Monto</th>
+                <th>Método</th>
+                <th>Factura</th>
+                <th>Notas</th>
+                <th class="text-right">Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each recentPayments.slice(0, 10) as pay}
+                <tr>
+                  <td class="text-slate-600">{fmtDate(pay.createdAt)}</td>
+                  <td class="text-right font-mono font-medium tabular-nums">{fmtMoney(pay.amount)}</td>
+                  <td><span class="badge bg-slate-100 text-slate-600">{PAYMENT_METHOD_PT[pay.method] || pay.method}</span></td>
+                  <td class="font-mono text-xs text-slate-600">
+                    {#if invoiceNumberFor(pay.invoiceId)}
+                      <button class="hover:text-brand-800 hover:underline"
+                              on:click={() => openPaymentDetailsByInvoiceId(pay.invoiceId)}>
+                        {invoiceNumberFor(pay.invoiceId)}
+                      </button>
+                    {:else}—{/if}
+                  </td>
+                  <td class="text-slate-500 text-xs truncate max-w-[180px]" title={pay.notes || ''}>{pay.notes || '—'}</td>
+                  <td class="text-right">
+                    <button class="text-xs text-brand-800 hover:underline font-medium inline-flex items-center gap-1"
+                            on:click={() => openPaymentDetailsByInvoiceId(pay.invoiceId)}
+                            title="Ver detalle">
+                      <Receipt size={12} /> Detalle
+                    </button>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- RIGHT: Servicio PPPoE (sticky) -->
+  <div class="lg:col-span-1">
+    <div class="card lg:sticky lg:top-4">
+      <div class="card-header">
+        <div class="flex items-center gap-2 min-w-0">
+          <Wifi size={16} class="text-slate-600" />
+          <h2 class="font-semibold text-slate-900">Servicio PPPoE</h2>
+          {#if client.pppoeUsername || client.mikrotikAccount}
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-medium {isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">
+              {isOnline ? 'Online' : 'Offline'}
+            </span>
+          {/if}
+        </div>
+      </div>
+      <div class="card-body">
+        {#if client.pppoeUsername || client.mikrotikAccount}
+          <div class="space-y-3">
+            <div>
+              <div class="label !mb-1">Usuario</div>
+              <div class="flex items-center gap-2">
+                <div class="text-xs font-mono text-slate-900 bg-slate-50 px-2 py-1.5 rounded flex-1 truncate">
+                  {client.pppoeUsername || client.mikrotikAccount?.username || '—'}
+                </div>
+                <button class="btn-icon" title="Copiar usuario"
+                        on:click={() => copyText(client.pppoeUsername || client.mikrotikAccount?.username || '', 'user')}>
+                  {#if copied === 'user'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div class="label !mb-1">Contraseña</div>
+              <div class="flex items-center gap-2">
+                <div class="text-xs font-mono text-slate-900 bg-slate-50 px-2 py-1.5 rounded flex-1 truncate">
+                  {showPassword ? (client.pppoePassword || client.mikrotikAccount?.password || '••••••••') : '••••••••'}
+                </div>
+                <button class="btn-icon" title={showPassword ? 'Ocultar' : 'Mostrar'} on:click={() => showPassword = !showPassword}>
+                  {#if showPassword}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
+                </button>
+                <button class="btn-icon" title="Copiar contraseña"
+                        on:click={() => copyText(client.pppoePassword || client.mikrotikAccount?.password || '', 'pwd')}>
+                  {#if copied === 'pwd'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div class="label !mb-1">IP Asignada</div>
+              <div class="flex items-center gap-2">
+                <div class="text-xs font-mono text-slate-900 bg-slate-50 px-2 py-1.5 rounded flex-1 truncate">
+                  {client.serviceIp || client.mikrotikAccount?.remoteAddress || '—'}
+                </div>
+                {#if client.serviceIp || client.mikrotikAccount?.remoteAddress}
+                  <button class="btn-icon" title="Copiar IP"
+                          on:click={() => copyText(client.serviceIp || client.mikrotikAccount?.remoteAddress || '', 'ip')}>
+                    {#if copied === 'ip'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
+                  </button>
+                {/if}
+              </div>
+            </div>
+
+            <div>
+              <div class="label !mb-1">IP Local</div>
+              <div class="text-xs font-mono text-slate-700">{client.serviceLocalIp || '—'}</div>
+            </div>
+
+            <div>
+              <div class="label !mb-1">Plan</div>
+              <div class="text-sm font-medium text-slate-900">{client.plan?.name || 'Sin plan'}</div>
+              {#if client.plan?.downloadSpeed && client.plan?.uploadSpeed}
+                <div class="text-xs text-slate-500 mt-0.5">
+                  {client.plan.downloadSpeed}↓ / {client.plan.uploadSpeed}↑ Mbps
+                </div>
+              {/if}
+            </div>
+
+            {#if client.coordinates}
+              <div>
+                <div class="label !mb-1">Coordenadas</div>
+                <a href="https://www.google.com/maps?q={client.coordinates}" target="_blank" rel="noopener"
+                   class="text-xs font-mono text-brand-800 hover:underline inline-flex items-center gap-1">
+                  <MapPin size={12} /> {client.coordinates}
+                </a>
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <div class="text-center py-8 text-slate-400 text-sm">
+            <Wifi size={28} class="mx-auto mb-2 opacity-50" />
+            Sin servicio PPPoE configurado
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Evidencias Fotográficas ───────────────────────────────── -->
+<div class="card mb-6">
+  <div class="card-header">
+    <div class="flex items-center gap-2">
+      <ImageIcon size={16} class="text-slate-600" />
+      <h3 class="font-semibold text-slate-900">Evidencias Fotográficas</h3>
+      {#if evidence.length > 0}
+        <span class="text-xs text-text-secondary">· {evidence.length}</span>
+      {/if}
+    </div>
+  </div>
+  <div class="card-body">
+
+    <!-- Hidden inputs (camera + gallery) -->
+    <input type="file" accept="image/*" capture="environment" class="hidden"
+           bind:this={cameraInput} on:change={onPickFiles} />
+    <input type="file" accept="image/*" multiple class="hidden"
+           bind:this={galleryInput} on:change={onPickFiles} />
+
+    {#if pendingFiles.length === 0}
+      <!-- Upload action buttons -->
+      <div class="flex flex-wrap gap-2 mb-4">
+        <button type="button" on:click={() => cameraInput?.click()} class="btn-primary">
+          <Camera size={16} /> Tomar foto
+        </button>
+        <button type="button" on:click={() => galleryInput?.click()} class="btn-secondary">
+          <ImageUp size={16} /> Subir desde galería
+        </button>
+      </div>
+
+      <!-- Gallery -->
+      {#if evidenceLoading}
+        <div class="flex items-center justify-center gap-2 py-8 text-slate-500 text-sm">
+          <Loader2 size={14} class="animate-spin" /> Cargando evidencias...
+        </div>
+      {:else if evidenceError}
+        <div class="flex items-start gap-2 bg-red-50 border border-red-200
+                    text-red-700 rounded-xl px-3 py-2.5 text-sm">
+          <AlertCircle size={14} class="mt-0.5 flex-shrink-0" />
+          <div class="flex-1 min-w-0">
+            <div>{evidenceError}</div>
+            <button type="button" on:click={loadEvidence}
+                    class="mt-1 text-xs text-brand-600 hover:underline font-medium">
+              Reintentar
+            </button>
+          </div>
+        </div>
+      {:else if evidence.length === 0}
+        <div class="text-center py-8 text-sm text-slate-500 border border-dashed border-slate-200 rounded-xl">
+          <ImageIcon size={28} class="mx-auto mb-2 opacity-50" />
+          Aún no hay evidencias. Toma o sube la primera foto.
+        </div>
+      {:else}
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+          {#each evidence as photo (photo.id)}
+            <div class="relative group">
+              <button type="button" on:click={() => lightboxPhoto = photo}
+                      class="block w-full aspect-square overflow-hidden rounded-lg
+                             border border-slate-200 bg-slate-50 hover:border-brand-600
+                             active:scale-[0.98] transition">
+                <img src={photo.fileUrl} alt={photo.description || 'Evidencia'}
+                     class="w-full h-full object-cover" loading="lazy" />
+              </button>
+              <button type="button" on:click={() => deleteEvidence(photo)}
+                      title="Eliminar evidencia"
+                      class="absolute top-1 right-1 p-1.5 rounded-md
+                             bg-white/90 hover:bg-red-600 hover:text-white
+                             text-slate-600 shadow-sm
+                             opacity-0 group-hover:opacity-100 transition">
+                <Trash2 size={12} />
+              </button>
+              <div class="mt-1 flex items-center gap-1.5 text-[10px] text-slate-500">
+                <span class="px-1.5 py-0.5 rounded bg-brand-50 text-brand-700 font-medium">
+                  {EVIDENCE_TYPE_LABEL[photo.type] ?? photo.type}
+                </span>
+                <span class="truncate">{fmtEvDate(photo.createdAt)}</span>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+    {:else}
+      <!-- Preview + save flow -->
+      <div class="space-y-4">
+        <div class="text-sm font-medium text-text-primary">
+          {pendingFiles.length} {pendingFiles.length === 1 ? 'foto lista' : 'fotos listas'} para subir
+        </div>
+
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          {#each pendingPreviews as src, i}
+            <div class="aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <img {src} alt="Vista previa {i+1}" class="w-full h-full object-cover" />
+            </div>
+          {/each}
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label for="ev-type" class="label">Tipo de evidencia</label>
+            <select id="ev-type" bind:value={evidenceType} class="select">
+              <option value="installation">Instalación</option>
+              <option value="support">Soporte técnico</option>
+              <option value="visit">Visita</option>
+              <option value="other">Otro</option>
+            </select>
+          </div>
+          <div>
+            <label for="ev-desc" class="label">Observación (opcional)</label>
+            <input id="ev-desc" type="text" bind:value={evidenceDescription}
+                   placeholder="Detalle breve, dirección, hito..." class="input" />
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-end gap-2 pt-2">
+          <button type="button" on:click={discardPending} disabled={uploading} class="btn-secondary">
+            <X size={15} /> Descartar
+          </button>
+          <button type="button" on:click={uploadPending} disabled={uploading} class="btn-primary">
+            {#if uploading}
+              <Loader2 size={15} class="animate-spin" /> Subiendo...
+            {:else}
+              <CheckCircle2 size={15} /> Guardar evidencia
+            {/if}
+          </button>
+        </div>
+      </div>
+    {/if}
+  </div>
+</div>
+{/if}
+
+<!-- Lightbox -->
+{#if lightboxPhoto}
+  <div class="fixed inset-0 z-50 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4"
+       on:click|self={() => lightboxPhoto = null}>
+    <div class="relative max-w-4xl max-h-[90vh] w-full">
+      <button type="button" on:click={() => lightboxPhoto = null}
+              class="absolute -top-2 -right-2 sm:top-2 sm:right-2 p-2 rounded-full
+                     bg-white text-slate-700 hover:bg-slate-100 shadow-lg"
+              aria-label="Cerrar">
+        <X size={18} />
+      </button>
+      <img src={lightboxPhoto.fileUrl} alt={lightboxPhoto.description || 'Evidencia'}
+           class="max-h-[80vh] w-auto mx-auto rounded-xl shadow-2xl" />
+      <div class="mt-3 text-center text-white text-sm">
+        <div class="flex items-center justify-center gap-2 flex-wrap">
+          <span class="px-2 py-0.5 rounded bg-white/15 text-xs font-medium">
+            {EVIDENCE_TYPE_LABEL[lightboxPhoto.type] ?? lightboxPhoto.type}
+          </span>
+          <span class="text-white/70 text-xs">{fmtEvDate(lightboxPhoto.createdAt)}</span>
+        </div>
+        {#if lightboxPhoto.description}
+          <p class="mt-2 text-white/90 text-sm">{lightboxPhoto.description}</p>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Modal Eliminar -->
+{#if showDeleteModal}
+  <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" on:click|self={() => showDeleteModal = false}>
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-md">
+      <div class="px-6 py-4 border-b border-slate-200 flex items-center gap-3">
+        <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+          <Trash2 size={18} class="text-red-600" />
+        </div>
+        <div>
+          <h3 class="text-base font-semibold text-slate-900">Eliminar Cliente</h3>
+          <p class="text-xs text-slate-500">Esta acción no se puede deshacer</p>
+        </div>
+      </div>
+      <div class="p-6 space-y-3">
+        <p class="text-sm text-slate-600">
+          Para confirmar, escribe el nombre exacto del cliente:
+          <span class="font-semibold text-slate-900">{client?.name}</span>
+        </p>
+        <input class="input" bind:value={deleteConfirmName} placeholder={client?.name} />
+      </div>
+      <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
+        <button class="btn-secondary" on:click={() => showDeleteModal = false}>Cancelar</button>
+        <button class="btn-danger"
+                on:click={deleteClient}
+                disabled={deleting || deleteConfirmName !== client?.name}>
+          {#if deleting}<Loader2 size={14} class="animate-spin" /> Eliminando...{:else}<Trash2 size={14} /> Eliminar Cliente{/if}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Modal Ver Pago (detalle / evidencia) -->
+{#if showPaymentDetails}
+  <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" on:click|self={() => showPaymentDetails = false}>
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+        <div class="flex items-center gap-2">
+          <Receipt size={18} class="text-brand-800" />
+          <h3 class="text-lg font-semibold text-slate-900">Detalle del pago</h3>
+        </div>
+        <button class="text-slate-400 hover:text-slate-600" on:click={() => showPaymentDetails = false}>
+          <X size={20} />
+        </button>
+      </div>
+
+      <div class="p-6 space-y-4 overflow-y-auto">
+        <!-- Invoice context -->
+        <div class="bg-slate-50 rounded-lg p-3 border border-slate-100 grid grid-cols-2 gap-3">
+          <div>
+            <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Factura</div>
+            <div class="text-sm font-mono font-medium text-slate-900">{paymentDetailsInvoice?.number || '—'}</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Estado</div>
+            <span class="badge {INVOICE_CLS[paymentDetailsInvoice?.status] || 'bg-slate-100 text-slate-600'}">
+              {paymentDetailsInvoice?.status || '—'}
+            </span>
+          </div>
+          <div>
+            <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Total factura</div>
+            <div class="text-sm font-mono tabular-nums">{fmtMoney(paymentDetailsInvoice?.total)}</div>
+          </div>
+          <div>
+            <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Saldo</div>
+            <div class="text-sm font-mono tabular-nums {paymentDetailsInvoice?.balanceDue > 0 ? 'text-orange-600' : 'text-emerald-600'}">
+              {fmtMoney(paymentDetailsInvoice?.balanceDue ?? 0)}
+            </div>
+          </div>
+        </div>
+
+        {#if paymentDetailsList.length === 0}
+          <div class="bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2 text-sm">
+            No hay pagos registrados para esta factura.
+          </div>
+        {:else}
+          <div class="space-y-3">
+            {#each paymentDetailsList as p, idx}
+              <div class="border border-slate-200 rounded-lg p-3 space-y-2">
+                <div class="flex items-center justify-between">
+                  <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                    Pago {idx + 1} de {paymentDetailsList.length}
+                  </div>
+                  <span class="badge bg-slate-100 text-slate-600">{PAYMENT_METHOD_PT[p.method] || p.method}</span>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Monto</div>
+                    <div class="text-sm font-mono font-semibold tabular-nums text-emerald-700">{fmtMoney(p.amount)}</div>
+                  </div>
+                  <div>
+                    <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Fecha</div>
+                    <div class="text-sm text-slate-700">{fmtDateTime(p.createdAt)}</div>
+                  </div>
+                  {#if p.status}
+                    <div>
+                      <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Estado</div>
+                      <div class="text-sm text-slate-700">{p.status}</div>
+                    </div>
+                  {/if}
+                  {#if p.transactionId}
+                    <div>
+                      <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Transacción</div>
+                      <div class="text-xs font-mono text-slate-700 truncate" title={p.transactionId}>{p.transactionId}</div>
+                    </div>
+                  {/if}
+                  {#if p.externalId}
+                    <div>
+                      <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">ID externo</div>
+                      <div class="text-xs font-mono text-slate-700 truncate" title={p.externalId}>{p.externalId}</div>
+                    </div>
+                  {/if}
+                </div>
+
+                {#if p.notes}
+                  <div>
+                    <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold mb-1">Notas</div>
+                    <div class="text-xs text-slate-700 whitespace-pre-wrap break-words">{p.notes}</div>
+                  </div>
+                {/if}
+
+                {#if extractUrls(p.notes).length > 0}
+                  <div class="pt-1 border-t border-slate-100">
+                    <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold mb-1.5">Evidencia / comprobante</div>
+                    <div class="flex flex-wrap gap-2">
+                      {#each extractUrls(p.notes) as url}
+                        <a href={url} target="_blank" rel="noopener"
+                           class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-50 text-brand-800 hover:bg-blue-100 text-xs font-medium">
+                          <ExternalLink size={12} /> Abrir comprobante
+                        </a>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
+        <button class="btn-secondary" type="button" on:click={() => showPaymentDetails = false}>Cerrar</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Modal Registrar Pago -->
+{#if showPaymentModal}
+  <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" on:click|self={() => showPaymentModal = false}>
+    <div class="bg-white rounded-2xl shadow-xl w-full max-w-md">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+        <h3 class="text-lg font-semibold text-slate-900">Registrar Pago</h3>
+        <button class="text-slate-400 hover:text-slate-600" on:click={() => showPaymentModal = false}>
+          <X size={20} />
+        </button>
+      </div>
+
+      <div class="p-6 space-y-4">
+        {#if payError}
+          <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">{payError}</div>
+        {/if}
+
+        <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
+          <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Cliente</div>
+          <div class="text-sm font-medium text-slate-900">{client?.name || '—'}</div>
+          <div class="text-xs text-slate-500 mt-1">
+            Saldo total pendiente: <span class="font-semibold text-slate-900">{fmtMoney(pendingAmount)}</span>
+          </div>
+        </div>
+
+        {#if pendingInvoices.length === 0}
+          <div class="bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2 text-sm">
+            Este cliente no tiene facturas pendientes.
+          </div>
+        {:else}
+          <div>
+            <label for="pay-invoice" class="label">Factura a pagar</label>
+            <select id="pay-invoice" class="select" value={payInvoiceId}
+                    on:change={(e) => selectPayInvoice(e.target.value)}>
+              {#each pendingInvoices as inv}
+                <option value={inv.id}>
+                  #{inv.number || inv.id.slice(-6)} —
+                  {fmtMoney(inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0))}
+                  ({inv.status}, vence {fmtDate(inv.dueDate)})
+                </option>
+              {/each}
+            </select>
+          </div>
+
+          <div>
+            <label for="pay-amount" class="label">Monto a pagar (COP)</label>
+            <input id="pay-amount" class="input" type="number" min="1" bind:value={payAmount} placeholder="0" />
+          </div>
+
+          <div>
+            <label for="pay-method" class="label">Método de pago</label>
+            <select id="pay-method" class="select" bind:value={payMethod}>
+              <option value="CASH">Efectivo</option>
+              <option value="BANK_TRANSFER">Transferencia bancaria</option>
+              <option value="WOMPI">Wompi</option>
+              <option value="CREDIT_CARD">Tarjeta de crédito</option>
+              <option value="OTHER">Otro</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="pay-notes" class="label">Notas (opcional)</label>
+            <input id="pay-notes" class="input" type="text" bind:value={payNotes} placeholder="Referencia o comentario" />
+          </div>
+        {/if}
+      </div>
+
+      <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
+        <button class="btn-secondary" type="button" on:click={() => showPaymentModal = false} disabled={paySaving}>Cancelar</button>
+        <button type="button" on:click={submitPayment} class="btn-primary"
+                disabled={paySaving || pendingInvoices.length === 0}>
+          {#if paySaving}
+            <Loader2 size={15} class="animate-spin" /> Registrando...
+          {:else}
+            <CreditCard size={15} /> Registrar Pago
+          {/if}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{/if}

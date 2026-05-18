@@ -1,0 +1,323 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Brand tokens live in tailwind.config.js (theme.colors.brand/text/surface).
+     CSS vars below are kept as a fallback for legacy var(--...) references. */
+  :root {
+    --brand:          #1e3a8a;   /* brand-800 */
+    --brand-hover:    #1a2f7a;   /* brand-900 */
+    --brand-soft:     #f0f4ff;   /* brand-50 */
+    --content-bg:     #f8fafc;   /* surface-page */
+    --card-bg:        #ffffff;   /* surface-card */
+    --card-border:    #e2e8f0;
+    --text-primary:   #0f172a;
+    --text-secondary: #475569;
+    --text-muted:     #94a3b8;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--content-bg);
+    color: var(--text-primary);
+  }
+
+  /* Force light color-scheme app-wide. Without this, browsers with system
+     dark-mode override user-agent styles for bare <input>/<textarea>/<select>
+     elements (dark gray bg, light text) — which makes any input that forgets
+     to set bg-white look broken. */
+  html { color-scheme: light; }
+
+  /* Safety net: any input without explicit bg/text classes still renders
+     legible on every page. Pages may override via .input or bg-* utilities. */
+  input, textarea, select {
+    background-color: #ffffff;
+    color: #0f172a; /* text-slate-900 */
+  }
+  input::placeholder, textarea::placeholder {
+    color: #94a3b8; /* text-slate-400 */
+  }
+
+  /* ── Autofill suppression ─────────────────────────────────────────
+     Chrome/Safari apply a yellow background (or DARK gray on systems
+     with dark mode + autofill profile) to inputs they autofilled.
+     That's what makes "filled" fields look broken. Trick: paint a huge
+     inset box-shadow in white to mask the autofill color, and lock the
+     text-fill-color so it never goes white. The 5000s transition keeps
+     it stable even after focus events. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus,
+  input:-webkit-autofill:active,
+  textarea:-webkit-autofill,
+  textarea:-webkit-autofill:hover,
+  textarea:-webkit-autofill:focus,
+  select:-webkit-autofill,
+  select:-webkit-autofill:focus {
+    -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+    -webkit-text-fill-color: #0f172a !important;
+    caret-color: #0f172a !important;
+    transition: background-color 5000s ease-in-out 0s;
+  }
+}
+
+@layer components {
+  /* ─── Buttons ─────────────────────────────────────── */
+  /* All buttons honor 44px min touch target on < sm (Apple/Google guideline). */
+  /* Unified button system — see design-rules.md for usage matrix.
+     RULE: green/emerald is reserved for STATUS indicators (badges, dots) —
+     never for CTA backgrounds. */
+
+  /* PRIMARY: principal actions (Save, Create, Confirm, Pay, Login) */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           min-h-[44px] sm:min-h-0
+           bg-brand-600 hover:bg-brand-700 active:bg-brand-800 active:scale-[0.98]
+           text-white text-sm font-semibold rounded-lg
+           shadow-sm shadow-brand-600/20
+           transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+
+  /* SECONDARY: complementary actions (Back, Cancel) — outline brand */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           min-h-[44px] sm:min-h-0
+           bg-transparent text-brand-600 text-sm font-medium rounded-lg
+           border-2 border-brand-600
+           hover:bg-brand-50 active:bg-brand-100
+           active:scale-[0.98]
+           transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+
+  /* DESTRUCTIVE: dangerous actions (Delete, Suspend) — solid red */
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           min-h-[44px] sm:min-h-0
+           bg-red-600 hover:bg-red-700 active:bg-red-800 active:scale-[0.98]
+           text-white text-sm font-semibold rounded-lg shadow-sm shadow-red-600/20
+           transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+
+  /* WARNING: blocking/required actions (e.g. "Go to Zones" when none configured) */
+  .btn-warning {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2
+           min-h-[44px] sm:min-h-0
+           bg-amber-500 hover:bg-amber-600 active:bg-amber-700 active:scale-[0.98]
+           text-white text-sm font-semibold rounded-lg shadow-sm shadow-amber-500/20
+           transition-all duration-150
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100;
+  }
+
+  /* GHOST: low-emphasis text actions (inline links inside tables/cards) */
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 px-3 py-1.5
+           bg-transparent text-brand-600 text-sm font-medium rounded-lg
+           hover:bg-brand-50 hover:text-brand-700 active:bg-brand-100
+           active:scale-[0.98]
+           transition-all duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed
+           disabled:hover:bg-transparent disabled:hover:text-brand-600
+           disabled:active:scale-100;
+  }
+
+  /* ICON: square icon-only button (table row actions) */
+  .btn-icon {
+    @apply inline-flex items-center justify-center p-2
+           min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0
+           text-slate-400 rounded-lg hover:bg-slate-100
+           hover:text-slate-700 active:scale-95
+           transition-all duration-150;
+  }
+
+  /* ─── Form inputs ─────────────────────────────────────────────────
+     Modern productivity-app aesthetic (Google Workspace / Linear / Notion).
+     Rules:
+       • Always white background, dark text, slate-200 border.
+       • Filled state is visually identical to empty — no gray fill ever.
+       • Focus = subtle brand-600 ring glow + brand-600 border.
+       • Disabled = slate-50 bg + muted text — never dark.
+     The selector `.input, input.input, textarea.input` bumps specificity
+     enough to win against any third-party plugin's `.input` rule. */
+  .input,
+  input.input,
+  textarea.input,
+  .input-search {
+    @apply w-full px-4 py-2.5 text-sm text-slate-900 bg-white
+           min-h-[44px] sm:min-h-0
+           border border-slate-200 rounded-xl
+           shadow-sm
+           placeholder:text-slate-400
+           focus:outline-none focus:ring-2 focus:ring-brand-600/20
+           focus:border-brand-600
+           hover:border-slate-300
+           transition-[border-color,box-shadow] duration-150
+           disabled:bg-slate-50 disabled:text-slate-500
+           disabled:cursor-not-allowed disabled:hover:border-slate-200
+           read-only:bg-slate-50 read-only:text-slate-500;
+  }
+  .input-search {
+    @apply pl-9;
+  }
+  .label {
+    @apply block text-xs font-semibold text-slate-600 uppercase
+           tracking-wide mb-1.5;
+  }
+  .select,
+  select.select {
+    @apply input appearance-none cursor-pointer pr-9;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+  }
+
+  /* ─── Badges ──────────────────────────────────────── */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium
+           ring-1 ring-inset;
+  }
+  .badge-green  { @apply badge bg-emerald-50 text-emerald-700 ring-emerald-100; }
+  .badge-red    { @apply badge bg-red-50     text-red-700     ring-red-100; }
+  .badge-yellow { @apply badge bg-amber-50   text-amber-700   ring-amber-100; }
+  .badge-gray   { @apply badge bg-slate-100  text-slate-600   ring-slate-200; }
+  .badge-blue   { @apply badge bg-indigo-50  text-blue-900    ring-indigo-100; }
+
+  /* ─── Cards ───────────────────────────────────────── */
+  .card {
+    @apply bg-white rounded-xl border border-slate-200/70 shadow-sm;
+  }
+  .card-header {
+    @apply px-5 py-4 border-b border-slate-100 flex items-center
+           justify-between;
+  }
+  .card-body { @apply p-5; }
+
+  /* ─── Page header ─────────────────────────────────── */
+  .page-header {
+    @apply flex flex-wrap items-start justify-between gap-4 mb-6;
+  }
+  .page-title {
+    @apply text-2xl font-bold text-slate-900 tracking-tight;
+  }
+  .page-subtitle {
+    @apply text-sm text-slate-500 mt-1;
+  }
+
+  /* ─── Toolbar (right side of page header) ─────────── */
+  .toolbar {
+    @apply inline-flex items-center bg-white border border-slate-200
+           rounded-xl shadow-sm divide-x divide-slate-100;
+  }
+  .toolbar > * {
+    @apply px-3.5 py-2 inline-flex items-center gap-2 text-sm text-slate-600
+           hover:text-slate-900 hover:bg-slate-50 transition-colors
+           first:rounded-l-xl last:rounded-r-xl
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* ─── KPI tile ────────────────────────────────────── */
+  .kpi-tile {
+    @apply card px-3 py-2.5 flex items-center gap-3;
+  }
+  .kpi-tile-text {
+    @apply min-w-0 flex-1;
+  }
+  .kpi-label {
+    @apply text-[10px] font-semibold uppercase tracking-wider text-slate-500 leading-none;
+  }
+  .kpi-value {
+    @apply text-lg xl:text-xl font-bold text-slate-900 leading-none mt-1
+           tabular-nums tracking-tight;
+  }
+  .kpi-sub {
+    @apply text-[10px] text-slate-400 mt-1 truncate;
+  }
+
+  /* ─── Icon squares (tinted) ───────────────────────── */
+  .icon-square {
+    @apply w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0;
+  }
+  .icon-square > svg {
+    width: 14px;
+    height: 14px;
+  }
+  .icon-square-blue   { @apply icon-square bg-indigo-50 text-blue-900; }
+  .icon-square-green  { @apply icon-square bg-emerald-50 text-emerald-600; }
+  .icon-square-purple { @apply icon-square bg-violet-50  text-violet-600; }
+  .icon-square-amber  { @apply icon-square bg-amber-50   text-amber-600; }
+  .icon-square-rose   { @apply icon-square bg-rose-50    text-rose-600; }
+  .icon-square-cyan   { @apply icon-square bg-cyan-50    text-cyan-600; }
+
+  /* ─── Horizontal bar (for charts) ─────────────────── */
+  .bar-track {
+    @apply w-full h-2 rounded-full bg-slate-100 overflow-hidden;
+  }
+  .bar-fill {
+    @apply h-full rounded-full transition-all duration-500 ease-out;
+  }
+
+  /* ─── Avatar ──────────────────────────────────────── */
+  .avatar {
+    @apply w-8 h-8 rounded-full flex items-center justify-center
+           text-[11px] font-semibold text-white flex-shrink-0
+           bg-gradient-to-br from-brand-800 to-brand-500;
+  }
+
+  /* ─── Action menu (3-dot) ─────────────────────────── */
+  .menu-popover {
+    @apply absolute right-0 mt-1 z-20 min-w-[180px]
+           bg-white border border-slate-200 rounded-lg shadow-lg
+           py-1.5 text-sm;
+  }
+  .menu-item {
+    @apply flex items-center gap-2.5 px-3 py-2 text-slate-700
+           hover:bg-slate-50 hover:text-slate-900 transition-colors cursor-pointer;
+  }
+  .menu-item-danger {
+    @apply menu-item text-red-600 hover:bg-red-50 hover:text-red-700;
+  }
+
+  /* ─── Table ───────────────────────────────────────── */
+  .data-table {
+    @apply w-full text-sm;
+  }
+  .data-table thead tr {
+    @apply border-b border-slate-100 bg-slate-50/40;
+  }
+  .data-table thead th {
+    @apply px-3 py-2 text-left text-[11px] font-semibold text-slate-500
+           uppercase tracking-wider whitespace-nowrap;
+  }
+  .data-table thead th.sortable {
+    @apply cursor-pointer select-none hover:text-slate-700;
+  }
+  .data-table tbody tr {
+    @apply border-b border-slate-100 hover:bg-slate-50/40 transition-colors;
+  }
+  .data-table tbody tr:last-child { @apply border-b-0; }
+  .data-table tbody td {
+    @apply px-3 py-2 text-sm text-slate-700;
+  }
+  .data-table.density-cozy tbody td {
+    @apply py-3.5;
+  }
+  .data-table thead th.sticky-top {
+    @apply sticky top-0 z-10 bg-slate-100 border-b border-slate-200;
+  }
+  .data-table thead th.sticky-top.col-sticky-right {
+    @apply z-20;
+  }
+  .data-table .col-sticky-right {
+    @apply sticky right-0 bg-white;
+    box-shadow: -4px 0 6px -4px rgba(15, 23, 42, 0.08);
+  }
+  .data-table thead .col-sticky-right {
+    @apply bg-slate-50;
+  }
+  .data-table tbody tr:hover .col-sticky-right {
+    @apply bg-slate-50;
+  }
+}

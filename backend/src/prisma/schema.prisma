@@ -1,0 +1,271 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      UserRole @default(ADMIN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  createdInvoices Invoice[] @relation("CreatedBy")
+  sessions        Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Client {
+  id              String       @id @default(cuid())
+  name            String
+  documentType    DocumentType
+  documentNumber  String       @unique
+  email           String       @unique
+  phone           String
+  address         String
+  city            String
+  status          ClientStatus @default(ACTIVE)
+  planId          String
+  mikrotikId      String?      @unique
+  installationDate DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // Relations
+  plan      Plan      @relation(fields: [planId], references: [id])
+  invoices  Invoice[]
+  payments  Payment[]
+  devices   Device[]
+
+  @@index([planId])
+  @@index([status])
+  @@index([documentNumber])
+  @@map("clients")
+}
+
+model Plan {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+  price       Int     // Amount in COP cents
+  speedDown   Int     // Mbps
+  speedUp     Int     // Mbps
+  dataLimit   Int?    // GB per month, null for unlimited
+  duration    Int     // Days (30 for monthly)
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  clients Client[]
+
+  @@index([isActive])
+  @@map("plans")
+}
+
+model Device {
+  id           String      @id @default(cuid())
+  clientId     String
+  macAddress   String      @unique
+  ipAddress    String?
+  hostname     String?
+  deviceType   DeviceType  @default(ROUTER)
+  status       DeviceStatus @default(ACTIVE)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([macAddress])
+  @@index([status])
+  @@map("devices")
+}
+
+model Invoice {
+  id              String        @id @default(cuid())
+  invoiceNumber   String        @unique
+  clientId        String
+  planId          String
+  amount          Int           // Amount in COP cents
+  dueDate         DateTime
+  status          InvoiceStatus @default(PENDING)
+  periodStart     DateTime
+  periodEnd       DateTime
+  createdBy       String
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  client  Client   @relation(fields: [clientId], references: [id])
+  plan    Plan     @relation(fields: [planId], references: [id])
+  creator User     @relation("CreatedBy", fields: [createdBy], references: [id])
+  payments Payment[]
+
+  @@index([clientId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([invoiceNumber])
+  @@map("invoices")
+}
+
+model Payment {
+  id            String       @id @default(cuid())
+  invoiceId     String
+  amount        Int          // Amount in COP cents
+  paymentMethod PaymentMethod
+  transactionId String?      @unique
+  status        PaymentStatus @default(PENDING)
+  paidAt        DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  // Relations
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@index([status])
+  @@index([transactionId])
+  @@map("payments")
+}
+
+model MikrotikConfig {
+  id       String @id @default(cuid())
+  host     String
+  port     Int    @default(8728)
+  username String
+  password String
+  isActive Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("mikrotik_configs")
+}
+
+model NotificationLog {
+  id        String           @id @default(cuid())
+  clientId  String?
+  type      NotificationType
+  channel   NotificationChannel
+  content   String
+  status    NotificationStatus @default(PENDING)
+  sentAt    DateTime?
+  error     String?
+  createdAt DateTime         @default(now())
+
+  @@index([clientId])
+  @@index([type])
+  @@index([status])
+  @@map("notification_logs")
+}
+
+model SystemConfig {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("system_configs")
+}
+
+// Enums
+enum UserRole {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum DocumentType {
+  CC
+  NIT
+  CE
+  TI
+  PAS
+}
+
+enum ClientStatus {
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+  PENDING_INSTALLATION
+}
+
+enum DeviceType {
+  ROUTER
+  ACCESS_POINT
+  SWITCH
+  OTHER
+}
+
+enum DeviceStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+enum InvoiceStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  WOMPI
+  NEQUI
+  BANCOLOMBIA
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum NotificationType {
+  PAYMENT_REMINDER
+  PAYMENT_CONFIRMATION
+  SERVICE_SUSPENSION
+  SERVICE_ACTIVATION
+  INSTALLATION_SCHEDULED
+  GENERAL_ANNOUNCEMENT
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}

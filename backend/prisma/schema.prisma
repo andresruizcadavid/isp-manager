@@ -1,0 +1,441 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  TECHNICIAN
+  // Legacy values (kept for back-compat with existing DB rows). New users
+  // should be created as ADMIN or TECHNICIAN only — OPERATOR maps to admin
+  // privileges in the permission matrix; VIEWER is read-only legacy.
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+enum ClientStatus {
+  ACTIVE
+  SUSPENDED
+  INACTIVE
+  PENDING
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PARTIAL
+  PAID
+  OVERDUE
+  CANCELLED
+  REFUNDED
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CREDIT_CARD
+  WOMPI
+  OTHER
+}
+
+enum NotificationType {
+  INVOICE_CREATED
+  PAYMENT_RECEIVED
+  PAYMENT_FAILED
+  SERVICE_SUSPENDED
+  SERVICE_ACTIVATED
+  INSTALLATION_SCHEDULED
+  GENERAL_ANNOUNCEMENT
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      UserRole @default(TECHNICIAN)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  sessions Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Zone {
+  id          Int      @id @default(autoincrement())
+  wisphubId   String?  @unique
+  name        String   @unique
+  description String?
+  color       String?  @default("#3b82f6")
+  routerId    Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  router      Router?  @relation(fields: [routerId], references: [id])
+  clients     Client[]
+
+  @@index([routerId])
+  @@map("zones")
+}
+
+model Client {
+  id             String       @id @default(cuid())
+  wisphubId      String?      @unique
+  name           String
+  email          String?      @unique
+  phone          String
+  address        String
+  neighborhood  String?
+  city           String
+  nit            String?      @unique
+  documentType   String?      // CC, NIT, CE, TI, PAS
+  documentNumber String?      @unique
+  status         ClientStatus @default(PENDING)
+  planId         String?
+  zoneId         Int?
+  balance        Int          @default(0) // in cents
+  monthlyFee     Int          @default(0) // in cents — per-client price (WispHub-style)
+  installationDate DateTime?
+  contractDate    DateTime?
+  cutoffDate     DateTime?
+  coordinates    String?
+  pppoeUsername  String?
+  pppoePassword  String?
+  serviceIp      String?
+  serviceLocalIp String?
+  vlan           String?
+  wisphubRouterId String?
+  notes          String?
+  mikrotikId    String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // Relations
+  plan      Plan? @relation(fields: [planId], references: [id])
+  zone      Zone? @relation(fields: [zoneId], references: [id])
+  devices   Device[]
+  invoices  Invoice[]
+  payments  Payment[]
+  mikrotikAccount MikrotikAccount?
+  evidencePhotos  ClientEvidencePhoto[]
+
+  @@map("clients")
+}
+
+model ClientEvidencePhoto {
+  id           String   @id @default(cuid())
+  clientId     String
+  technicianId String?
+  type         String   @default("other") // installation | support | visit | other
+  description  String?
+  fileUrl      String   // public URL path, e.g. "/uploads/evidence/abc.jpg"
+  fileName     String?  // original filename
+  mimeType     String?
+  sizeBytes    Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([technicianId])
+  @@map("client_evidence_photos")
+}
+
+model Plan {
+  id              String   @id @default(cuid())
+  wisphubId       String?  @unique
+  name            String
+  type            String?  // PPPoE, Hotspot, etc.
+  description     String?
+  price           Int      // in cents
+  monthlyPrice    Int      @default(0) // in cents (for frontend compatibility)
+  downloadSpeed   Int      // in kbps
+  uploadSpeed     Int      // in kbps
+  dataLimit       Int?     // in GB, null for unlimited
+  // Technical name of the matching PPPoE profile on the MikroTik device
+  // (e.g. "Online_basico"). When set, this overrides any plan.name fallback
+  // when provisioning the secret. Must match a profile that actually exists
+  // in /ppp/profile on the router.
+  mikrotikProfile String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  clients Client[]
+
+  @@map("plans")
+}
+
+model Device {
+  id        String   @id @default(cuid())
+  clientId  String
+  mac       String   @unique
+  ip        String?  @unique
+  type      String   // e.g., "router", "phone", "computer"
+  model     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("devices")
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  wisphubId   String?       @unique
+  number      String        @unique
+  clientId    String
+  amount      Int           // in cents
+  tax         Int           @default(0) // in cents
+  discount    Int           @default(0) // in cents
+  total       Int           // in cents
+  status      InvoiceStatus @default(DRAFT)
+  balanceDue  Int           @default(0) // remaining amount in cents (0 when fully PAID)
+  issueDate   DateTime      @default(now())
+  dueDate     DateTime
+  paidDate    DateTime?
+  pdfUrl      String?
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  // Relations
+  client   Client        @relation(fields: [clientId], references: [id])
+  payments Payment[]
+  items    InvoiceItem[]
+
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String  @id @default(cuid())
+  wisphubId   String? @unique
+  invoiceId   String
+  quantity    Int     @default(1)
+  description String
+  price       Int     // unit price in cents
+  total       Int     // line total in cents
+  createdAt   DateTime @default(now())
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_items")
+}
+
+model Payment {
+  id            String        @id @default(cuid())
+  invoiceId     String
+  clientId      String
+  amount        Int           // in cents
+  method        PaymentMethod
+  status        PaymentStatus @default(PENDING)
+  transactionId String?       @unique
+  externalId    String?       // For external payment systems
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  // Relations
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  client  Client  @relation(fields: [clientId], references: [id])
+
+  @@map("payments")
+}
+
+model Router {
+  id              Int       @id @default(autoincrement())
+  name            String
+  description     String?
+  ipAddress       String
+  apiPort         Int       @default(80)
+  username        String    @default("admin")
+  password        String
+  isActive        Boolean   @default(true)
+  location        String?
+  model           String?
+  firmware        String?
+  lastSyncAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  mikrotikAccounts MikrotikAccount[]
+  zones            Zone[]
+
+  @@map("routers")
+}
+
+model MikrotikAccount {
+  id            Int       @id @default(autoincrement())
+  username      String    @unique
+  password      String
+  remoteAddress String?
+  localAddress  String?
+  profileName   String?
+  coordinates   String?
+  status        String    @default("ACTIVE")
+  routerId      Int
+  router        Router    @relation(fields: [routerId], references: [id])
+  clientId      String?   @unique
+  client        Client?   @relation(fields: [clientId], references: [id])
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("mikrotik_accounts")
+}
+
+model MikrotikConfig {
+  id        String   @id @default(cuid())
+  host      String
+  port      Int      @default(8728)
+  username  String
+  password  String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("mikrotik_configs")
+}
+
+model NotificationLog {
+  id          String            @id @default(cuid())
+  clientId    String?
+  campaignId  String?           // null = transactional (single send), set = campaign delivery
+  type        NotificationType
+  channel     NotificationChannel
+  recipient   String
+  subject     String?
+  content     String
+  status      String            // "sent", "failed", "pending"
+  error       String?
+  sentAt      DateTime?
+  createdAt   DateTime          @default(now())
+
+  campaign NotificationCampaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@index([campaignId])
+  @@index([clientId])
+  @@map("notification_logs")
+}
+
+// Reusable message body with variable placeholders ({{name}}, {{plan}}, etc.)
+model NotificationTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  channel     String   // "EMAIL" | "WHATSAPP" — single channel per template (kept simple)
+  subject     String?  // only used by EMAIL
+  body        String   // supports {{client.field}} substitution
+  // Visual preset key for the styled HTML header (icon + title). One of:
+  // invoice | reminder | service_suspended | service_activated |
+  // payment_received | welcome | general_announcement. Defaults at render
+  // time to 'general_announcement' when null. See email-base.template.js.
+  preset      String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  campaigns NotificationCampaign[]
+
+  @@index([channel])
+  @@map("notification_templates")
+}
+
+// One-shot batch send. The audience is captured as a JSON filter at send time
+// and the actual deliveries live in NotificationLog tagged with campaignId.
+model NotificationCampaign {
+  id            String   @id @default(cuid())
+  name          String
+  templateId    String?
+  channel       String   // "EMAIL" | "WHATSAPP" | "BOTH"
+  audienceJson  String?  // serialized filter: { zoneId, status, planId, overdue }
+  status        String   @default("draft") // draft | running | completed | failed
+  totalCount    Int      @default(0)
+  sentCount     Int      @default(0)
+  failedCount   Int      @default(0)
+  scheduledAt   DateTime?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdBy     String?  // user.id
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  template   NotificationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  deliveries NotificationLog[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("notification_campaigns")
+}
+
+// SMTP credentials managed from the UI (Notification Center → Correo SMTP).
+// Only the row with isActive=true is used by notification.service when
+// creating the email transporter. Falls back to .env if no row is active.
+model SmtpConfig {
+  id             String   @id @default(cuid())
+  provider       String?  // Preset name used in the UI (Gmail, Outlook, HostGator, etc.)
+  host           String
+  port           Int      @default(587)
+  secure         Boolean  @default(false) // true for SSL (465), false for TLS (587)
+  username       String
+  password       String
+  fromEmail      String
+  fromName       String   @default("ISP Manager")
+  replyTo        String?
+  isActive       Boolean  @default(true)
+  isVerified     Boolean  @default(false)
+  lastTestedAt   DateTime?
+  lastTestResult String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("smtp_configs")
+}
+
+model SystemConfig {
+  id    String @id @default(cuid())
+  key   String @unique
+  value String
+  type  String // "string", "number", "boolean", "json"
+
+  @@map("system_configs")
+}

@@ -1,0 +1,483 @@
+import cron from 'node-cron';
+import { invoiceService } from '../services/invoice.service.js';
+import { notificationService } from '../services/notification.service.js';
+import { prisma } from '../server.js';
+
+class BillingJob {
+  constructor() {
+    this.isRunning = false;
+    this.setupSchedules();
+  }
+
+  setupSchedules() {
+    // Generate monthly invoices - Run on 1st of each month at 2:00 AM
+    cron.schedule('0 2 1 * *', async () => {
+      console.log('🔄 Starting monthly invoice generation job...');
+      await this.generateMonthlyInvoices();
+    });
+
+    // Mark overdue invoices - Run daily at 1:00 AM
+    cron.schedule('0 1 * * *', async () => {
+      console.log('🔄 Starting overdue invoices marking job...');
+      await this.markOverdueInvoices();
+    });
+
+    // Send payment reminders - Run daily at 9:00 AM and 6:00 PM
+    cron.schedule('0 9 * * *', async () => {
+      console.log('🔄 Starting morning payment reminders job...');
+      await this.sendPaymentReminders();
+    });
+
+    cron.schedule('0 18 * * *', async () => {
+      console.log('🔄 Starting evening payment reminders job...');
+      await this.sendPaymentReminders();
+    });
+
+    // Clean up old sessions - Run daily at 3:00 AM
+    cron.schedule('0 3 * * *', async () => {
+      console.log('🔄 Starting session cleanup job...');
+      await this.cleanupOldSessions();
+    });
+
+    // Generate reports - Run monthly on last day at 11:00 PM
+    cron.schedule('0 23 * * *', async () => {
+      const today = new Date();
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      // Check if tomorrow is the first day of the month (i.e., today is the last day)
+      if (tomorrow.getDate() === 1) {
+        console.log('🔄 Starting monthly reports generation job...');
+        await this.generateMonthlyReports();
+      }
+    });
+
+    console.log('📅 Billing jobs scheduled successfully');
+  }
+
+  async generateMonthlyInvoices() {
+    if (this.isRunning) {
+      console.log('⚠️ Monthly invoice generation already running, skipping...');
+      return;
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+
+    try {
+      const results = await invoiceService.generateMonthlyInvoices();
+      
+      console.log(`✅ Monthly invoice generation completed:`, {
+        successful: results.successful.length,
+        failed: results.failed.length,
+        total: results.total,
+        duration: `${Date.now() - startTime}ms`
+      });
+
+      // Send notifications for successful invoices
+      for (const result of results.successful) {
+        try {
+          const invoice = await prisma.invoice.findUnique({
+            where: { id: result.invoiceId },
+            include: {
+              client: true,
+              plan: true
+            }
+          });
+
+          if (invoice) {
+            await notificationService.sendInvoiceNotification(invoice);
+          }
+        } catch (error) {
+          console.error(`Error sending notification for invoice ${result.invoiceId}:`, error);
+        }
+      }
+
+      // Log failed invoices for review
+      if (results.failed.length > 0) {
+        console.log('❌ Failed invoices:', results.failed);
+      }
+
+    } catch (error) {
+      console.error('❌ Error in monthly invoice generation:', error);
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  async markOverdueInvoices() {
+    if (this.isRunning) {
+      console.log('⚠️ Overdue invoices marking already running, skipping...');
+      return;
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+
+    try {
+      const result = await invoiceService.markInvoicesAsOverdue();
+      
+      console.log(`✅ Overdue invoices marking completed:`, {
+        markedCount: result.count,
+        duration: `${Date.now() - startTime}ms`
+      });
+
+      // Send notifications for newly overdue invoices
+      if (result.count > 0) {
+        const overdueInvoices = await invoiceService.getOverdueInvoices();
+        
+        for (const invoice of overdueInvoices) {
+          try {
+            await notificationService.sendPaymentReminder(invoice);
+          } catch (error) {
+            console.error(`Error sending overdue reminder for invoice ${invoice.id}:`, error);
+          }
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ Error marking overdue invoices:', error);
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  async sendPaymentReminders() {
+    if (this.isRunning) {
+      console.log('⚠️ Payment reminders already running, skipping...');
+      return;
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+
+    try {
+      const overdueInvoices = await invoiceService.getOverdueInvoices();
+      let sentCount = 0;
+      let failedCount = 0;
+
+      for (const invoice of overdueInvoices) {
+        try {
+          const success = await notificationService.sendPaymentReminder(invoice);
+          if (success) {
+            sentCount++;
+          } else {
+            failedCount++;
+          }
+        } catch (error) {
+          console.error(`Error sending reminder for invoice ${invoice.id}:`, error);
+          failedCount++;
+        }
+      }
+
+      console.log(`✅ Payment reminders completed:`, {
+        sent: sentCount,
+        failed: failedCount,
+        total: overdueInvoices.length,
+        duration: `${Date.now() - startTime}ms`
+      });
+
+    } catch (error) {
+      console.error('❌ Error sending payment reminders:', error);
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  async cleanupOldSessions() {
+    const startTime = Date.now();
+
+    try {
+      // Delete sessions older than 30 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+      const result = await prisma.session.deleteMany({
+        where: {
+          expiresAt: {
+            lt: thirtyDaysAgo
+          }
+        }
+      });
+
+      console.log(`✅ Session cleanup completed:`, {
+        deletedCount: result.count,
+        duration: `${Date.now() - startTime}ms`
+      });
+
+    } catch (error) {
+      console.error('❌ Error cleaning up old sessions:', error);
+    }
+  }
+
+  async generateMonthlyReports() {
+    if (this.isRunning) {
+      console.log('⚠️ Monthly reports generation already running, skipping...');
+      return;
+    }
+
+    this.isRunning = true;
+    const startTime = Date.now();
+
+    try {
+      const lastMonth = new Date();
+      lastMonth.setMonth(lastMonth.getMonth() - 1);
+      lastMonth.setDate(1);
+      
+      const lastMonthEnd = new Date(lastMonth);
+      lastMonthEnd.setMonth(lastMonthEnd.getMonth() + 1);
+      lastMonthEnd.setDate(0);
+
+      // Generate various reports
+      const reports = await Promise.allSettled([
+        this.generateRevenueReport(lastMonth, lastMonthEnd),
+        this.generateClientReport(lastMonth, lastMonthEnd),
+        this.generatePaymentReport(lastMonth, lastMonthEnd)
+      ]);
+
+      console.log(`✅ Monthly reports generation completed:`, {
+        successful: reports.filter(r => r.status === 'fulfilled').length,
+        failed: reports.filter(r => r.status === 'rejected').length,
+        duration: `${Date.now() - startTime}ms`
+      });
+
+      // Send summary to admin
+      await this.sendMonthlySummary(lastMonth, lastMonthEnd);
+
+    } catch (error) {
+      console.error('❌ Error generating monthly reports:', error);
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  async generateRevenueReport(startDate, endDate) {
+    const revenue = await prisma.invoice.aggregate({
+      where: {
+        status: 'PAID',
+        createdAt: {
+          gte: startDate,
+          lte: endDate
+        }
+      },
+      _sum: { amount: true },
+      _count: true
+    });
+
+    const pending = await prisma.invoice.aggregate({
+      where: {
+        status: { in: ['PENDING', 'OVERDUE'] },
+        createdAt: {
+          gte: startDate,
+          lte: endDate
+        }
+      },
+      _sum: { amount: true },
+      _count: true
+    });
+
+    return {
+      period: `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`,
+      revenue: revenue._sum.amount || 0,
+      revenueCount: revenue._count,
+      pending: pending._sum.amount || 0,
+      pendingCount: pending._count
+    };
+  }
+
+  async generateClientReport(startDate, endDate) {
+    const [newClients, totalClients, activeClients] = await Promise.all([
+      prisma.client.count({
+        where: {
+          createdAt: {
+            gte: startDate,
+            lte: endDate
+          }
+        }
+      }),
+      prisma.client.count(),
+      prisma.client.count({
+        where: { status: 'ACTIVE' }
+      })
+    ]);
+
+    const churnedClients = await prisma.client.count({
+      where: {
+        status: 'INACTIVE',
+        updatedAt: {
+          gte: startDate,
+          lte: endDate
+        }
+      }
+    });
+
+    return {
+      period: `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`,
+      newClients,
+      totalClients,
+      activeClients,
+      churnedClients,
+      churnRate: totalClients > 0 ? (churnedClients / totalClients) * 100 : 0
+    };
+  }
+
+  async generatePaymentReport(startDate, endDate) {
+    const payments = await prisma.payment.groupBy({
+      by: ['paymentMethod'],
+      where: {
+        status: 'COMPLETED',
+        paidAt: {
+          gte: startDate,
+          lte: endDate
+        }
+      },
+      _count: true,
+      _sum: { amount: true }
+    });
+
+    const totalPayments = await prisma.payment.aggregate({
+      where: {
+        status: 'COMPLETED',
+        paidAt: {
+          gte: startDate,
+          lte: endDate
+        }
+      },
+      _sum: { amount: true },
+      _count: true
+    });
+
+    return {
+      period: `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`,
+      totalAmount: totalPayments._sum.amount || 0,
+      totalCount: totalPayments._count,
+      byMethod: payments
+    };
+  }
+
+  async sendMonthlySummary(startDate, endDate) {
+    try {
+      // Get admin users
+      const adminUsers = await prisma.user.findMany({
+        where: { role: 'ADMIN' }
+      });
+
+      if (adminUsers.length === 0) {
+        console.log('No admin users found to send monthly summary');
+        return;
+      }
+
+      // Generate summary data
+      const [revenueReport, clientReport, paymentReport] = await Promise.all([
+        this.generateRevenueReport(startDate, endDate),
+        this.generateClientReport(startDate, endDate),
+        this.generatePaymentReport(startDate, endDate)
+      ]);
+
+      const summary = {
+        period: `${startDate.toLocaleDateString()} - ${endDate.toLocaleDateString()}`,
+        revenue: revenueReport,
+        clients: clientReport,
+        payments: paymentReport
+      };
+
+      // Send email to each admin
+      for (const admin of adminUsers) {
+        try {
+          await notificationService.sendEmail({
+            to: admin.email,
+            subject: `Resumen Mensual - ${startDate.toLocaleDateString()}`,
+            template: 'monthly_summary',
+            data: {
+              admin,
+              summary,
+              company: {
+                name: process.env.COMPANY_NAME || 'Mi ISP',
+                city: process.env.COMPANY_CITY || 'Cali'
+              }
+            }
+          });
+
+          console.log(`✅ Monthly summary sent to ${admin.email}`);
+        } catch (error) {
+          console.error(`Error sending monthly summary to ${admin.email}:`, error);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error sending monthly summary:', error);
+    }
+  }
+
+  // Manual trigger methods for testing/admin purposes
+  async triggerMonthlyInvoices() {
+    console.log('🔧 Manually triggering monthly invoice generation...');
+    await this.generateMonthlyInvoices();
+  }
+
+  async triggerOverdueMarking() {
+    console.log('🔧 Manually triggering overdue invoices marking...');
+    await this.markOverdueInvoices();
+  }
+
+  async triggerPaymentReminders() {
+    console.log('🔧 Manually triggering payment reminders...');
+    await this.sendPaymentReminders();
+  }
+
+  async triggerMonthlyReports() {
+    console.log('🔧 Manually triggering monthly reports...');
+    await this.generateMonthlyReports();
+  }
+
+  // Status methods
+  isJobRunning() {
+    return this.isRunning;
+  }
+
+  getJobStatus() {
+    return {
+      isRunning: this.isRunning,
+      lastRun: this.lastRunTime,
+      nextRun: this.getNextRunTime()
+    };
+  }
+
+  getNextRunTime() {
+    const now = new Date();
+    const nextRuns = {
+      monthlyInvoices: this.getNextCronRun('0 2 1 * *'),
+      overdueMarking: this.getNextCronRun('0 1 * * *'),
+      morningReminders: this.getNextCronRun('0 9 * * *'),
+      eveningReminders: this.getNextCronRun('0 18 * * *'),
+      sessionCleanup: this.getNextCronRun('0 3 * * *')
+    };
+
+    return nextRuns;
+  }
+
+  getNextCronRun(cronExpression) {
+    // This is a simplified implementation
+    // In production, you might want to use a proper cron parser
+    const now = new Date();
+    const nextRun = new Date(now);
+    
+    // Simple logic for common cron patterns
+    if (cronExpression === '0 2 1 * *') {
+      // First day of next month at 2 AM
+      nextRun.setMonth(nextRun.getMonth() + 1);
+      nextRun.setDate(1);
+      nextRun.setHours(2, 0, 0, 0);
+    } else if (cronExpression.includes('* * *')) {
+      // Daily jobs
+      nextRun.setDate(nextRun.getDate() + 1);
+      const hour = parseInt(cronExpression.split(' ')[1]);
+      nextRun.setHours(hour, 0, 0, 0);
+    }
+
+    return nextRun;
+  }
+}
+
+// Create and export singleton instance
+export const billingJob = new BillingJob();
