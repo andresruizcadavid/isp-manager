@@ -141,6 +141,41 @@ router.delete('/connections/:id', async (req, res) => {
   }
 });
 
+// ── Map viewports (shared, per tab) ───────────────────────
+// Persists the pan+zoom of the canvas per tab so reload-or-reopen lands
+// on the same framing for every user. key ∈ { 'all', 'none', 'zone:<id>' }.
+const viewportSchema = z.object({
+  posX: z.number(),
+  posY: z.number(),
+  zoom: z.number().min(0.01).max(10)
+});
+const KEY_RE = /^(all|none|zone:\d+)$/;
+
+router.get('/views', async (_req, res) => {
+  const views = await prisma.networkMapView.findMany();
+  // Return as an object keyed by 'key' for cheap lookup on the client.
+  const out = {};
+  for (const v of views) out[v.key] = { posX: v.posX, posY: v.posY, zoom: v.zoom };
+  res.json({ success: true, data: out });
+});
+
+router.put('/views/:key', validateBody(viewportSchema), async (req, res) => {
+  const key = req.params.key;
+  if (!KEY_RE.test(key)) {
+    return res.status(400).json({ success: false, error: 'Clave de vista inválida.' });
+  }
+  try {
+    const saved = await prisma.networkMapView.upsert({
+      where: { key },
+      create: { key, ...req.body, updatedBy: req.user?.id ?? null },
+      update: { ...req.body, updatedBy: req.user?.id ?? null }
+    });
+    res.json({ success: true, data: { key: saved.key, posX: saved.posX, posY: saved.posY, zoom: saved.zoom } });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
 // ── Manual probe (force a sweep now) ──────────────────────
 router.post('/probe', async (_req, res) => {
   try {

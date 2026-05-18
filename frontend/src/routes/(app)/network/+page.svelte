@@ -16,10 +16,18 @@
   import ZoneTabs from '$lib/components/network/ZoneTabs.svelte';
   import {
     Plus, RefreshCw, Trash2, Pencil, X, Wifi, History as HistoryIcon,
-    Settings, Activity, CircleDot
+    Settings, Activity, CircleDot, Check, Clock, Loader2, AlertCircle
   } from 'lucide-svelte';
 
   const nodeTypes = { device: DeviceNode };
+
+  // Canvas bounds: hard origin at (0,0) so the operator can't pan or place
+  // nodes into negative coords (which felt like "getting lost in empty
+  // space"). Right and bottom stay open — the canvas keeps growing.
+  // Number.POSITIVE_INFINITY is what SvelteFlow accepts for "no limit".
+  const ORIGIN = 0;
+  const INF = Number.POSITIVE_INFINITY;
+  const CANVAS_EXTENT = [[ORIGIN, ORIGIN], [INF, INF]];
 
   const nodes = writable([]);
   const edges = writable([]);
@@ -33,6 +41,17 @@
   // Zones / tabs
   let zones = [];             // [{ id, name, color, _count }]
   let activeZoneTab = 'all';  // 'all' | 'none' | Int
+
+  // Shared viewports (pan+zoom) per tab — persisted on the backend so every
+  // user lands on the same framing. Keyed as 'all' / 'none' / 'zone:<id>'.
+  // SvelteFlow's `viewport` prop expects a Writable store ($viewport is
+  // dereferenced inside the component), not a plain object — passing a
+  // POJO crashes the render. Hence writable() here.
+  let savedViews = {};                 // key -> { posX, posY, zoom }
+  const viewport = writable({ x: 0, y: 0, zoom: 1 });
+  let viewportDirty = false;
+  let viewportSaveTimer = null;
+  let suppressViewportSave = false;
 
   // CRUD modal state
   let formOpen = false;
@@ -91,6 +110,8 @@
 
   // Apply filter: nodes whose device matches the tab, edges whose BOTH
   // endpoints survive the filter (so we don't leave dangling lines).
+  // suppressSave guards the watcher: rebuilding the nodes store would
+  // otherwise look like a position change and trigger spurious PATCHes.
   function applyFilter() {
     const allowedIds = new Set(devices.filter(isInActiveTab).map(d => d.id));
     nodes.set(devices.filter(d => allowedIds.has(d.id)).map(toNode));
@@ -117,16 +138,38 @@
   async function refresh() {
     loading = true;
     try {
-      const [devs, conns, zns] = await Promise.all([
+      const [devs, conns, zns, views] = await Promise.all([
         networkApi.listDevices(),
         networkApi.listConnections(),
-        zonesApi.getAll().catch(() => [])
+        zonesApi.getAll().catch(() => []),
+        networkApi.listViews().catch(() => ({}))
       ]);
+      // One-shot migration: any device sitting in negative coords (from
+      // before the canvas had an origin) gets snapped to (0,0)-quadrant.
+      // We persist the snap so a future reload doesn't re-do it.
+      const snapped = [];
+      for (const d of devs) {
+        if (d.posX < 0 || d.posY < 0) {
+          d.posX = Math.max(0, d.posX);
+          d.posY = Math.max(0, d.posY);
+          snapped.push(d);
+        }
+      }
       devices = devs;
       devicesById = new Map(devs.map(d => [d.id, d]));
       connections = conns;
       zones = (zns || []).map(z => ({ id: z.id, name: z.name, color: z.color, _count: z._count }));
+      savedViews = views || {};
       applyFilter();
+      // NOTE: do NOT restore the viewport here. refresh() is called after
+      // create/edit/delete; if we re-snap the camera, the user would lose
+      // their framing every time they touch a device. Viewport restoration
+      // happens exclusively in onMount + handleSelectZone.
+      // Best-effort persist of snapped positions (no toast on individual
+      // failures — they'll snap again next load).
+      for (const d of snapped) {
+        networkApi.updatePosition(d.id, d.posX, d.posY).catch(() => {});
+      }
     } catch (e) {
       toasts.error('No se pudieron cargar los dispositivos: ' + e.message);
     } finally {
@@ -134,11 +177,85 @@
     }
   }
 
+  // ── Viewport persistence (per tab, shared via DB) ────────
+  function viewportKeyForTab(tab) {
+    if (tab === 'all')  return 'all';
+    if (tab === 'none') return 'none';
+    return `zone:${tab}`;
+  }
+
+  // We DO NOT use SvelteFlow's `fitView` prop because it's reactive — any
+  // change in our reactive state can re-trigger it and reset the camera
+  // mid-session. Instead we always control the viewport ourselves:
+  // restoreViewportForTab() runs at mount + on tab switch and either
+  // applies the saved view or computes a one-time fit from the node
+  // bounding box.
+
+  function restoreViewportForTab(tab) {
+    const key = viewportKeyForTab(tab);
+    const v = savedViews[key];
+    suppressViewportSave = true;
+    if (v) {
+      viewport.set({ x: v.posX, y: v.posY, zoom: v.zoom });
+    } else {
+      // Compute a one-time fit from the visible nodes' bounding box. We do
+      // this here (not via SvelteFlow's reactive fitView prop) so it only
+      // runs when we explicitly want it. The result is queued for persistence.
+      const visible = devices.filter(isInActiveTab);
+      if (visible.length > 0) {
+        const xs = visible.map(d => d.posX);
+        const ys = visible.map(d => d.posY);
+        const minX = Math.min(...xs);
+        const maxX = Math.max(...xs) + 200; // node width
+        const minY = Math.min(...ys);
+        const maxY = Math.max(...ys) + 90;  // node height
+        // Simple center+zoom: pick zoom that fits the bbox into the canvas
+        // assuming ~1100x600 visible area. Padding 20%.
+        const w = Math.max(maxX - minX, 1);
+        const h = Math.max(maxY - minY, 1);
+        const zoom = Math.min(1, 1100 / (w * 1.2), 600 / (h * 1.2));
+        const x = -minX * zoom + 100;
+        const y = -minY * zoom + 80;
+        viewport.set({ x, y, zoom });
+        // Persist this default so all users see the same first-load framing.
+        savedViews = { ...savedViews, [key]: { posX: x, posY: y, zoom } };
+        networkApi.saveView(key, x, y, zoom).catch(() => {});
+      } else {
+        viewport.set({ x: 0, y: 0, zoom: 1 });
+      }
+    }
+    // Swallow the echo onMoveEnd that fires from the store change.
+    setTimeout(() => { suppressViewportSave = false; }, 300);
+  }
+
+  function queueViewportSave({ x, y, zoom }) {
+    if (suppressViewportSave) return;
+    viewportDirty = true;
+    if (viewportSaveTimer) clearTimeout(viewportSaveTimer);
+    viewportSaveTimer = setTimeout(async () => {
+      viewportSaveTimer = null;
+      const key = viewportKeyForTab(activeZoneTab);
+      try {
+        await networkApi.saveView(key, x, y, zoom);
+        savedViews = { ...savedViews, [key]: { posX: x, posY: y, zoom } };
+        viewportDirty = false;
+      } catch (e) {
+        toasts.error('No se pudo guardar el encuadre del mapa: ' + e.message);
+      }
+    }, 400);
+  }
+
+  function handleMoveEnd(vp) {
+    if (vp) queueViewportSave(vp);
+  }
+
   // ── Zone tabs handlers ────────────────────────────────────
   function handleSelectZone(e) {
     activeZoneTab = e.detail;
     applyFilter();
     syncUrl();
+    // Each tab has its own saved framing; restore it on switch.
+    setTimeout(() => restoreViewportForTab(activeZoneTab), 50);
   }
   async function handleCreateZone(e) {
     try {
@@ -232,6 +349,23 @@
     formError = '';
     formOpen = true;
   }
+  // Pick a spawn position for a new device that always falls within the
+  // (0,0)+ quadrant and doesn't overlap obvious neighbours. Walks a grid
+  // until we find a slot 200px from any existing device on the active tab.
+  function pickSpawnPosition() {
+    const visible = devices.filter(isInActiveTab);
+    const STEP = 200;
+    const collides = (x, y) => visible.some(d => Math.abs(d.posX - x) < STEP && Math.abs(d.posY - y) < STEP);
+    for (let row = 0; row < 12; row++) {
+      for (let col = 0; col < 12; col++) {
+        const x = 80 + col * STEP;
+        const y = 80 + row * STEP;
+        if (!collides(x, y)) return { posX: x, posY: y };
+      }
+    }
+    return { posX: 80, posY: 80 + visible.length * STEP };
+  }
+
   async function saveForm() {
     formError = '';
     if (!form.name?.trim())      { formError = 'El nombre es obligatorio.'; return; }
@@ -242,7 +376,7 @@
         await networkApi.updateDevice(editing.id, form);
         toasts.success('Dispositivo actualizado');
       } else {
-        await networkApi.createDevice({ ...form, posX: 200 + Math.random()*200, posY: 100 + Math.random()*200 });
+        await networkApi.createDevice({ ...form, ...pickSpawnPosition() });
         toasts.success('Dispositivo creado');
       }
       formOpen = false;
@@ -274,23 +408,132 @@
     }
   }
 
-  // ── Svelte Flow callbacks ─────────────────────────────────
-  // onNodeDragStop fires once when the user releases the node.
-  async function handleNodeDragStop({ target }) {
-    if (!target?.id) return;
-    const n = $nodes.find(x => x.id === target.id);
-    if (!n) return;
+  // ── Position persistence ─────────────────────────────────
+  // @xyflow/svelte 0.1.x fires nodedrag during the drag and nodedragstop
+  // at release. Both carry { event, targetNode, nodes } with the live
+  // position. We queue moves into pendingMoves and flush with a debounce
+  // (longer while dragging, very short on release) so a flurry of small
+  // drags collapses into one PATCH per node.
+  //
+  // syncState drives the visible indicator in the toolbar:
+  //   synced   — nothing pending, last save OK
+  //   dirty    — drag detected, waiting for debounce
+  //   saving   — PATCH in flight
+  //   error    — last save failed; pending stays queued for retry
+  let syncState = 'synced';
+  let syncError = '';
+  let lastSavedAt = null;
+  const pendingMoves = new Map();    // nodeId -> { x, y } latest desired position
+  let flushTimer = null;
+
+  function queueMove(id, x, y, { eager = false } = {}) {
+    pendingMoves.set(id, { x, y });
+    syncState = 'dirty';
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = setTimeout(flushMoves, eager ? 200 : 800);
+  }
+
+  async function flushMoves() {
+    flushTimer = null;
+    if (pendingMoves.size === 0) { syncState = 'synced'; return; }
+    syncState = 'saving';
+    syncError = '';
+    const batch = Array.from(pendingMoves.entries());
+    pendingMoves.clear();
     try {
-      await networkApi.updatePosition(target.id, n.position.x, n.position.y);
+      await Promise.all(batch.map(([id, { x, y }]) =>
+        networkApi.updatePosition(id, x, y)
+      ));
+      // Mirror to in-memory copies so subsequent filter/refresh keeps the move.
+      for (const [id, { x, y }] of batch) {
+        const dev = devicesById.get(id);
+        if (dev) { dev.posX = x; dev.posY = y; }
+      }
+      devices = devices.map(d => {
+        const m = batch.find(([id]) => id === d.id);
+        return m ? { ...d, posX: m[1].x, posY: m[1].y } : d;
+      });
+      lastSavedAt = new Date();
+      syncState = pendingMoves.size > 0 ? 'dirty' : 'synced';
     } catch (e) {
-      toasts.error('No se pudo guardar posición: ' + e.message);
+      // Put the batch back so the next flush retries. The user sees "Error".
+      for (const [id, pos] of batch) pendingMoves.set(id, pos);
+      syncState = 'error';
+      syncError = e.message;
     }
   }
 
-  async function handleConnect({ source, target }) {
+  function handleNodeDrag({ targetNode }) {
+    if (!targetNode?.id || !targetNode?.position) return;
+    queueMove(targetNode.id, targetNode.position.x, targetNode.position.y);
+  }
+  function handleNodeDragStop({ targetNode }) {
+    if (!targetNode?.id || !targetNode?.position) return;
+    queueMove(targetNode.id, targetNode.position.x, targetNode.position.y, { eager: true });
+  }
+
+  // Belt-and-suspenders: even if neither nodedrag nor nodedragstop fires
+  // cleanly (HMR edge cases, SvelteFlow internals), the store still ends up
+  // with the new positions. We compare each tick against a "last known"
+  // map and queue diffs. This catches keyboard moves and programmatic
+  // updates too.
+  const lastKnownPos = new Map();
+  function startNodesPositionWatch() {
+    nodes.subscribe((arr) => {
+      if (!Array.isArray(arr)) return;
+      for (const n of arr) {
+        const prev = lastKnownPos.get(n.id);
+        const cur  = n.position;
+        if (!cur) continue;
+        if (!prev) { lastKnownPos.set(n.id, { x: cur.x, y: cur.y }); continue; }
+        if (prev.x !== cur.x || prev.y !== cur.y) {
+          lastKnownPos.set(n.id, { x: cur.x, y: cur.y });
+          // Skip if the device list already has this exact position (i.e.
+          // we just re-rendered from a filter, not a real user move).
+          const dev = devicesById.get(n.id);
+          if (dev && dev.posX === cur.x && dev.posY === cur.y) continue;
+          queueMove(n.id, cur.x, cur.y);
+        }
+      }
+    });
+  }
+
+  // Effective sync state = max(node positions, viewport).
+  // If either pieces is dirty, the chip shows "dirty"; saving wins over dirty;
+  // error wins over saving (sticky until next successful flush).
+  $: effectiveSync = (() => {
+    if (syncState === 'error') return 'error';
+    if (syncState === 'saving') return 'saving';
+    if (syncState === 'dirty' || viewportDirty) return 'dirty';
+    return 'synced';
+  })();
+  $: syncLabel = ({
+    synced: lastSavedAt ? 'Guardado' : 'Sin cambios',
+    dirty:  'Pendiente…',
+    saving: 'Guardando…',
+    error:  'Error al guardar'
+  })[effectiveSync];
+  $: syncTitle = (() => {
+    if (effectiveSync === 'error') return `Último error: ${syncError}\nReintentará en el próximo movimiento.`;
+    if (effectiveSync === 'saving') return 'Sincronizando con el servidor…';
+    if (effectiveSync === 'dirty') {
+      const parts = [];
+      if (pendingMoves.size > 0) parts.push(`${pendingMoves.size} posición(es)`);
+      if (viewportDirty) parts.push('encuadre del mapa');
+      return parts.join(' + ') + ' por guardar.';
+    }
+    if (lastSavedAt) return `Último guardado: ${lastSavedAt.toLocaleTimeString()}\nPosiciones y encuadre se guardan automáticamente.`;
+    return 'Posiciones de nodos y encuadre del mapa se guardan automáticamente.';
+  })();
+
+  // Connection is a PROP (onconnect), not an event. Receives the Connection
+  // object directly: { source, target, sourceHandle, targetHandle }.
+  async function onConnect(connection) {
+    const { source, target } = connection || {};
     if (!source || !target || source === target) return;
     try {
       const created = await networkApi.createConnection(source, target, null);
+      connections = [...connections, created];
       edges.update(arr => [...arr, toEdge(created)]);
       toasts.success('Conexión creada');
     } catch (e) {
@@ -298,9 +541,19 @@
     }
   }
 
-  async function handleEdgesDelete({ edges: deleted }) {
-    for (const e of deleted) {
+  // Delete is also a PROP (ondelete). Payload: { nodes, edges }.
+  // Handles BOTH edges deleted via the Delete key AND nodes deleted that
+  // way (cascading their edges) — we persist the edge deletion explicitly
+  // since SvelteFlow only mutates its in-memory copy.
+  async function onDelete({ nodes: deletedNodes = [], edges: deletedEdges = [] }) {
+    for (const e of deletedEdges) {
       try { await networkApi.removeConnection(e.id); } catch {}
+    }
+    for (const n of deletedNodes) {
+      try { await networkApi.removeDevice(n.id); } catch {}
+    }
+    if (deletedNodes.length || deletedEdges.length) {
+      await refresh();
     }
   }
 
@@ -308,12 +561,22 @@
     selectedId = selected?.[0]?.id ?? null;
   }
 
-  // Double-click on a node opens the edit modal directly. We resolve the
-  // device from devicesById so the modal sees the latest state (status,
-  // latency, etc.) instead of a stale copy bundled in the node object.
-  function handleNodeDoubleClick({ node }) {
-    const dev = devicesById.get(node?.id);
-    if (dev) openEdit(dev);
+  // @xyflow/svelte 0.1.x emits 'nodeclick' but NOT 'nodedblclick'.
+  // We synthesize double-click with a 350ms window between two clicks on
+  // the same node id. Resolves device from devicesById so the modal sees
+  // the latest status/latency, not a stale copy bundled in the node object.
+  let _lastNodeClick = { id: null, t: 0 };
+  function handleNodeClick({ node }) {
+    if (!node?.id) return;
+    const now = Date.now();
+    const isDouble = _lastNodeClick.id === node.id && (now - _lastNodeClick.t) < 350;
+    if (isDouble) {
+      _lastNodeClick = { id: null, t: 0 };
+      const dev = devicesById.get(node.id);
+      if (dev) openEdit(dev);
+    } else {
+      _lastNodeClick = { id: node.id, t: now };
+    }
   }
 
   $: selectedDevice = selectedId ? devicesById.get(selectedId) : null;
@@ -333,10 +596,15 @@
     if (urlZone === 'none') activeZoneTab = 'none';
     else if (urlZone && !Number.isNaN(Number(urlZone))) activeZoneTab = Number(urlZone);
     await refresh();
+    // Restore the viewport ONCE on first mount (refresh() doesn't touch it).
+    setTimeout(() => restoreViewportForTab(activeZoneTab), 80);
+    startNodesPositionWatch();
   });
 
   onDestroy(() => {
     updateUnsub?.(); eventUnsub?.();
+    // Best-effort flush of any in-flight moves so a tab switch doesn't lose them.
+    if (flushTimer) { clearTimeout(flushTimer); flushMoves(); }
   });
 </script>
 
@@ -355,11 +623,24 @@
     </div>
 
     <div class="actions">
-      <a href="/network/events" class="btn-ghost"><HistoryIcon size={16} /> Historial</a>
-      <a href="/network/settings" class="btn-ghost"><Settings size={16} /> Configuración</a>
-      <button class="btn-ghost" on:click={probeNow}><Activity size={16} /> Probar ahora</button>
-      <button class="btn-ghost" on:click={refresh}><RefreshCw size={16} /> Refrescar</button>
-      <button class="btn-primary" on:click={openCreate}><Plus size={16} /> Agregar dispositivo</button>
+      <!-- Sync indicator: covers BOTH node positions and map viewport. -->
+      <span class="sync-chip sync-{effectiveSync}" title={syncTitle} aria-live="polite">
+        {#if effectiveSync === 'synced'}
+          <Check size={13} strokeWidth={2.5} /> {syncLabel}
+        {:else if effectiveSync === 'dirty'}
+          <Clock size={13} strokeWidth={2.5} /> {syncLabel}
+        {:else if effectiveSync === 'saving'}
+          <span class="spin"><Loader2 size={13} strokeWidth={2.5} /></span> {syncLabel}
+        {:else if effectiveSync === 'error'}
+          <AlertCircle size={13} strokeWidth={2.5} /> {syncLabel}
+        {/if}
+      </span>
+
+      <a href="/network/events" class="btn-ghost" title="Ver historial de eventos"><HistoryIcon size={16} /> Historial</a>
+      <a href="/network/settings" class="btn-ghost" title="Configurar alertas Telegram"><Settings size={16} /> Configuración</a>
+      <button class="btn-ghost" on:click={probeNow} title="Ejecutar un ping manual ahora"><Activity size={16} /> Probar</button>
+      <button class="btn-ghost" on:click={refresh} title="Recargar dispositivos desde el servidor"><RefreshCw size={16} /> Refrescar</button>
+      <button class="btn-primary" on:click={openCreate} title="Añadir nuevo dispositivo"><Plus size={16} /> Nuevo</button>
     </div>
   </div>
 
@@ -382,17 +663,22 @@
         {nodes}
         {edges}
         {nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.25 }}
+        {viewport}
+        minZoom={0.2}
+        maxZoom={1.5}
+        translateExtent={CANVAS_EXTENT}
+        nodeExtent={CANVAS_EXTENT}
+        onMoveEnd={(_, vp) => handleMoveEnd(vp)}
         snapGrid={[16, 16]}
         snapToGrid
         defaultEdgeOptions={{ type: 'smoothstep' }}
         connectionLineType="smoothstep"
+        onconnect={onConnect}
+        ondelete={onDelete}
+        on:nodedrag={(e) => handleNodeDrag(e.detail)}
         on:nodedragstop={(e) => handleNodeDragStop(e.detail)}
-        on:connect={(e) => handleConnect(e.detail)}
-        on:edgesdelete={(e) => handleEdgesDelete(e.detail)}
         on:selectionchange={(e) => handleSelectionChange(e.detail)}
-        on:nodedblclick={(e) => handleNodeDoubleClick(e.detail)}
+        on:nodeclick={(e) => handleNodeClick(e.detail)}
         deleteKey="Delete"
       >
         <Background gap={20} size={1} bgColor="#f8fafc" patternColor="#e2e8f0" />
@@ -532,13 +818,49 @@
 {/if}
 
 <style>
-  .page { display: flex; flex-direction: column; height: calc(100vh - 1rem); }
-  .toolbar {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0.75rem 1rem; background: white; border-bottom: 1px solid #e2e8f0;
+  /* Fill the parent <main> exactly. The main has padding (p-4 / sm:p-6) so
+     we use negative margin to go edge-to-edge — the toolbar/tabs end up
+     flush with the layout chrome, and nothing inside the canvas can push
+     the toolbar off the viewport. min-height:0 lets workspace shrink. */
+  .page {
+    display: flex; flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    margin: -1rem;
+    background: white;
+    border-radius: 0;
+    overflow: hidden;
   }
-  .title-block { display: flex; align-items: center; gap: 12px; }
-  .title-block h1 { font-size: 1.25rem; font-weight: 700; color: #0f172a; }
+  @media (min-width: 640px) {
+    .page { margin: -1.5rem; }
+  }
+
+  .toolbar {
+    flex-shrink: 0;       /* stay pinned, never scroll */
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: nowrap;
+    gap: 0.75rem;
+    padding: 0.625rem 1rem;
+    background: white;
+    border-bottom: 1px solid #e2e8f0;
+    z-index: 5;
+    overflow-x: auto;      /* if window is narrower than content, scroll instead of wrap */
+  }
+  /* hide scrollbar but keep ability to scroll */
+  .toolbar::-webkit-scrollbar { height: 4px; }
+  .toolbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 2px; }
+  .title-block {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;        /* don't compress the title when actions are wide */
+  }
+  .title-block h1 {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #0f172a;
+    white-space: nowrap;   /* "Monitor de Red" stays on one line */
+  }
   .status-pill {
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 8px; border-radius: 999px;
@@ -547,7 +869,46 @@
   }
   .status-pill.online { background: #dcfce7; color: #15803d; }
 
-  .actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    flex-wrap: nowrap;     /* one row, always */
+    flex-shrink: 0;
+  }
+  /* Subtle divider between the sync chip and the action buttons */
+  .actions .sync-chip + .btn-ghost::before,
+  .actions .sync-chip + a.btn-ghost::before {
+    content: "";
+    display: inline-block;
+    width: 1px;
+    height: 22px;
+    background: #e2e8f0;
+    margin: 0 6px 0 -2px;
+    vertical-align: middle;
+  }
+  .actions .btn-ghost, .actions .btn-primary {
+    white-space: nowrap;
+  }
+
+  /* Position autosave indicator */
+  .sync-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+    cursor: help;
+    transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+    margin-right: 4px;
+  }
+  .sync-chip.sync-synced { background: #dcfce7; color: #15803d; border-color: #bbf7d0; }
+  .sync-chip.sync-dirty  { background: #fef3c7; color: #b45309; border-color: #fde68a; }
+  .sync-chip.sync-saving { background: #dbeafe; color: #1d4ed8; border-color: #bfdbfe; }
+  .sync-chip.sync-error  { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
+  .spin { display: inline-flex; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .btn-ghost, .btn-primary, .btn-danger {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 7px 12px; border-radius: 8px; font-size: 0.8rem; font-weight: 500;
@@ -566,9 +927,17 @@
   }
   .btn-danger:hover { background: #b91c1c; }
 
-  .workspace { flex: 1; display: flex; min-height: 0; }
-  .canvas-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-  .canvas { flex: 1; position: relative; background: #f8fafc; min-height: 0; }
+  .workspace { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+  /* grid 1fr auto: canvas always takes the leftover space, the tabs row
+     keeps its natural height and never gets pushed below the viewport. */
+  .canvas-wrap {
+    flex: 1;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    min-width: 0;
+    min-height: 0;
+  }
+  .canvas { position: relative; background: #f8fafc; min-height: 0; overflow: hidden; }
   .empty {
     position: absolute; inset: 0; z-index: 5;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
@@ -578,7 +947,9 @@
   .empty button { pointer-events: auto; }
 
   .side-panel {
-    width: 320px; background: white; border-left: 1px solid #e2e8f0;
+    width: 320px;
+    flex-shrink: 0;          /* fixed-width, never collapsed by canvas */
+    background: white; border-left: 1px solid #e2e8f0;
     display: flex; flex-direction: column; padding: 1rem; gap: 1rem;
     overflow-y: auto;
   }

@@ -542,3 +542,20 @@ enum DeviceStatus {
   UNSTABLE
   UNKNOWN
 }
+
+// Shared map viewport (pan + zoom) per tab in /network. The key is
+// 'all' | 'none' | 'zone:<id>' — that way the same model covers the
+// special tabs and the real Zone tabs without polluting Zone itself.
+// One row per tab, upserted by key. Shared across all users so the
+// operator's preferred framing is the same for everybody.
+model NetworkMapView {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  posX      Float    @default(0)
+  posY      Float    @default(0)
+  zoom      Float    @default(1)
+  updatedAt DateTime @updatedAt
+  updatedBy String?  // user.id of the last writer (audit)
+
+  @@map("network_map_views")
+}

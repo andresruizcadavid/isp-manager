@@ -18,6 +18,10 @@ export const networkApi = {
   // Probe (manual sweep)
   probeNow:       ()                => api.post('/network/probe', {}),
 
+  // Shared map viewports (pan+zoom per tab)
+  listViews:      ()                => api.get('/network/views'),
+  saveView:       (key, posX, posY, zoom) => api.put(`/network/views/${key}`, { posX, posY, zoom }),
+
   // Events / history
   listEvents:     (params)          => {
     const q = new URLSearchParams(params || {}).toString();

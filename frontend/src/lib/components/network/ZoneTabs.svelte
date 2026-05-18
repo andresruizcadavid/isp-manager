@@ -88,7 +88,11 @@
           on:click|stopPropagation
         />
       {:else}
-        <span class="label" on:dblclick={(e) => startRename(z, e)} title="Doble-clic para renombrar">{z.name}</span>
+        <span class="label"
+              role="button" tabindex="-1"
+              on:dblclick={(e) => startRename(z, e)}
+              on:keydown={(e) => { if (e.key === 'F2') startRename(z, e); }}
+              title="Doble-clic para renombrar">{z.name}</span>
       {/if}
 
       <span class="count">{counts.byZone[z.id] || 0}</span>
