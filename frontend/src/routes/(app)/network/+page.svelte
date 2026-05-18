@@ -2,15 +2,18 @@
   import { onMount, onDestroy } from 'svelte';
   import { writable } from 'svelte/store';
   import {
-    SvelteFlow, Controls, Background, MiniMap,
-    useSvelteFlow
+    SvelteFlow, Controls, Background
   } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
 
+  import { goto } from '$app/navigation';
+  import { page } from '$app/stores';
   import { networkApi } from '$lib/api/network.api.js';
+  import { zonesApi } from '$lib/api/zones.api.js';
   import { ensureSocket, deviceUpdates, deviceEvents, socketStatus } from '$lib/stores/socket.store.js';
   import { toastStore as toasts } from '$lib/stores/toast.store.js';
   import DeviceNode from '$lib/components/network/DeviceNode.svelte';
+  import ZoneTabs from '$lib/components/network/ZoneTabs.svelte';
   import {
     Plus, RefreshCw, Trash2, Pencil, X, Wifi, History as HistoryIcon,
     Settings, Activity, CircleDot
@@ -23,13 +26,18 @@
 
   let devices = [];           // raw devices from API (id-indexed via map)
   let devicesById = new Map();
+  let connections = [];       // raw NetworkConnection rows
   let selectedId = null;
   let loading = true;
+
+  // Zones / tabs
+  let zones = [];             // [{ id, name, color, _count }]
+  let activeZoneTab = 'all';  // 'all' | 'none' | Int
 
   // CRUD modal state
   let formOpen = false;
   let editing = null;         // null = create mode; object = edit
-  let form = { name: '', ip: '', type: 'ROUTER', notes: '' };
+  let form = { name: '', ip: '', type: 'ROUTER', notes: '', zoneId: null };
   let saving = false;
   let formError = '';
 
@@ -74,26 +82,107 @@
     };
   }
 
-  function rebuildEdges(conns) {
-    edges.set(conns.map(toEdge));
+  // Returns true if device d should render in the current tab.
+  function isInActiveTab(d) {
+    if (activeZoneTab === 'all') return true;
+    if (activeZoneTab === 'none') return d.zoneId == null;
+    return d.zoneId === activeZoneTab;
   }
+
+  // Apply filter: nodes whose device matches the tab, edges whose BOTH
+  // endpoints survive the filter (so we don't leave dangling lines).
+  function applyFilter() {
+    const allowedIds = new Set(devices.filter(isInActiveTab).map(d => d.id));
+    nodes.set(devices.filter(d => allowedIds.has(d.id)).map(toNode));
+    edges.set(connections
+      .filter(c => allowedIds.has(c.sourceId) && allowedIds.has(c.targetId))
+      .map(toEdge));
+  }
+
+  function rebuildEdges(conns) {
+    connections = conns;
+    applyFilter();
+  }
+
+  $: tabCounts = (() => {
+    const byZone = {};
+    let none = 0;
+    for (const d of devices) {
+      if (d.zoneId == null) none++;
+      else byZone[d.zoneId] = (byZone[d.zoneId] || 0) + 1;
+    }
+    return { all: devices.length, none, byZone };
+  })();
 
   async function refresh() {
     loading = true;
     try {
-      const [devs, conns] = await Promise.all([
+      const [devs, conns, zns] = await Promise.all([
         networkApi.listDevices(),
-        networkApi.listConnections()
+        networkApi.listConnections(),
+        zonesApi.getAll().catch(() => [])
       ]);
       devices = devs;
       devicesById = new Map(devs.map(d => [d.id, d]));
-      nodes.set(devs.map(toNode));
-      rebuildEdges(conns);
+      connections = conns;
+      zones = (zns || []).map(z => ({ id: z.id, name: z.name, color: z.color, _count: z._count }));
+      applyFilter();
     } catch (e) {
       toasts.error('No se pudieron cargar los dispositivos: ' + e.message);
     } finally {
       loading = false;
     }
+  }
+
+  // ── Zone tabs handlers ────────────────────────────────────
+  function handleSelectZone(e) {
+    activeZoneTab = e.detail;
+    applyFilter();
+    syncUrl();
+  }
+  async function handleCreateZone(e) {
+    try {
+      const created = await zonesApi.create({ name: e.detail.name });
+      zones = [...zones, { id: created.id, name: created.name, color: created.color }];
+      activeZoneTab = created.id;
+      applyFilter();
+      syncUrl();
+      toasts.success(`Zona "${created.name}" creada`);
+    } catch (err) {
+      toasts.error(err.message);
+    }
+  }
+  async function handleRenameZone(e) {
+    const { id, name } = e.detail;
+    try {
+      await zonesApi.update(id, { name });
+      zones = zones.map(z => z.id === id ? { ...z, name } : z);
+      toasts.success('Zona renombrada');
+    } catch (err) {
+      toasts.error(err.message);
+    }
+  }
+  async function handleDeleteZone(e) {
+    const { id } = e.detail;
+    try {
+      await zonesApi.remove(id);
+      zones = zones.filter(z => z.id !== id);
+      // Devices that pointed here will now have zoneId=null (Prisma SetNull
+      // cascade on NetworkDevice.zoneId). Reload to reflect.
+      if (activeZoneTab === id) activeZoneTab = 'all';
+      await refresh();
+      syncUrl();
+      toasts.success('Zona eliminada');
+    } catch (err) {
+      toasts.error('No se pudo eliminar: ' + err.message);
+    }
+  }
+
+  function syncUrl() {
+    const url = new URL($page.url);
+    if (activeZoneTab === 'all') url.searchParams.delete('zone');
+    else url.searchParams.set('zone', String(activeZoneTab));
+    goto(url.pathname + url.search, { replaceState: true, noScroll: true, keepFocus: true });
   }
 
   // ── Live updates from socket.io ───────────────────────────
@@ -109,6 +198,8 @@
       lastSeen: u.lastSeen
     });
     devicesById = new Map(devicesById);
+    // Keep the in-memory devices list in sync so re-filters see fresh data.
+    devices = devices.map(d => d.id === u.id ? { ...dev } : d);
     // Re-emit nodes so the data prop refreshes (immutable update).
     nodes.update(arr => arr.map(n => n.id === u.id
       ? { ...n, data: { ...n.data, status: u.status, latency: u.latency, lastSeen: u.lastSeen } }
@@ -123,17 +214,20 @@
   // ── CRUD actions ──────────────────────────────────────────
   function openCreate() {
     editing = null;
-    form = { name: '', ip: '', type: 'ROUTER', notes: '' };
+    // Pre-fill zone with the active tab when it's a real zone.
+    const presetZone = (typeof activeZoneTab === 'number') ? activeZoneTab : null;
+    form = { name: '', ip: '', type: 'ROUTER', notes: '', zoneId: presetZone };
     formError = '';
     formOpen = true;
   }
   function openEdit(d) {
     editing = d;
     form = {
-      name:  d.name,
-      ip:    d.ip === '0.0.0.0' ? '' : d.ip,
-      type:  d.type,
-      notes: d.notes || ''
+      name:   d.name,
+      ip:     d.ip === '0.0.0.0' ? '' : d.ip,
+      type:   d.type,
+      notes:  d.notes || '',
+      zoneId: d.zoneId ?? null
     };
     formError = '';
     formOpen = true;
@@ -234,6 +328,10 @@
       if (evt.status === 'OFFLINE') toasts.error(`🔴 ${name} cayó`);
       else if (evt.status === 'ONLINE') toasts.success(`✅ ${name} recuperado`);
     });
+    // Restore tab from URL: ?zone=12, ?zone=none, ?zone=all
+    const urlZone = $page.url.searchParams.get('zone');
+    if (urlZone === 'none') activeZoneTab = 'none';
+    else if (urlZone && !Number.isNaN(Number(urlZone))) activeZoneTab = Number(urlZone);
     await refresh();
   });
 
@@ -265,8 +363,9 @@
     </div>
   </div>
 
-  <!-- Canvas + side panel -->
+  <!-- Canvas + side panel + bottom tabs -->
   <div class="workspace">
+    <div class="canvas-wrap">
     <div class="canvas">
       {#if loading}
         <div class="empty">Cargando…</div>
@@ -298,14 +397,19 @@
       >
         <Background gap={20} size={1} bgColor="#f8fafc" patternColor="#e2e8f0" />
         <Controls />
-        <MiniMap nodeColor={(n) => {
-          const s = n.data?.status;
-          if (s === 'ONLINE')   return '#16a34a';
-          if (s === 'OFFLINE')  return '#dc2626';
-          if (s === 'UNSTABLE') return '#f59e0b';
-          return '#cbd5e1';
-        }} maskColor="rgba(15, 23, 42, 0.08)" />
       </SvelteFlow>
+    </div>
+
+    <!-- Excel-like zone tabs at the bottom of the canvas -->
+    <ZoneTabs
+      {zones}
+      activeId={activeZoneTab}
+      counts={tabCounts}
+      on:select={handleSelectZone}
+      on:create={handleCreateZone}
+      on:rename={handleRenameZone}
+      on:delete={handleDeleteZone}
+    />
     </div>
 
     <!-- Side panel -->
@@ -391,11 +495,21 @@
           </label>
         </div>
 
-        <label>
-          <span>Dirección IP</span>
-          <input bind:value={form.ip} required placeholder="10.2.2.1" inputmode="decimal" />
-          <small class="hint">Solo IPv4. Se usa para los pings de monitoreo cada 30s.</small>
-        </label>
+        <div class="grid-2">
+          <label>
+            <span>Dirección IP</span>
+            <input bind:value={form.ip} required placeholder="10.2.2.1" inputmode="decimal" />
+            <small class="hint">Solo IPv4. Se usa para los pings.</small>
+          </label>
+          <label>
+            <span>Zona</span>
+            <select bind:value={form.zoneId}>
+              <option value={null}>— Sin clasificar —</option>
+              {#each zones as z}<option value={z.id}>{z.name}</option>{/each}
+            </select>
+            <small class="hint">Agrupa en una "hoja" del libro.</small>
+          </label>
+        </div>
 
         <label>
           <span>Notas</span>
@@ -453,7 +567,8 @@
   .btn-danger:hover { background: #b91c1c; }
 
   .workspace { flex: 1; display: flex; min-height: 0; }
-  .canvas { flex: 1; position: relative; background: #f8fafc; }
+  .canvas-wrap { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .canvas { flex: 1; position: relative; background: #f8fafc; min-height: 0; }
   .empty {
     position: absolute; inset: 0; z-index: 5;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
