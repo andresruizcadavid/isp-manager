@@ -31,6 +31,7 @@
   let editing = null;         // null = create mode; object = edit
   let form = { name: '', ip: '', type: 'ROUTER', notes: '' };
   let saving = false;
+  let formError = '';
 
   const DEVICE_TYPES = [
     { value: 'ROUTER',  label: 'Router MikroTik' },
@@ -40,6 +41,7 @@
     { value: 'SERVER',  label: 'Servidor' },
     { value: 'OTHER',   label: 'Otro' }
   ];
+  const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
 
   // ── Edge color from device statuses ───────────────────────
   function edgeColor(sourceId, targetId) {
@@ -122,14 +124,24 @@
   function openCreate() {
     editing = null;
     form = { name: '', ip: '', type: 'ROUTER', notes: '' };
+    formError = '';
     formOpen = true;
   }
   function openEdit(d) {
     editing = d;
-    form = { name: d.name, ip: d.ip, type: d.type, notes: d.notes || '' };
+    form = {
+      name:  d.name,
+      ip:    d.ip === '0.0.0.0' ? '' : d.ip,
+      type:  d.type,
+      notes: d.notes || ''
+    };
+    formError = '';
     formOpen = true;
   }
   async function saveForm() {
+    formError = '';
+    if (!form.name?.trim())      { formError = 'El nombre es obligatorio.'; return; }
+    if (!IP_RE.test(form.ip))    { formError = 'IP inválida (ej. 192.168.1.1).'; return; }
     saving = true;
     try {
       if (editing) {
@@ -142,7 +154,7 @@
       formOpen = false;
       await refresh();
     } catch (e) {
-      toasts.error(e.message);
+      formError = e.message;
     } finally {
       saving = false;
     }
@@ -200,6 +212,14 @@
 
   function handleSelectionChange({ nodes: selected }) {
     selectedId = selected?.[0]?.id ?? null;
+  }
+
+  // Double-click on a node opens the edit modal directly. We resolve the
+  // device from devicesById so the modal sees the latest state (status,
+  // latency, etc.) instead of a stale copy bundled in the node object.
+  function handleNodeDoubleClick({ node }) {
+    const dev = devicesById.get(node?.id);
+    if (dev) openEdit(dev);
   }
 
   $: selectedDevice = selectedId ? devicesById.get(selectedId) : null;
@@ -264,17 +284,27 @@
         {edges}
         {nodeTypes}
         fitView
+        fitViewOptions={{ padding: 0.25 }}
         snapGrid={[16, 16]}
         snapToGrid
+        defaultEdgeOptions={{ type: 'smoothstep' }}
+        connectionLineType="smoothstep"
         on:nodedragstop={(e) => handleNodeDragStop(e.detail)}
         on:connect={(e) => handleConnect(e.detail)}
         on:edgesdelete={(e) => handleEdgesDelete(e.detail)}
         on:selectionchange={(e) => handleSelectionChange(e.detail)}
+        on:nodedblclick={(e) => handleNodeDoubleClick(e.detail)}
         deleteKey="Delete"
       >
-        <Background />
+        <Background gap={20} size={1} bgColor="#f8fafc" patternColor="#e2e8f0" />
         <Controls />
-        <MiniMap />
+        <MiniMap nodeColor={(n) => {
+          const s = n.data?.status;
+          if (s === 'ONLINE')   return '#16a34a';
+          if (s === 'OFFLINE')  return '#dc2626';
+          if (s === 'UNSTABLE') return '#f59e0b';
+          return '#cbd5e1';
+        }} maskColor="rgba(15, 23, 42, 0.08)" />
       </SvelteFlow>
     </div>
 
@@ -331,29 +361,54 @@
   <div class="modal-backdrop" on:click|self={() => formOpen = false} on:keydown role="button" tabindex="-1">
     <div class="modal">
       <div class="modal-head">
-        <h2>{editing ? 'Editar dispositivo' : 'Nuevo dispositivo'}</h2>
-        <button class="icon-btn" on:click={() => formOpen = false}><X size={16} /></button>
+        <div>
+          <h2>{editing ? 'Editar dispositivo' : 'Nuevo dispositivo'}</h2>
+          {#if editing}
+            <p class="modal-sub">
+              <span class="status-badge status-{(editing.status||'unknown').toLowerCase()}">{editing.status}</span>
+              {#if editing.latency != null}· {Math.round(editing.latency)} ms{/if}
+            </p>
+          {/if}
+        </div>
+        <button class="icon-btn" on:click={() => formOpen = false} aria-label="Cerrar"><X size={16} /></button>
       </div>
+
       <form on:submit|preventDefault={saveForm} class="modal-body">
-        <label>
-          <span>Nombre</span>
-          <input bind:value={form.name} required placeholder="Torre-Centro" />
-        </label>
+        {#if formError}
+          <div class="form-error">{formError}</div>
+        {/if}
+
+        <div class="grid-2">
+          <label>
+            <span>Nombre</span>
+            <input bind:value={form.name} required placeholder="Torre-Centro" />
+          </label>
+          <label>
+            <span>Tipo</span>
+            <select bind:value={form.type}>
+              {#each DEVICE_TYPES as t}<option value={t.value}>{t.label}</option>{/each}
+            </select>
+          </label>
+        </div>
+
         <label>
           <span>Dirección IP</span>
-          <input bind:value={form.ip} required placeholder="10.2.2.1" pattern="^(\d{'{1,3}'}\.){'{3}'}\d{'{1,3}'}$" />
+          <input bind:value={form.ip} required placeholder="10.2.2.1" inputmode="decimal" />
+          <small class="hint">Solo IPv4. Se usa para los pings de monitoreo cada 30s.</small>
         </label>
-        <label>
-          <span>Tipo</span>
-          <select bind:value={form.type}>
-            {#each DEVICE_TYPES as t}<option value={t.value}>{t.label}</option>{/each}
-          </select>
-        </label>
+
         <label>
           <span>Notas</span>
-          <textarea bind:value={form.notes} rows="3" placeholder="Comentarios opcionales"></textarea>
+          <textarea bind:value={form.notes} rows="4" placeholder="Comentarios opcionales, zona, contacto, etc."></textarea>
         </label>
+
         <div class="modal-actions">
+          {#if editing}
+            <button type="button" class="btn-danger-ghost" on:click={() => { formOpen = false; removeDevice(editing.id); }}>
+              <Trash2 size={14} /> Eliminar
+            </button>
+          {/if}
+          <span class="flex-spacer"></span>
           <button type="button" class="btn-ghost" on:click={() => formOpen = false}>Cancelar</button>
           <button type="submit" class="btn-primary" disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
         </div>
@@ -432,19 +487,58 @@
   .modal-backdrop {
     position: fixed; inset: 0; z-index: 50;
     background: rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(2px);
     display: grid; place-items: center; padding: 1rem;
+    animation: fadeIn 0.15s ease;
   }
-  .modal { width: 100%; max-width: 420px; background: white; border-radius: 12px; overflow: hidden; }
-  .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid #e2e8f0; }
-  .modal-head h2 { font-size: 1rem; font-weight: 600; color: #0f172a; }
-  .modal-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-  .modal-body label { display: flex; flex-direction: column; gap: 4px; font-size: 0.8rem; color: #334155; font-weight: 500; }
+  .modal {
+    width: 100%; max-width: 480px;
+    background: white; border-radius: 14px; overflow: hidden;
+    box-shadow: 0 20px 50px -10px rgba(15, 23, 42, 0.35);
+    animation: popIn 0.18s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes popIn { from { opacity: 0; transform: translateY(8px) scale(.97) } to { opacity: 1; transform: none } }
+
+  .modal-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 16px 18px 12px; border-bottom: 1px solid #e2e8f0; }
+  .modal-head h2 { font-size: 1.05rem; font-weight: 600; color: #0f172a; }
+  .modal-sub { font-size: 0.75rem; color: #64748b; margin-top: 4px; display: flex; align-items: center; gap: 6px; }
+
+  .status-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; }
+  .status-badge.status-online   { background: #dcfce7; color: #15803d; }
+  .status-badge.status-offline  { background: #fee2e2; color: #b91c1c; }
+  .status-badge.status-unstable { background: #fef3c7; color: #b45309; }
+  .status-badge.status-unknown  { background: #f1f5f9; color: #64748b; }
+
+  .modal-body { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .modal-body label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; color: #334155; font-weight: 600; }
   .modal-body input, .modal-body select, .modal-body textarea {
-    padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px;
-    font-size: 0.85rem; color: #0f172a; background: white;
+    padding: 9px 11px; border: 1px solid #cbd5e1; border-radius: 8px;
+    font-size: 0.875rem; color: #0f172a; background: white;
+    font-weight: 400;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
   }
+  .modal-body textarea { resize: vertical; font-family: inherit; }
   .modal-body input:focus, .modal-body select:focus, .modal-body textarea:focus {
     outline: none; border-color: #2C4EC7; box-shadow: 0 0 0 3px rgba(44, 78, 199, 0.15);
   }
-  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .hint { font-size: 0.7rem; color: #94a3b8; font-weight: 400; margin-top: 2px; }
+
+  .form-error {
+    padding: 8px 12px;
+    background: #fee2e2; border: 1px solid #fecaca;
+    color: #991b1b; font-size: 0.78rem; font-weight: 500;
+    border-radius: 8px;
+  }
+
+  .modal-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding-top: 6px; border-top: 1px solid #f1f5f9; }
+  .flex-spacer { flex: 1; }
+  .btn-danger-ghost {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 12px; border-radius: 8px; font-size: 0.78rem; font-weight: 500;
+    background: transparent; border: 1px solid transparent;
+    color: #b91c1c; cursor: pointer;
+  }
+  .btn-danger-ghost:hover { background: #fee2e2; }
 </style>
