@@ -467,6 +467,15 @@ model NetworkDevice {
   status    DeviceStatus @default(UNKNOWN)
   latency   Float?       // ms, last successful ping (null if down/unknown)
   lastSeen  DateTime?    // last time the device responded
+  // Consecutive failed pings since the last success. The device only flips to
+  // OFFLINE (and only then is the down-alert fired) once failCount crosses
+  // TelegramConfig.probeDownCount — see network-monitor.service.js. Resets to
+  // 0 on the first successful probe.
+  failCount Int          @default(0)
+  // True once the down-alert for the current outage has been sent. Prevents
+  // re-alerting on every subsequent failed probe, and gates the recovery
+  // alert (we only send "recuperado" if we previously announced the outage).
+  alertSent Boolean      @default(false)
   notes     String?
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
@@ -558,6 +567,11 @@ model TelegramConfig {
   isActive        Boolean   @default(true)
   alertOnDown     Boolean   @default(true)
   alertOnRecovery Boolean   @default(true)
+  // Polling engine parameters (style: MikroTik The Dude). The monitor reads
+  // these every tick so changes apply within one cycle without a restart.
+  probeIntervalSec Int      @default(30) // seconds between sweeps
+  probeTimeoutSec  Int      @default(5)  // seconds to wait for a ping reply
+  probeDownCount   Int      @default(2)  // consecutive failures before OFFLINE+alert
   lastTestedAt    DateTime?
   lastTestResult  String?
   createdAt       DateTime  @default(now())

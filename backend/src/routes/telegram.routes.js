@@ -10,12 +10,17 @@ import { sendTest } from '../services/telegram.service.js';
 
 const router = Router();
 
+// Polling param domains mirror the option lists on the settings page. Kept
+// permissive (any positive int) so the UI can grow without a schema change.
 const configSchema = z.object({
-  botToken:        z.string().min(20, 'Token inválido'),
-  chatId:          z.string().min(1, 'chat_id requerido'),
-  isActive:        z.boolean().default(true),
-  alertOnDown:     z.boolean().default(true),
-  alertOnRecovery: z.boolean().default(true)
+  botToken:         z.string().min(20, 'Token inválido'),
+  chatId:           z.string().min(1, 'chat_id requerido'),
+  isActive:         z.boolean().default(true),
+  alertOnDown:      z.boolean().default(true),
+  alertOnRecovery:  z.boolean().default(true),
+  probeIntervalSec: z.number().int().min(1).max(3600).default(30),
+  probeTimeoutSec:  z.number().int().min(1).max(60).default(5),
+  probeDownCount:   z.number().int().min(1).max(20).default(2)
 });
 
 router.get('/', async (_req, res) => {
