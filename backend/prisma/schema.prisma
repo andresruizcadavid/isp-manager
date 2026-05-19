@@ -61,6 +61,7 @@ enum NotificationType {
   SERVICE_ACTIVATED
   INSTALLATION_SCHEDULED
   GENERAL_ANNOUNCEMENT
+  INCOMING                  // inbound WhatsApp message (webhook)
 }
 
 enum NotificationChannel {
@@ -347,8 +348,11 @@ model NotificationLog {
   recipient   String
   subject     String?
   content     String
-  status      String            // "sent", "failed", "pending"
+  status      String            // "sent" | "delivered" | "read" | "failed" | "pending" | "received"
   error       String?
+  // External provider message id (e.g. WhatsApp message id) — used to
+  // correlate webhook status callbacks back to the row we logged at send.
+  externalId  String?
   sentAt      DateTime?
   createdAt   DateTime          @default(now())
 
@@ -356,6 +360,7 @@ model NotificationLog {
 
   @@index([campaignId])
   @@index([clientId])
+  @@index([externalId])
   @@map("notification_logs")
 }
 
@@ -371,6 +376,12 @@ model NotificationTemplate {
   // payment_received | welcome | general_announcement. Defaults at render
   // time to 'general_announcement' when null. See email-base.template.js.
   preset      String?
+  // WhatsApp-specific: name of the corresponding template approved in Meta
+  // (e.g. "recordatorio_pago"). When set + channel="WHATSAPP" + the contact
+  // is outside the 24h customer-service window, we send the template
+  // message instead of free text. Body still holds the human-readable
+  // copy for previews. Locale defaults to WhatsAppConfig.defaultLanguage.
+  whatsappTemplateName String?
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -507,6 +518,34 @@ model NetworkEvent {
   @@index([deviceId])
   @@index([createdAt])
   @@map("network_events")
+}
+
+// WhatsApp Cloud API (Meta) credentials managed from the UI (Centro de
+// Notificaciones → WhatsApp). One active row at a time, same pattern as
+// SmtpConfig / TelegramConfig. When no row is active, sendWhatsApp() is a
+// no-op (logged once) so the rest of the notification pipeline keeps
+// working with just email.
+//
+// `phoneId` is the WhatsApp Business phone number ID (NOT the phone
+// number itself) — found in Meta WhatsApp Manager.
+// `businessAccountId` (WABA) is informational; not required to send.
+// `defaultLanguage` is the BCP-47 locale used for template messages
+// (es_CO is the default for Colombia).
+model WhatsAppConfig {
+  id                String    @id @default(cuid())
+  token             String    // System User Bearer token from Meta
+  phoneId           String    // Meta phone number ID (numeric, e.g. "104382...")
+  businessAccountId String?   // WABA ID, informational
+  displayName       String?   // What shows in WhatsApp Manager (read-only mirror)
+  defaultLanguage   String    @default("es_CO")
+  isActive          Boolean   @default(true)
+  isVerified        Boolean   @default(false)
+  lastTestedAt      DateTime?
+  lastTestResult    String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@map("whatsapp_configs")
 }
 
 // Telegram bot config managed from the UI (Monitor de Red → Configuración).

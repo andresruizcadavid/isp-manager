@@ -2,17 +2,18 @@
   import { onMount, onDestroy } from 'svelte';
   import { notificationsApi } from '$lib/api/notifications.api.js';
   import { smtpApi, SMTP_PRESETS } from '$lib/api/smtp.api.js';
+  import { whatsappApi } from '$lib/api/whatsapp.api.js';
   import { zonesApi } from '$lib/api/zones.api.js';
   import { plansApi } from '$lib/api/plans.api.js';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import {
     Bell, Send, FileText, History as HistoryIcon, Plus, Pencil, Trash2,
-    Mail, MessageSquare, Layers, CheckCircle2, AlertCircle, Loader2,
+    Mail, MessageSquare, MessageCircle, Layers, CheckCircle2, AlertCircle, Loader2,
     Save, X, Filter, RefreshCw, Eye, Server, Lock, User as UserIcon,
-    Eye as EyeIcon, EyeOff, ChevronDown, ChevronUp, Copy, Stethoscope
+    Eye as EyeIcon, EyeOff, ChevronDown, ChevronUp, Copy, Stethoscope, Phone
   } from 'lucide-svelte';
 
-  let tab = 'campaigns'; // campaigns | templates | history | smtp
+  let tab = 'campaigns'; // campaigns | templates | history | smtp | whatsapp
 
   // ── Shared lookups ──────────────────────────────────────
   let zones = [];
@@ -638,6 +639,83 @@ Email: contacto@internetonline.co
   }
 
   // Lazy-load SMTP only when the operator opens that tab. We track `smtpLoaded`
+  // ── WhatsApp config ─────────────────────────────────────
+  let waForm = {
+    id: null,
+    token: '',
+    phoneId: '',
+    businessAccountId: '',
+    displayName: '',
+    defaultLanguage: 'es_CO',
+    isActive: true,
+    isVerified: false,
+    lastTestedAt: null,
+    lastTestResult: null
+  };
+  let waLoading = false;
+  let waLoaded = false;
+  let waSaving = false;
+  let waTesting = false;
+  let waTestRecipient = '';
+  let waShowToken = false;
+  let waMsg = null;
+
+  async function loadWhatsApp() {
+    waLoading = true;
+    try {
+      const data = await whatsappApi.get();
+      if (data) waForm = { ...waForm, ...data };
+    } catch (e) {
+      waMsg = { type: 'error', text: e.message };
+    } finally {
+      waLoading = false;
+      waLoaded = true;
+    }
+  }
+  async function saveWhatsApp() {
+    waSaving = true;
+    waMsg = null;
+    try {
+      const saved = await whatsappApi.save({
+        token: waForm.token,
+        phoneId: waForm.phoneId,
+        businessAccountId: waForm.businessAccountId || null,
+        displayName: waForm.displayName || null,
+        defaultLanguage: waForm.defaultLanguage || 'es_CO',
+        isActive: !!waForm.isActive
+      });
+      waForm = { ...waForm, ...saved };
+      waMsg = { type: 'success', text: 'Configuración guardada.' };
+    } catch (e) {
+      waMsg = { type: 'error', text: e.message };
+    } finally {
+      waSaving = false;
+    }
+  }
+  async function testWhatsApp() {
+    if (!waForm.token || !waForm.phoneId || !waTestRecipient) {
+      waMsg = { type: 'error', text: 'Llena token, phoneId y un número destino.' };
+      return;
+    }
+    waTesting = true;
+    waMsg = null;
+    try {
+      await whatsappApi.test({
+        token: waForm.token,
+        phoneId: waForm.phoneId,
+        recipient: waTestRecipient
+        // defaults to Meta's built-in "hello_world" en_US template
+      });
+      waMsg = { type: 'success', text: 'Mensaje de prueba enviado. Revisa el WhatsApp del número destino.' };
+      await loadWhatsApp(); // refresh lastTestedAt
+    } catch (e) {
+      waMsg = { type: 'error', text: 'No se pudo enviar: ' + e.message };
+    } finally {
+      waTesting = false;
+    }
+  }
+  $: if (tab === 'whatsapp' && !waLoaded && !waLoading) loadWhatsApp();
+
   // explicitly because checking `smtpForm.id === null` would loop forever when
   // there is no config in DB yet (id stays null → reactive refires forever).
   $: if (tab === 'smtp' && !smtpLoaded && !smtpLoading) loadSmtp();
@@ -729,6 +807,7 @@ Email: contacto@internetonline.co
       { id: 'templates', label: 'Plantillas',  icon: FileText },
       { id: 'history',   label: 'Historial',   icon: HistoryIcon },
       { id: 'smtp',      label: 'Correo SMTP', icon: Server },
+      { id: 'whatsapp',  label: 'WhatsApp',    icon: MessageCircle },
     ] as t}
       <button type="button" on:click={() => tab = t.id}
               class="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg
@@ -1227,6 +1306,160 @@ Email: contacto@internetonline.co
               {smtpForm.lastTestResult || '—'}
             </p>
           {/if}
+        </div>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<!-- ─── WHATSAPP ─────────────────────────────────────── -->
+{#if tab === 'whatsapp'}
+  <div class="card">
+    {#if waLoading}
+      <div class="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
+        <Loader2 size={14} class="animate-spin" /> Cargando...
+      </div>
+    {:else}
+      <div class="grid lg:grid-cols-[1.5fr_1fr] gap-6 p-1">
+        <!-- Left: credentials form -->
+        <div>
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-12 h-12 rounded-xl bg-green-100 grid place-items-center">
+              <MessageCircle size={22} class="text-green-700" />
+            </div>
+            <div>
+              <h2 class="text-base font-semibold text-slate-900">WhatsApp Cloud API</h2>
+              <p class="text-xs text-slate-500">Conecta tu cuenta de Meta WhatsApp Business para enviar mensajes a clientes.</p>
+            </div>
+          </div>
+
+          {#if waMsg}
+            <div class="mb-4 px-3 py-2 rounded-lg text-sm border"
+                 class:bg-green-50={waMsg.type === 'success'}
+                 class:border-green-200={waMsg.type === 'success'}
+                 class:text-green-700={waMsg.type === 'success'}
+                 class:bg-red-50={waMsg.type === 'error'}
+                 class:border-red-200={waMsg.type === 'error'}
+                 class:text-red-700={waMsg.type === 'error'}>
+              {waMsg.text}
+            </div>
+          {/if}
+
+          <form on:submit|preventDefault={saveWhatsApp} class="space-y-3">
+            <label class="block">
+              <span class="text-xs font-semibold text-slate-700">Token (System User)</span>
+              <div class="relative mt-1">
+                <input
+                  type={waShowToken ? 'text' : 'password'}
+                  value={waForm.token}
+                  on:input={(e) => waForm.token = e.currentTarget.value}
+                  required
+                  placeholder="EAAxxxxxxxxxxxxxxxxxxxxxx..."
+                  class="w-full text-sm border border-slate-200 rounded-lg px-3 py-2 pr-10 focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 outline-none" />
+                <button type="button" on:click={() => waShowToken = !waShowToken}
+                        class="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700">
+                  <svelte:component this={waShowToken ? EyeOff : EyeIcon} size={14} />
+                </button>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">Business Settings → System Users → Genera token con permiso whatsapp_business_messaging.</p>
+            </label>
+
+            <div class="grid sm:grid-cols-2 gap-3">
+              <label class="block">
+                <span class="text-xs font-semibold text-slate-700">Phone Number ID</span>
+                <input bind:value={waForm.phoneId} required placeholder="123456789012345"
+                       class="mt-1 w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 outline-none" />
+                <p class="text-[11px] text-slate-500 mt-1">Numérico. NO el número telefónico, es el ID asignado por Meta.</p>
+              </label>
+              <label class="block">
+                <span class="text-xs font-semibold text-slate-700">WABA ID (opcional)</span>
+                <input bind:value={waForm.businessAccountId} placeholder="987654321098765"
+                       class="mt-1 w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 outline-none" />
+              </label>
+            </div>
+
+            <div class="grid sm:grid-cols-2 gap-3">
+              <label class="block">
+                <span class="text-xs font-semibold text-slate-700">Nombre visible (opcional)</span>
+                <input bind:value={waForm.displayName} placeholder="Oficina TIC Jamundí"
+                       class="mt-1 w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 outline-none" />
+              </label>
+              <label class="block">
+                <span class="text-xs font-semibold text-slate-700">Idioma por defecto (plantillas)</span>
+                <select bind:value={waForm.defaultLanguage}
+                        class="mt-1 w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 outline-none">
+                  <option value="es_CO">Español (Colombia)</option>
+                  <option value="es_ES">Español (España)</option>
+                  <option value="es_MX">Español (México)</option>
+                  <option value="en_US">English (US)</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="inline-flex items-center gap-2 text-sm text-slate-700 mt-2">
+              <input type="checkbox" bind:checked={waForm.isActive} class="rounded" />
+              Activo (se usa para enviar mensajes)
+            </label>
+
+            <div class="flex justify-end pt-2">
+              <button type="submit" disabled={waSaving}
+                      class="inline-flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-lg text-sm font-semibold disabled:opacity-60">
+                {#if waSaving}<Loader2 size={14} class="animate-spin" />{:else}<Save size={14} />{/if}
+                Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Right: test + status + setup guide -->
+        <div class="space-y-4">
+          <div class="border border-slate-200 rounded-xl p-4">
+            <h3 class="text-sm font-semibold text-slate-900 mb-2 flex items-center gap-2">
+              <Phone size={14} class="text-green-600" /> Enviar prueba
+            </h3>
+            <p class="text-xs text-slate-500 mb-3">Envía el template <code>hello_world</code> (incluido por Meta en cada cuenta nueva) al número que indiques. Sirve para validar las credenciales sin tener que aprobar plantillas propias todavía.</p>
+            <label class="block">
+              <span class="text-xs font-semibold text-slate-700">Número destino</span>
+              <input bind:value={waTestRecipient} placeholder="573001234567"
+                     class="mt-1 w-full text-sm border border-slate-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 outline-none" />
+              <p class="text-[11px] text-slate-500 mt-1">Formato E.164 sin "+" — código país + número.</p>
+            </label>
+            <button type="button" on:click={testWhatsApp} disabled={waTesting}
+                    class="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 border border-green-300 bg-green-50 hover:bg-green-100 text-green-700 rounded-lg text-sm font-semibold disabled:opacity-60">
+              {#if waTesting}<Loader2 size={14} class="animate-spin" />{:else}<Send size={14} />{/if}
+              Enviar prueba
+            </button>
+          </div>
+
+          <div class="border border-slate-200 rounded-xl p-4">
+            <h3 class="text-sm font-semibold text-slate-900 mb-2">Estado</h3>
+            <dl class="text-xs space-y-1.5">
+              <div class="flex justify-between"><dt class="text-slate-500">Conexión</dt>
+                <dd class={waForm.isActive ? 'text-green-700 font-semibold' : 'text-slate-500'}>
+                  {waForm.isActive ? 'Activa' : 'Inactiva'}
+                </dd>
+              </div>
+              <div class="flex justify-between"><dt class="text-slate-500">Última prueba</dt>
+                <dd>{waForm.lastTestedAt ? new Date(waForm.lastTestedAt).toLocaleString('es-CO') : 'Nunca'}</dd>
+              </div>
+              <div class="flex justify-between"><dt class="text-slate-500">Resultado</dt>
+                <dd class={waForm.lastTestResult === 'success' ? 'text-green-700' : waForm.lastTestResult ? 'text-red-700' : 'text-slate-500'}>
+                  {waForm.lastTestResult || '—'}
+                </dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="border border-amber-200 bg-amber-50 rounded-xl p-4">
+            <h3 class="text-xs font-semibold text-amber-900 mb-1.5">Antes de empezar</h3>
+            <ol class="text-[11px] text-amber-800 list-decimal pl-4 space-y-1">
+              <li>Crear cuenta en <a href="https://business.facebook.com" target="_blank" rel="noopener" class="underline">business.facebook.com</a>.</li>
+              <li>Crear app de WhatsApp en <a href="https://developers.facebook.com" target="_blank" rel="noopener" class="underline">developers.facebook.com</a>.</li>
+              <li>Vincular un número telefónico dedicado (no tu WhatsApp personal).</li>
+              <li>Generar System User Token sin expiración.</li>
+              <li>Crear plantillas: <code>recordatorio_pago</code>, <code>pago_confirmado</code>, <code>servicio_suspendido</code>, <code>servicio_reactivado</code>.</li>
+            </ol>
+          </div>
         </div>
       </div>
     {/if}

@@ -21,6 +21,7 @@ import notificationsRoutes from './routes/notifications.routes.js';
 import smtpRoutes from './routes/smtp.routes.js';
 import networkRoutes from './routes/network.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
+import whatsappRoutes, { webhookRouter as whatsappWebhookRouter } from './routes/whatsapp.routes.js';
 
 const app = express();
 
@@ -55,6 +56,10 @@ app.use('/api/v1/notifications',     authMiddleware, requireAdmin,       notific
 app.use('/api/v1/smtp',              authMiddleware, requireAdmin,       smtpRoutes);
 app.use('/api/v1/network',           authMiddleware, requireOperational, networkRoutes);
 app.use('/api/v1/telegram',          authMiddleware, requireAdmin,       telegramRoutes);
+// WhatsApp webhook MUST be public (Meta calls it without our auth header).
+// Mount it BEFORE the admin router so the path matches first.
+app.use('/api/v1/whatsapp/webhook',                                     whatsappWebhookRouter);
+app.use('/api/v1/whatsapp',          authMiddleware, requireAdmin,       whatsappRoutes);
 
 // ── Static serving of uploaded files ──────────────────────
 // Files are saved under <UPLOADS_PATH> by routes that use multer; expose

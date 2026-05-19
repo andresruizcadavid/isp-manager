@@ -509,14 +509,23 @@ class NotificationService {
   }
 
   async sendWhatsApp(options) {
-    const { to, message } = options;
+    const { to, message, templateName, templateParams, language } = options;
 
-    // This would integrate with WhatsApp Business API
-    console.log(`WhatsApp to ${to}: ${message}`);
-    
-    // For now, just log the WhatsApp message
-    // In production, you would use WhatsApp Business API:
-    // await this.whatsappClient.sendMessage(to, message);
+    // Lazy-import to avoid a circular dependency with prisma at module load.
+    const wa = await import('./whatsapp.service.js');
+
+    // Two paths: if templateName is provided we send a Meta-approved
+    // template (the only way to reach a client outside the 24h window).
+    // Otherwise we send free text — works only inside that window; Meta
+    // rejects with error 131047 outside and we log it.
+    const result = templateName
+      ? await wa.sendTemplate(to, templateName, templateParams || [], { language })
+      : await wa.sendText(to, message);
+
+    if (!result.ok) {
+      console.warn(`[whatsapp] ${to} failed: ${result.error}`);
+    }
+    return result;
   }
 
   // Each builder returns a structured payload:
