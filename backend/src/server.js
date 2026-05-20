@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { createRedisClient } from './services/redis.service.js';
 import { initSocket } from './services/socket.service.js';
 import { startMonitor } from './services/network-monitor.service.js';
+import { startRouterMonitor } from './services/router-monitor.service.js';
 
 // Initialize database connection
 export const prisma = new PrismaClient({
@@ -46,6 +47,9 @@ const server = httpServer.listen(env.PORT, async () => {
   // Start the ICMP monitor (in-process scheduler). Pings every device on the
   // map every 30s and pushes live updates via socket.io.
   startMonitor();
+  // Router-routes ICMP monitor — drives failover and per-route status pills
+  // in the NOC table.
+  startRouterMonitor();
 });
 
 // Graceful shutdown

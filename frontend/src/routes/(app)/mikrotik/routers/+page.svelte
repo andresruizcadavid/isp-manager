@@ -31,11 +31,29 @@
   async function testConnection(id) {
     testing[id] = true;
     try {
-      await routersApi.testConn(id);
+      await routersApi.testRoutes(id);   // pings every route + persists status
       await load();
     } catch (e) {
       alert('Error de conexión: ' + e.message);
     } finally { testing[id] = false; }
+  }
+
+  // Map RouterStatus enum to the badge styling used by the rest of the app.
+  function statusBadge(status) {
+    switch (status) {
+      case 'ONLINE':   return { cls: 'badge-green',  label: 'Online'   };
+      case 'DEGRADED': return { cls: 'badge-yellow', label: 'Degradado' };
+      case 'OFFLINE':  return { cls: 'badge-red',    label: 'Offline'  };
+      default:         return { cls: 'badge-gray',   label: 'Sin probar' };
+    }
+  }
+
+  // Per-route dot color. Latency is suffixed when known so the operator can
+  // tell which uplink is healthier at a glance.
+  function routeDotClass(status) {
+    if (status === 'ONLINE')  return 'text-emerald-500';
+    if (status === 'OFFLINE') return 'text-red-500';
+    return 'text-slate-300';
   }
 
   async function syncRouter(id) {
@@ -110,7 +128,7 @@
       <thead>
         <tr>
           <th>Nombre</th>
-          <th>IP / Puerto</th>
+          <th>Rutas / Failover</th>
           <th>Ubicación</th>
           <th>Modelo</th>
           <th>Cuentas</th>
@@ -147,8 +165,25 @@
                   {r.name}
                 </a>
               </td>
-              <td class="font-mono text-xs text-slate-600">
-                {r.ipAddress}:{r.apiPort}
+              <td>
+                {#if r.routes && r.routes.length > 0}
+                  <div class="flex flex-col gap-0.5">
+                    {#each r.routes as rt}
+                      <div class="flex items-center gap-1.5 text-xs font-mono text-slate-600">
+                        <span class={routeDotClass(rt.status)}>●</span>
+                        <span class={rt.id === r.activeRouteId ? 'font-semibold text-slate-900' : ''}>
+                          {rt.ip}
+                        </span>
+                        {#if rt.latency != null && rt.status === 'ONLINE'}
+                          <span class="text-[10px] text-slate-400">{rt.latency.toFixed(0)}ms</span>
+                        {/if}
+                        <span class="text-[10px] text-slate-400">P{rt.priority}</span>
+                      </div>
+                    {/each}
+                  </div>
+                {:else}
+                  <span class="text-xs text-slate-400 italic">Sin rutas</span>
+                {/if}
               </td>
               <td class="text-slate-600 text-sm">{r.location || '—'}</td>
               <td class="text-slate-600 text-sm">{r.model || '—'}</td>
@@ -159,10 +194,11 @@
               </td>
               <td class="text-slate-500 text-xs">{fmtDate(r.lastSyncAt)}</td>
               <td>
-                {#if r.isActive}
-                  <span class="badge-green">Activo</span>
-                {:else}
+                {#if !r.isActive}
                   <span class="badge-gray">Inactivo</span>
+                {:else}
+                  {@const sb = statusBadge(r.status)}
+                  <span class={sb.cls}>{sb.label}</span>
                 {/if}
               </td>
               <td>

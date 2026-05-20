@@ -1,15 +1,77 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { MikrotikService, testRouterCredentials } from '../services/mikrotik.service.js';
+import {
+  MikrotikService,
+  buildMikrotikService,
+  testRouterCredentials,
+  pickActiveRoute
+} from '../services/mikrotik.service.js';
+import { probeRouter } from '../services/router-monitor.service.js';
 
 const router = Router();
 const prisma = new PrismaClient();
+
+// Always load routes alongside the router so callers can pick a dial-target
+// without a second round-trip. Sorted by priority so r.routes[0] is the primary.
+const ROUTER_INCLUDE = {
+  _count: { select: { mikrotikAccounts: true } },
+  routes: { orderBy: { priority: 'asc' } }
+};
+
+// Backwards-compat helper. Old callers used to template `${r.ipAddress}` into
+// notes / display strings; now that the column is gone we surface the primary
+// route's IP (priority=1) for those messages.
+const primaryIp = (r) =>
+  r?.routes?.find(rt => rt.priority === 1)?.ip ?? r?.routes?.[0]?.ip ?? '?';
+
+// Normalize the routes array submitted from the UI: trim, drop empty rows,
+// re-key by 1..N priority so the form's row order becomes the failover order.
+// Returns null when the payload omits routes (caller should ignore the field
+// instead of wiping them).
+function normalizeRoutesInput(routes) {
+  if (!Array.isArray(routes)) return null;
+  const cleaned = routes
+    .map(r => ({
+      ip:    String(r?.ip ?? '').trim(),
+      label: r?.label ? String(r.label).trim() : null
+    }))
+    .filter(r => r.ip);
+  if (cleaned.length === 0) {
+    throw new Error('Al menos una IP es requerida');
+  }
+  if (cleaned.length > 3) {
+    throw new Error('Máximo 3 rutas por router');
+  }
+  const ipRe = /^(\d{1,3}\.){3}\d{1,3}$/;
+  for (const r of cleaned) {
+    if (!ipRe.test(r.ip)) throw new Error(`IP inválida: ${r.ip}`);
+  }
+  return cleaned.map((r, idx) => ({
+    ip:       r.ip,
+    label:    r.label || (idx === 0 ? 'Enlace principal' : `Alternativa ${idx}`),
+    priority: idx + 1
+  }));
+}
+
+// Replace the router's routes set with `desired` (deleteMany+createMany inside
+// a transaction). Doing a wholesale replace is simpler than diffing — at most
+// 3 rows so the cost is negligible.
+async function syncRoutes(routerId, desired) {
+  return prisma.$transaction(async (tx) => {
+    await tx.routerRoute.deleteMany({ where: { routerId } });
+    for (const r of desired) {
+      await tx.routerRoute.create({
+        data: { routerId, ip: r.ip, label: r.label, priority: r.priority }
+      });
+    }
+  });
+}
 
 // GET all routers
 router.get('/', async (req, res) => {
   try {
     const routers = await prisma.router.findMany({
-      include: { _count: { select: { mikrotikAccounts: true } } },
+      include: ROUTER_INCLUDE,
       orderBy: { createdAt: 'desc' }
     });
     res.json({ success: true, data: routers });
@@ -18,15 +80,17 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST test credentials (no id required — used by the create flow)
+// POST test credentials (no id required — used by the create flow).
+// Accepts either `ip` (preferred) or `ipAddress` (legacy frontends).
 router.post('/test', async (req, res) => {
   try {
-    const { ipAddress, apiPort = 80, username = 'admin', password = '' } = req.body || {};
-    if (!ipAddress) {
-      return res.status(400).json({ success: false, error: 'ipAddress es requerido' });
+    const { ip, ipAddress, apiPort = 80, username = 'admin', password = '' } = req.body || {};
+    const dial = ip || ipAddress;
+    if (!dial) {
+      return res.status(400).json({ success: false, error: 'ip es requerido' });
     }
     const result = await testRouterCredentials({
-      ipAddress,
+      ip: dial,
       apiPort: Number(apiPort) || 80,
       username,
       password
@@ -45,7 +109,7 @@ router.get('/:id', async (req, res) => {
   try {
     const r = await prisma.router.findUniqueOrThrow({
       where: { id: Number(req.params.id) },
-      include: { _count: { select: { mikrotikAccounts: true } } }
+      include: ROUTER_INCLUDE
     });
     res.json({ success: true, data: r });
   } catch (e) {
@@ -53,25 +117,50 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// POST create router
+// POST create router. `routes` is required (1..3 IPs). All other fields are
+// passed through to the Router row.
 router.post('/', async (req, res) => {
   try {
-    const r = await prisma.router.create({ data: req.body });
-    res.status(201).json({ success: true, data: r });
+    const { routes: routesIn, _count, ...routerFields } = req.body || {};
+    const desired = normalizeRoutesInput(routesIn);
+    if (!desired) {
+      return res.status(400).json({ success: false, error: 'routes es requerido' });
+    }
+    const created = await prisma.router.create({
+      data: {
+        ...routerFields,
+        routes: { create: desired }
+      },
+      include: ROUTER_INCLUDE
+    });
+    res.status(201).json({ success: true, data: created });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
   }
 });
 
-// PUT update router
+// PUT update router. If `routes` is present, the route set is replaced; if
+// absent, only scalar fields are updated.
 router.put('/:id', async (req, res) => {
   try {
-    const { id, createdAt, updatedAt, lastSyncAt, _count, ...data } = req.body;
-    const r = await prisma.router.update({
-      where: { id: Number(req.params.id) },
-      data
+    const {
+      id, createdAt, updatedAt, lastSyncAt, _count,
+      routes: routesIn,
+      status, activeRouteId, failCount, alertSent,    // monitor-managed; never trusted from the client
+      ...data
+    } = req.body || {};
+    const routerId = Number(req.params.id);
+
+    if (routesIn !== undefined) {
+      const desired = normalizeRoutesInput(routesIn);
+      if (desired) await syncRoutes(routerId, desired);
+    }
+    const updated = await prisma.router.update({
+      where:   { id: routerId },
+      data,
+      include: ROUTER_INCLUDE
     });
-    res.json({ success: true, data: r });
+    res.json({ success: true, data: updated });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
   }
@@ -87,20 +176,47 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// POST test connection
+// POST test connection — dials the router via the active route resolver.
 router.post('/:id/test', async (req, res) => {
   try {
     const r = await prisma.router.findUniqueOrThrow({
-      where: { id: Number(req.params.id) }
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
     });
-    const mk     = new MikrotikService(r);
+    const mk     = buildMikrotikService(r);
     const result = await mk.testConnection();
-    res.json({ success: true, data: result });
+    res.json({ success: true, data: { ...result, dialIp: mk.ip } });
   } catch (e) {
-    res.status(400).json({ 
-      success: false, 
-      error: e.message || 'No se pudo conectar al router' 
+    res.status(400).json({
+      success: false,
+      error: e.message || 'No se pudo conectar al router'
     });
+  }
+});
+
+// POST probe all routes now (UI "Probar rutas"). Runs the same code path as
+// the periodic sweep so per-route status + router-level status get persisted
+// and the Telegram gating logic applies consistently.
+router.post('/:id/test-routes', async (req, res) => {
+  try {
+    const result = await probeRouter(Number(req.params.id));
+    const summary = {
+      router:        { id: result.router.id, name: result.router.name, status: result.router.status },
+      activeRouteId: result.router.activeRouteId,
+      routes:        result.routes
+        .sort((a, b) => a.route.priority - b.route.priority)
+        .map(p => ({
+          id:        p.route.id,
+          ip:        p.route.ip,
+          priority:  p.route.priority,
+          label:     p.route.label,
+          status:    p.alive ? 'ONLINE' : 'OFFLINE',
+          latency:   p.latency
+        }))
+    };
+    res.json({ success: true, data: summary });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
   }
 });
 
@@ -108,9 +224,10 @@ router.post('/:id/test', async (req, res) => {
 router.post('/:id/sync', async (req, res) => {
   try {
     const r  = await prisma.router.findUniqueOrThrow({
-      where: { id: Number(req.params.id) }
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
     });
-    const mk      = new MikrotikService(r);
+    const mk      = buildMikrotikService(r);
     const secrets = await mk.getPPPoESecrets();
     const active  = await mk.getActivePPPoE();
 
@@ -119,12 +236,12 @@ router.post('/:id/sync', async (req, res) => {
       data:  { lastSyncAt: new Date() }
     });
 
-    res.json({ 
-      success: true, 
-      data: { 
-        secrets: secrets?.length || 0, 
-        active:  active?.length  || 0 
-      } 
+    res.json({
+      success: true,
+      data: {
+        secrets: secrets?.length || 0,
+        active:  active?.length  || 0
+      }
     });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
@@ -135,9 +252,10 @@ router.post('/:id/sync', async (req, res) => {
 router.get('/:id/sysinfo', async (req, res) => {
   try {
     const r  = await prisma.router.findUniqueOrThrow({
-      where: { id: Number(req.params.id) }
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
     });
-    const mk   = new MikrotikService(r);
+    const mk   = buildMikrotikService(r);
     const info = await mk.getSystemInfo();
     res.json({ success: true, data: info });
   } catch (e) {
@@ -149,9 +267,10 @@ router.get('/:id/sysinfo', async (req, res) => {
 router.get('/:id/profiles', async (req, res) => {
   try {
     const r        = await prisma.router.findUniqueOrThrow({
-      where: { id: Number(req.params.id) }
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
     });
-    const mk       = new MikrotikService(r);
+    const mk       = buildMikrotikService(r);
     const profiles = await mk.getPPPoEProfiles();
     res.json({ success: true, data: profiles });
   } catch (e) {
@@ -162,11 +281,14 @@ router.get('/:id/profiles', async (req, res) => {
 // Alias used by /plans sync flow — same payload, semantic URL.
 router.get('/:id/ppp-profiles', async (req, res) => {
   try {
-    const r = await prisma.router.findUniqueOrThrow({ where: { id: Number(req.params.id) } });
+    const r = await prisma.router.findUniqueOrThrow({
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
+    });
     if (!r.isActive) {
       return res.status(409).json({ success: false, error: `Router "${r.name}" está desactivado.` });
     }
-    const mk = new MikrotikService(r);
+    const mk = buildMikrotikService(r);
     const profiles = await mk.getPPPoEProfiles();
     res.json({ success: true, data: profiles });
   } catch (e) {
@@ -180,11 +302,14 @@ router.get('/:id/ppp-profiles', async (req, res) => {
 // These are safe-to-delete candidates surfaced in the /plans cleanup tool.
 router.get('/:id/ppp-profiles/orphans', async (req, res) => {
   try {
-    const r = await prisma.router.findUniqueOrThrow({ where: { id: Number(req.params.id) } });
+    const r = await prisma.router.findUniqueOrThrow({
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
+    });
     if (!r.isActive) {
       return res.status(409).json({ success: false, error: `Router "${r.name}" está desactivado.` });
     }
-    const mk = new MikrotikService(r);
+    const mk = buildMikrotikService(r);
 
     const [profiles, secrets, plans] = await Promise.all([
       mk.getPPPoEProfiles().catch(() => []),
@@ -228,11 +353,14 @@ router.get('/:id/ppp-profiles/orphans', async (req, res) => {
 // profiles. Caller decides whether to also delete the matching local Plan.
 router.delete('/:id/ppp-profiles/:profileName', async (req, res) => {
   try {
-    const r = await prisma.router.findUniqueOrThrow({ where: { id: Number(req.params.id) } });
+    const r = await prisma.router.findUniqueOrThrow({
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
+    });
     if (!r.isActive) {
       return res.status(409).json({ success: false, error: `Router "${r.name}" está desactivado.` });
     }
-    const mk = new MikrotikService(r);
+    const mk = buildMikrotikService(r);
     const result = await mk.deletePPPoEProfileByName(req.params.profileName);
     res.json({ success: true, data: result });
   } catch (e) {
@@ -245,12 +373,15 @@ router.delete('/:id/ppp-profiles/:profileName', async (req, res) => {
 // summary { imported, skipped, errors } the caller can show in the UI.
 router.post('/:id/import-pppoe-clients', async (req, res) => {
   try {
-    const r = await prisma.router.findUniqueOrThrow({ where: { id: Number(req.params.id) } });
+    const r = await prisma.router.findUniqueOrThrow({
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
+    });
     if (!r.isActive) {
       return res.status(409).json({ success: false, error: `Router "${r.name}" está desactivado.` });
     }
 
-    const mk = new MikrotikService(r);
+    const mk = buildMikrotikService(r);
 
     // Connectivity pre-check: a cheap ping (1.5s, 1 retry) so we fail fast
     // with a clean message when the router is simply unreachable, instead of
@@ -259,7 +390,7 @@ router.post('/:id/import-pppoe-clients', async (req, res) => {
       await mk.request('/system/identity', 'GET', null, { retries: 1, timeoutMs: 2500 });
     } catch (e) {
       const reachableHint = /fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|Timeout/i.test(e.message)
-        ? `Verifica que el router "${r.name}" (${r.ipAddress}) esté encendido, en la red y con la REST API habilitada.`
+        ? `Verifica que el router "${r.name}" (${mk.ip}) esté encendido, en la red y con la REST API habilitada.`
         : e.message;
       return res.status(502).json({
         success: false,
@@ -403,7 +534,7 @@ router.post('/:id/import-pppoe-clients', async (req, res) => {
             status:         'ACTIVE',
             serviceIp:      remoteAddress,
             planId:         resolvedPlanId,
-            notes:          `Importado desde MikroTik "${r.name}" (${r.ipAddress}) el ${new Date().toISOString().slice(0,10)}.`,
+            notes:          `Importado desde MikroTik "${r.name}" (${primaryIp(r)}) el ${new Date().toISOString().slice(0,10)}.`,
             mikrotikAccount: {
               create: {
                 routerId:      r.id,
@@ -445,9 +576,10 @@ router.post('/:id/import-pppoe-clients', async (req, res) => {
 router.get('/:id/available-ips', async (req, res) => {
   try {
     const r = await prisma.router.findUniqueOrThrow({
-      where: { id: Number(req.params.id) }
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
     });
-    const mk = new MikrotikService(r);
+    const mk = buildMikrotikService(r);
 
     // 1) Read all IP pools (read-only)
     let pools = [];
@@ -564,9 +696,10 @@ router.get('/:id/available-ips', async (req, res) => {
 router.get('/:id/active', async (req, res) => {
   try {
     const r      = await prisma.router.findUniqueOrThrow({
-      where: { id: Number(req.params.id) }
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
     });
-    const mk     = new MikrotikService(r);
+    const mk     = buildMikrotikService(r);
     const active = await mk.getActivePPPoE();
     res.json({ success: true, data: active });
   } catch (e) {
@@ -578,9 +711,10 @@ router.get('/:id/active', async (req, res) => {
 router.get('/:id/pppoe-preview', async (req, res) => {
   try {
     const r = await prisma.router.findUniqueOrThrow({
-      where: { id: Number(req.params.id) }
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
     });
-    const mk = new MikrotikService(r);
+    const mk = buildMikrotikService(r);
 
     // Fetch secrets first — if this fails, return error immediately
     let secrets = [];
@@ -643,7 +777,7 @@ router.get('/:id/pppoe-preview', async (req, res) => {
     res.json({
       success: true,
       data: {
-        router:   { id: r.id, name: r.name, ip: r.ipAddress },
+        router:   { id: r.id, name: r.name, ip: primaryIp(r) },
         profiles: profiles.map(p => p.name || p['name']).filter(Boolean),
         total:    mapped.length,
         online:   mapped.filter(s => s.isOnline).length,
@@ -672,9 +806,10 @@ router.post('/:id/import', async (req, res) => {
     }
 
     const r  = await prisma.router.findUniqueOrThrow({
-      where: { id: routerId }
+      where:   { id: routerId },
+      include: ROUTER_INCLUDE
     });
-    const mk = new MikrotikService(r);
+    const mk = buildMikrotikService(r);
 
     // Read from MikroTik (GET only)
     let secrets = [];
@@ -726,8 +861,8 @@ router.post('/:id/import', async (req, res) => {
               status: (secret['disabled'] === 'true' || 
                        secret['disabled'] === true)
                         ? 'SUSPENDED' : 'ACTIVE',
-              notes: `Importado desde MikroTik "${r.name}" (${r.ipAddress}) ` +
-                     `el ${new Date().toLocaleDateString('es-CO')}` 
+              notes: `Importado desde MikroTik "${r.name}" (${primaryIp(r)}) ` +
+                     `el ${new Date().toLocaleDateString('es-CO')}`
             }
           });
 

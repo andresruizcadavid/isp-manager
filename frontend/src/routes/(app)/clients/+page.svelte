@@ -1028,7 +1028,7 @@
           <select id="imp-router" bind:value={importRouterId} class="select">
             <option value="">Seleccionar router...</option>
             {#each routers as r}
-              <option value={String(r.id)}>{r.name} — {r.ipAddress}</option>
+              <option value={String(r.id)}>{r.name} — {r.routes?.[0]?.ip ?? '—'}</option>
             {/each}
           </select>
         </div>

@@ -141,7 +141,7 @@
           {#each routers.slice(0, 5) as r}
             <tr>
               <td><a href="/mikrotik/routers/{r.id}" class="font-medium text-slate-900 hover:text-brand-800">{r.name}</a></td>
-              <td class="font-mono text-xs text-slate-600">{r.ipAddress}</td>
+              <td class="font-mono text-xs text-slate-600">{r.routes?.[0]?.ip ?? '—'}</td>
               <td class="text-slate-600 text-sm">{r.location || '—'}</td>
               <td class="text-center">{r._count?.mikrotikAccounts || 0}</td>
               <td class="text-slate-500 text-xs">{fmtDate(r.lastSyncAt)}</td>

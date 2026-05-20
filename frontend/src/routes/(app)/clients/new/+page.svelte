@@ -369,7 +369,7 @@
                     {#if zone.router}
                       <div class="text-[11px] text-slate-500 mt-1 truncate">
                         📡 <span class="font-medium">{zone.router.name}</span>
-                        <span class="font-mono text-slate-400">— {zone.router.ipAddress}</span>
+                        <span class="font-mono text-slate-400">— {(zone.router.routes?.[0]?.ip ?? '—')}</span>
                       </div>
                     {/if}
                     <div class="text-[11px] text-slate-400 mt-0.5">
@@ -435,7 +435,7 @@
               {#if selectedZone.router}
                 <div class="text-[11px] text-slate-500 mt-0.5">
                   📡 Router <span class="font-medium text-slate-700">{selectedZone.router.name}</span>
-                  <span class="font-mono text-slate-400">— {selectedZone.router.ipAddress}</span>
+                  <span class="font-mono text-slate-400">— {selectedZone.router.routes?.[0]?.ip ?? '—'}</span>
                 </div>
               {/if}
             </div>

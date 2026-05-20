@@ -56,7 +56,19 @@ router.get('/', async (req, res) => {
       where,
       include: {
         _count: { select: { clients: true } },
-        router: { select: { id: true, name: true, ipAddress: true } }
+        router: {
+          select: {
+            id:     true,
+            name:   true,
+            status: true,
+            // Routes ordered by priority so the UI can pull routes[0].ip as
+            // the primary uplink without sorting client-side.
+            routes: {
+              select:  { id: true, ip: true, priority: true, status: true },
+              orderBy: { priority: 'asc' }
+            }
+          }
+        }
       },
       orderBy: { name: 'asc' }
     });
@@ -83,7 +95,19 @@ router.post('/', validateBody(zoneSchema), async (req, res) => {
     }
     const zone = await prisma.zone.create({
       data: toPrismaData(req.body),
-      include: { router: { select: { id: true, name: true, ipAddress: true } } }
+      include: { router: {
+          select: {
+            id:     true,
+            name:   true,
+            status: true,
+            // Routes ordered by priority so the UI can pull routes[0].ip as
+            // the primary uplink without sorting client-side.
+            routes: {
+              select:  { id: true, ip: true, priority: true, status: true },
+              orderBy: { priority: 'asc' }
+            }
+          }
+        } }
     });
     res.status(201).json({ success: true, data: zone });
   } catch (e) {
@@ -107,7 +131,19 @@ router.put('/:id', validateBody(zoneSchema.partial()), async (req, res) => {
     const zone = await prisma.zone.update({
       where: { id: Number(req.params.id) },
       data: toPrismaData(req.body),
-      include: { router: { select: { id: true, name: true, ipAddress: true } } }
+      include: { router: {
+          select: {
+            id:     true,
+            name:   true,
+            status: true,
+            // Routes ordered by priority so the UI can pull routes[0].ip as
+            // the primary uplink without sorting client-side.
+            routes: {
+              select:  { id: true, ip: true, priority: true, status: true },
+              orderBy: { priority: 'asc' }
+            }
+          }
+        } }
     });
     res.json({ success: true, data: zone });
   } catch (e) {

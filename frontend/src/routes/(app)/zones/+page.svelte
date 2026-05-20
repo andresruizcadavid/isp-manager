@@ -193,7 +193,7 @@
               <div class="inline-flex items-center gap-1.5 text-xs text-slate-600">
                 <span class="text-slate-400">📡 Router:</span>
                 <span class="font-medium text-slate-800">{zone.router.name}</span>
-                <span class="font-mono text-slate-500">— {zone.router.ipAddress}</span>
+                <span class="font-mono text-slate-500">— {zone.router.routes?.[0]?.ip ?? '—'}</span>
               </div>
             {:else}
               <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md
@@ -304,7 +304,7 @@
           <option value="" disabled>Seleccionar router...</option>
           {#each routers as r (r.id)}
             <option value={String(r.id)}>
-              {r.name} — {r.ipAddress}{r.apiPort && r.apiPort !== 80 ? `:${r.apiPort}` : ''}
+              {r.name} — {r.routes?.[0]?.ip ?? '—'}{r.apiPort && r.apiPort !== 80 ? `:${r.apiPort}` : ''}
             </option>
           {/each}
         </select>

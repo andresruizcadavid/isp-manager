@@ -7,6 +7,7 @@ export const routersApi = {
   remove:        (id)       => api.delete(`/mikrotik/routers/${id}`),
   sync:          (id)       => api.post(`/mikrotik/routers/${id}/sync`),
   testConn:      (id)       => api.post(`/mikrotik/routers/${id}/test`),
+  testRoutes:    (id)       => api.post(`/mikrotik/routers/${id}/test-routes`),
   testCredentials: (creds)  => api.post('/mikrotik/routers/test', creds),
   availableIps:  (id)       => api.get(`/mikrotik/routers/${id}/available-ips`),
   pppoeProfiles:        (id)       => api.get(`/mikrotik/routers/${id}/profiles`),

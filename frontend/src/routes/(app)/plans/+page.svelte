@@ -192,7 +192,7 @@
   <select id="router-pick" bind:value={routerId} class="select max-w-xs">
     <option value="">— Selecciona router para ver sync —</option>
     {#each routers as r}
-      <option value={String(r.id)}>{r.name} — {r.ipAddress}</option>
+      <option value={String(r.id)}>{r.name} — {r.routes?.[0]?.ip ?? '—'}</option>
     {/each}
   </select>
   {#if routerId}

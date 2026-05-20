@@ -23,16 +23,25 @@ function isTransientNetError(err) {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 export class MikrotikService {
-  constructor(router) {
-    if (!router?.ipAddress) {
-      throw new Error('MikrotikService requires a router with ipAddress');
+  /**
+   * Accepts an explicit endpoint config so the caller decides which IP to
+   * dial. Use `buildMikrotikService(router)` or `getMikrotikService(routerId)`
+   * if you want the failover resolver to pick the IP for you.
+   *
+   * @param {{ ip:string, apiPort?:number, username:string, password:string, routerName?:string, routerId?:number }} cfg
+   */
+  constructor(cfg) {
+    if (!cfg?.ip) {
+      throw new Error('MikrotikService requires an explicit { ip, ... } config');
     }
-    this.router = router;
-    const port = router.apiPort && router.apiPort !== 80 ? `:${router.apiPort}` : ':80';
-    this.baseUrl = `http://${router.ipAddress}${port}/rest`;
+    this.routerId   = cfg.routerId ?? null;
+    this.routerName = cfg.routerName ?? null;
+    this.ip         = cfg.ip;
+    const port = cfg.apiPort && cfg.apiPort !== 80 ? `:${cfg.apiPort}` : ':80';
+    this.baseUrl = `http://${cfg.ip}${port}/rest`;
     this.headers = {
       'Authorization': 'Basic ' + Buffer.from(
-        `${router.username}:${router.password}`
+        `${cfg.username ?? ''}:${cfg.password ?? ''}`
       ).toString('base64'),
       'Content-Type': 'application/json'
     };
@@ -347,15 +356,54 @@ export class MikrotikService {
 // -----------------------------------------------------------------------------
 
 /**
+ * Picks the IP to dial from a router-with-routes object: first route with
+ * status=ONLINE in priority order, falling back to the first route by
+ * priority if none have been probed (or none are currently up — best effort
+ * so a freshly-created or fully-offline router still attempts the call and
+ * surfaces the network error to the caller).
+ *
+ * Returns { ip, route } or throws if the router has no routes at all.
+ */
+export function pickActiveRoute(routerWithRoutes) {
+  const routes = (routerWithRoutes?.routes ?? []).slice()
+    .sort((a, b) => a.priority - b.priority);
+  if (routes.length === 0) {
+    throw new Error(`Router '${routerWithRoutes?.name ?? '?'}' no tiene rutas configuradas`);
+  }
+  const online = routes.find(r => r.status === 'ONLINE');
+  const chosen = online ?? routes[0];
+  return { ip: chosen.ip, route: chosen };
+}
+
+/**
+ * Construye un MikrotikService a partir de un router-con-routes ya cargado.
+ * No hace I/O. Usa pickActiveRoute para decidir el IP.
+ */
+export function buildMikrotikService(routerWithRoutes) {
+  const { ip } = pickActiveRoute(routerWithRoutes);
+  return new MikrotikService({
+    ip,
+    apiPort:    routerWithRoutes.apiPort,
+    username:   routerWithRoutes.username,
+    password:   routerWithRoutes.password,
+    routerId:   routerWithRoutes.id,
+    routerName: routerWithRoutes.name
+  });
+}
+
+/**
  * Devuelve un MikrotikService configurado para el router indicado.
- * Lanza si el router no existe o está inactivo.
+ * Lanza si el router no existe, está inactivo o no tiene rutas.
  */
 export async function getMikrotikService(routerId) {
   if (!routerId) throw new Error('getMikrotikService: routerId requerido');
-  const router = await prisma.router.findUnique({ where: { id: Number(routerId) } });
+  const router = await prisma.router.findUnique({
+    where:   { id: Number(routerId) },
+    include: { routes: { orderBy: { priority: 'asc' } } }
+  });
   if (!router) throw new Error(`Router id=${routerId} no existe`);
   if (!router.isActive) throw new Error(`Router '${router.name}' está desactivado`);
-  return new MikrotikService(router);
+  return buildMikrotikService(router);
 }
 
 /**
@@ -365,23 +413,29 @@ export async function getMikrotikService(routerId) {
 export async function getMikrotikServiceForClient(clientId) {
   if (!clientId) throw new Error('getMikrotikServiceForClient: clientId requerido');
   const account = await prisma.mikrotikAccount.findUnique({
-    where: { clientId },
-    include: { router: true }
+    where:   { clientId },
+    include: { router: { include: { routes: { orderBy: { priority: 'asc' } } } } }
   });
   if (!account) throw new Error(`Cliente ${clientId} no tiene cuenta Mikrotik vinculada`);
   if (!account.router) throw new Error(`Cuenta Mikrotik del cliente ${clientId} no tiene router`);
   if (!account.router.isActive) {
     throw new Error(`Router '${account.router.name}' está desactivado`);
   }
-  return { service: new MikrotikService(account.router), account };
+  return { service: buildMikrotikService(account.router), account };
 }
 
 /**
  * Prueba credenciales contra un router antes de guardarlo en BD.
  * No requiere que el router exista.
  */
-export async function testRouterCredentials({ ipAddress, apiPort = 80, username, password }) {
-  const tmp = new MikrotikService({ ipAddress, apiPort, username, password });
+export async function testRouterCredentials({ ip, ipAddress, apiPort = 80, username, password }) {
+  const tmp = new MikrotikService({
+    // Acepta `ip` (nuevo) o `ipAddress` (legacy callers que no se hayan migrado).
+    ip: ip ?? ipAddress,
+    apiPort,
+    username,
+    password
+  });
   return tmp.testConnection();
 }
 

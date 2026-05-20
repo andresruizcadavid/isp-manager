@@ -59,29 +59,24 @@ async function main() {
   const router1 = await prisma.router.create({
     data: {
       name: 'Router Principal',
-      ipAddress: '192.168.1.1',
       apiPort: 80,
-      apiSslPort: 443,
-      useSSL: false,
       username: 'admin',
       password: 'admin123',
       location: 'Torre Centro',
       model: 'CCR1036',
+      routes: { create: [{ ip: '192.168.1.1', priority: 1, label: 'Enlace principal' }] }
     },
   });
 
   const router2 = await prisma.router.create({
     data: {
       name: 'Router Secundario',
-      ipAddress: '192.168.2.1',
       apiPort: 80,
-      apiSslPort: 443,
-      useSSL: false,
       username: 'admin',
       password: 'admin123',
       location: 'Torre Norte',
       model: 'RB4011',
-    },
+      routes: { create: [{ ip: '192.168.2.1', priority: 1, label: 'Enlace principal' }] }
   });
 
   console.log('✅ Created routers:', [router1.name, router2.name].join(', '));

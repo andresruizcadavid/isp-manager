@@ -2,29 +2,49 @@
   import { goto } from '$app/navigation';
   import { routersApi } from '$lib/api/routers.api.js';
   import {
-    ArrowLeft, Save, Power, Server, User, Loader2, AlertCircle, CheckCircle2
+    ArrowLeft, Save, Power, Server, User, Loader2, AlertCircle, CheckCircle2,
+    Activity
   } from 'lucide-svelte';
 
   let saving = false;
   let testing = false;
   let error = '';
   let success = '';
+  // Per-route ping results, keyed by row index (0..2). { status, latency }.
+  let routeResults = [null, null, null];
 
   let form = {
     name: '',
-    ipAddress: '',
     apiPort: 80,
     username: 'admin',
     password: '',
     location: '',
     model: '',
     description: '',
-    isActive: true
+    isActive: true,
+    // 3 rows for the failover routes — only `ip` is bound, label is auto-derived
+    // server-side ("Enlace principal" / "Alternativa 1" / "Alternativa 2").
+    routes: [
+      { ip: '', label: 'Enlace principal' },
+      { ip: '', label: 'Alternativa 1' },
+      { ip: '', label: 'Alternativa 2' }
+    ]
   };
+
+  const ROUTE_LABELS = ['Principal', 'Alternativa 1', 'Alternativa 2'];
+
+  function nonEmptyRoutes() {
+    return form.routes.filter(r => r.ip.trim());
+  }
 
   function validate() {
     if (!form.name.trim()) return 'El nombre es requerido';
-    if (!form.ipAddress.trim()) return 'La dirección IP es requerida';
+    const routes = nonEmptyRoutes();
+    if (routes.length === 0) return 'Al menos una IP es requerida (la principal)';
+    const ipRe = /^(\d{1,3}\.){3}\d{1,3}$/;
+    for (const r of routes) {
+      if (!ipRe.test(r.ip.trim())) return `IP inválida: ${r.ip}`;
+    }
     if (!form.username.trim()) return 'El usuario es requerido';
     if (!form.password) return 'La contraseña es requerida para crear el router';
     return null;
@@ -38,14 +58,17 @@
     try {
       const created = await routersApi.create({
         name: form.name.trim(),
-        ipAddress: form.ipAddress.trim(),
         apiPort: Number(form.apiPort) || 80,
         username: form.username.trim(),
         password: form.password,
         location: form.location.trim() || null,
         model: form.model.trim() || null,
         description: form.description.trim() || null,
-        isActive: form.isActive
+        isActive: form.isActive,
+        routes: nonEmptyRoutes().map(r => ({
+          ip: r.ip.trim(),
+          label: r.label
+        }))
       });
       success = 'Router creado correctamente';
       // Redirect to the edit page after a short pause so the user sees feedback.
@@ -55,25 +78,45 @@
     } finally { saving = false; }
   }
 
-  async function testConnection() {
+  // Live-ping every filled route via the credentials test endpoint. We can't
+  // hit /test-routes (no router id yet) so we re-use /test per row.
+  async function testRoutesNow() {
     error = ''; success = '';
-    if (!form.ipAddress.trim()) { error = 'Ingresa la IP antes de probar'; return; }
+    const routes = nonEmptyRoutes();
+    if (routes.length === 0) { error = 'Ingresa al menos una IP para probar'; return; }
     if (!form.password) { error = 'Ingresa la contraseña antes de probar'; return; }
     testing = true;
+    // Clear previous results
+    routeResults = form.routes.map(() => null);
     try {
-      const result = await routersApi.testCredentials({
-        ipAddress: form.ipAddress.trim(),
-        apiPort: Number(form.apiPort) || 80,
-        username: form.username.trim() || 'admin',
-        password: form.password
-      });
-      const identity = result?.identity || result?.data?.identity;
-      success = identity
-        ? `Conexión exitosa. Identidad: ${identity}`
-        : 'Conexión exitosa';
-    } catch (e) {
-      error = e.message || 'Error de conexión';
+      // Per-row probes in parallel. The credentials test does an HTTP request
+      // to the MikroTik REST API — if it answers, the IP is alive AND the
+      // credentials work for that uplink.
+      await Promise.all(form.routes.map(async (r, idx) => {
+        if (!r.ip.trim()) return;
+        const t0 = Date.now();
+        try {
+          await routersApi.testCredentials({
+            ip: r.ip.trim(),
+            apiPort: Number(form.apiPort) || 80,
+            username: form.username.trim() || 'admin',
+            password: form.password
+          });
+          routeResults[idx] = { status: 'ONLINE', latency: Date.now() - t0 };
+        } catch {
+          routeResults[idx] = { status: 'OFFLINE', latency: null };
+        }
+        routeResults = [...routeResults];
+      }));
+      success = 'Prueba completada';
     } finally { testing = false; }
+  }
+
+  function routeStatusFor(idx) {
+    const r = routeResults[idx];
+    if (!r) return { label: 'Sin probar', cls: 'text-slate-400' };
+    if (r.status === 'ONLINE')  return { label: `Online · ${r.latency}ms`, cls: 'text-emerald-600' };
+    return { label: 'Offline', cls: 'text-red-600' };
   }
 </script>
 
@@ -86,17 +129,17 @@
     </a>
     <div>
       <h1 class="page-title">Nuevo router</h1>
-      <p class="page-subtitle">Configura un nuevo router MikroTik</p>
+      <p class="page-subtitle">Configura un nuevo router MikroTik con rutas de failover</p>
     </div>
   </div>
   <div class="flex items-center gap-2">
-    <button class="btn-secondary" on:click={testConnection} disabled={testing || saving}>
+    <button class="btn-secondary" on:click={testRoutesNow} disabled={testing || saving}>
       {#if testing}
         <Loader2 size={16} class="animate-spin" />
       {:else}
         <Power size={16} />
       {/if}
-      Probar conexión
+      Probar rutas
     </button>
     <button class="btn-primary" on:click={createRouter} disabled={saving || testing}>
       {#if saving}
@@ -144,10 +187,6 @@
           </label>
         </div>
         <div>
-          <label class="label" for="rn-ip">Dirección IP <span class="text-red-500">*</span></label>
-          <input id="rn-ip" type="text" class="input font-mono" bind:value={form.ipAddress} placeholder="192.168.1.1" />
-        </div>
-        <div>
           <label class="label" for="rn-port">Puerto API</label>
           <input id="rn-port" type="number" class="input" bind:value={form.apiPort} placeholder="80" />
         </div>
@@ -162,6 +201,37 @@
         <div class="md:col-span-2">
           <label class="label" for="rn-desc">Descripción</label>
           <textarea id="rn-desc" class="textarea" bind:value={form.description} placeholder="Descripción opcional..." rows="2"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Rutas de Acceso (failover) -->
+    <div class="card">
+      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
+        <Activity size={16} class="text-brand-800" />
+        <h3 class="font-semibold text-slate-700">Rutas de Acceso</h3>
+      </div>
+      <div class="p-5">
+        <p class="text-xs text-slate-500 mb-3">
+          Define hasta 3 IPs. El sistema usará siempre la primera disponible (failover automático).
+        </p>
+        <div class="space-y-2">
+          {#each form.routes as r, idx}
+            {@const ss = routeStatusFor(idx)}
+            <div class="flex items-center gap-3">
+              <span class="inline-flex items-center justify-center min-w-[88px] px-2 py-1 rounded text-[11px] font-medium
+                           {idx === 0 ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}">
+                {ROUTE_LABELS[idx]}
+              </span>
+              <input
+                type="text"
+                class="input font-mono flex-1"
+                bind:value={r.ip}
+                placeholder={idx === 0 ? 'IP principal — ej: 10.2.2.2' : `IP alternativa ${idx} (opcional)`}
+              />
+              <span class="text-xs font-medium {ss.cls} min-w-[110px]">● {ss.label}</span>
+            </div>
+          {/each}
         </div>
       </div>
     </div>
@@ -183,28 +253,6 @@
         </div>
       </div>
     </div>
-
-    <!-- Probar conexión -->
-    <div class="card">
-      <div class="px-5 py-3 border-b border-slate-100 flex items-center gap-2">
-        <Power size={16} class="text-brand-800" />
-        <h3 class="font-semibold text-slate-700">Prueba de Conexión</h3>
-      </div>
-      <div class="p-5">
-        <p class="text-sm text-slate-500 mb-3">
-          Verifica que las credenciales y la IP funcionan antes de crear el router.
-          La conexión se hace contra <code class="px-1 py-0.5 bg-slate-100 rounded text-xs">/system/identity</code> vía la REST API de MikroTik.
-        </p>
-        <button class="btn-secondary" on:click={testConnection} disabled={testing || saving}>
-          {#if testing}
-            <Loader2 size={16} class="animate-spin" />
-          {:else}
-            <Power size={16} />
-          {/if}
-          Probar conexión al router
-        </button>
-      </div>
-    </div>
   </div>
 
   <!-- Sidebar -->
@@ -220,6 +268,9 @@
           <li>Usuario con permisos de lectura sobre <code>/ppp/secret</code> y <code>/system</code>.</li>
           <li>Puerto 80 (HTTP) o el que esté configurado en <code>IP &gt; Services</code>.</li>
         </ul>
+        <p class="pt-2 border-t border-slate-100">
+          Si configuras 2+ rutas, el sistema seguirá operando aunque la principal caiga — usará la siguiente disponible automáticamente.
+        </p>
       </div>
     </div>
   </div>
