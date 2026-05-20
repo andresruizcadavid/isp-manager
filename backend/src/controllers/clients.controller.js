@@ -55,9 +55,15 @@ class ClientsController {
             include: {
               router: {
                 select: {
-                  id: true,
-                  name: true,
-                  ipAddress: true
+                  id:     true,
+                  name:   true,
+                  status: true,
+                  // Routes by priority so the UI shows the primary uplink IP
+                  // where the old `ipAddress` field used to be rendered.
+                  routes: {
+                    select:  { id: true, ip: true, priority: true, status: true },
+                    orderBy: { priority: 'asc' }
+                  }
                 }
               }
             }
