@@ -25,7 +25,12 @@
   let form = {
     fullName: '', documentType: 'CC', documentNumber: '',
     email: '', phone: '', address: '', neighborhood: '',
-    contractDate: '', notes: '',
+    city: '',
+    contractDate: '', installationDate: '',
+    // Per-client monthly fee override. Empty / 0 ⇒ inherit from plan.
+    // Stored in COP (the backend keeps cents but we display whole pesos).
+    monthlyFee: '',
+    notes: '',
     planId: '',
     mikrotik: {
       username: '', password: '', remoteAddress: '',
@@ -225,8 +230,15 @@
         phone:          form.phone ? `+57${form.phone}` : '',
         address:        form.address,
         neighborhood:   form.neighborhood,
+        city:           form.city || undefined,         // controller falls back to COMPANY_CITY
         zoneId:         selectedZoneId,
-        contractDate:   form.contractDate || null,
+        contractDate:   form.contractDate     || null,
+        installationDate: form.installationDate || null,
+        // Send monthlyFee only when the operator filled it; otherwise the
+        // server keeps the plan's price as the source of truth.
+        monthlyFee:     form.monthlyFee !== '' && Number(form.monthlyFee) > 0
+                          ? Math.round(Number(form.monthlyFee) * 100)   // pesos → cents
+                          : undefined,
         notes:          form.notes,
         planId:         form.planId || null,
         // Note: no routerId — server resolves from zone.
@@ -511,8 +523,25 @@
         </div>
 
         <div>
+          <label for="city" class="label">
+            Ciudad
+            <span class="text-slate-400 text-xs font-normal ml-1">opcional</span>
+          </label>
+          <input id="city" type="text" bind:value={form.city}
+                 placeholder="Cali" class="input"/>
+        </div>
+
+        <div>
           <label for="contractDate" class="label">Fecha de Contrato</label>
           <input id="contractDate" type="date" bind:value={form.contractDate} class="input"/>
+        </div>
+
+        <div>
+          <label for="installationDate" class="label">
+            Fecha de Instalación
+            <span class="text-slate-400 text-xs font-normal ml-1">opcional</span>
+          </label>
+          <input id="installationDate" type="date" bind:value={form.installationDate} class="input"/>
         </div>
 
         <div class="md:col-span-2">
@@ -540,9 +569,27 @@
             <option value="">Seleccionar plan...</option>
             {#each plans as p}
               <option value={p.id}>{p.name} — {p.downloadSpeed}↓/{p.uploadSpeed}↑ Mbps —
-                ${p.monthlyPrice?.toLocaleString('es-CO')} COP</option>
+                ${(p.monthlyPrice / 100)?.toLocaleString('es-CO')} COP</option>
             {/each}
           </select>
+        </div>
+
+        <div class="md:col-span-2">
+          <label for="monthlyFee" class="label">
+            Precio mensual personalizado
+            <span class="text-slate-400 text-xs font-normal ml-1">
+              (opcional — sobreescribe el precio del plan)
+            </span>
+          </label>
+          <div class="flex">
+            <span class="inline-flex items-center px-3 rounded-l-lg
+                         border border-r-0 border-slate-200
+                         bg-slate-50 text-slate-700 text-sm font-mono">COP</span>
+            <input id="monthlyFee" type="number" min="0" step="1000"
+                   bind:value={form.monthlyFee}
+                   placeholder="Dejar vacío para heredar del plan"
+                   class="input flex-1 rounded-l-none font-mono"/>
+          </div>
         </div>
 
         <div>

@@ -1,5 +1,10 @@
 version: '3.8'
 
+# Production compose. All secrets are interpolated from the host `.env`
+# file (or the shell). `${VAR:?msg}` makes Compose refuse to start if a
+# required secret is missing — no more silently-deployed default JWTs.
+# Non-secret defaults use `${VAR:-default}` so dev still works out of the box.
+
 services:
   # PostgreSQL Database
   postgres:
@@ -7,9 +12,9 @@ services:
     container_name: isp-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: isp_manager
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
+      POSTGRES_DB: ${POSTGRES_DB:-isp_manager}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — set it in .env}
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -19,7 +24,7 @@ services:
     networks:
       - isp-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -30,7 +35,7 @@ services:
     image: redis:7-alpine
     container_name: isp-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass redis123
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD is required — set it in .env}
     volumes:
       - redis_data:/data
     ports:
@@ -52,39 +57,50 @@ services:
     container_name: isp-backend
     restart: unless-stopped
     environment:
-      NODE_ENV: production
-      DATABASE_URL: "postgresql://postgres:postgres123@postgres:5432/isp_manager"
-      REDIS_URL: "redis://:redis123@redis:6379"
-      JWT_SECRET: "change_this_secret_min_32_chars_in_production_2024"
-      JWT_EXPIRES_IN: "8h"
-      FRONTEND_URL: "http://localhost:3000"
-      # SMTP Configuration
-      SMTP_HOST: "smtp.gmail.com"
-      SMTP_PORT: 587
-      SMTP_USER: "your-email@gmail.com"
-      SMTP_PASS: "your-app-password"
-      # Company Information
-      COMPANY_NAME: "Mi ISP"
-      COMPANY_NIT: "123456789-0"
-      COMPANY_CITY: "Cali"
-      COMPANY_ADDRESS: "Cra 123 #45-67"
-      COMPANY_PHONE: "+57 2 555 1234"
-      COMPANY_EMAIL: "contacto@miisp.com"
-      # Wompi Configuration
-      WOMPI_API_URL: "https://api.wompi.co/v1"
-      WOMPI_PUBLIC_KEY: "pub_prod_..."
-      WOMPI_PRIVATE_KEY: "prv_prod_..."
-      WOMPI_EVENTS_KEY: "events_..."
-      # Mikrotik Configuration
-      MIKROTIK_HOST: "192.168.1.1"
-      MIKROTIK_PORT: 8728
-      MIKROTIK_USERNAME: "admin"
-      MIKROTIK_PASSWORD: "mikrotik123"
-      # Notification Services
-      TWILIO_ACCOUNT_SID: "AC..."
-      TWILIO_AUTH_TOKEN: "..."
-      TWILIO_PHONE: "+1234567890"
-      WHATSAPP_PHONE: "+573001234567"
+      NODE_ENV: ${NODE_ENV:-production}
+      # Connection strings — interpolated from postgres / redis secrets above.
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-isp_manager}"
+      REDIS_URL: "redis://:${REDIS_PASSWORD}@redis:6379"
+      # JWT — REQUIRED. Generate with `openssl rand -base64 48`.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required — generate one with `openssl rand -base64 48`}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # SMTP — required for invoice emails / password resets.
+      SMTP_HOST: ${SMTP_HOST:?SMTP_HOST is required}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:?SMTP_USER is required}
+      SMTP_PASS: ${SMTP_PASS:?SMTP_PASS is required}
+      # Company branding (non-secret).
+      COMPANY_NAME: ${COMPANY_NAME:-Mi ISP}
+      COMPANY_NIT: ${COMPANY_NIT:-000000000-0}
+      COMPANY_CITY: ${COMPANY_CITY:-Cali}
+      COMPANY_ADDRESS: ${COMPANY_ADDRESS:-Sin dirección}
+      COMPANY_PHONE: ${COMPANY_PHONE:-+57 2 000 0000}
+      COMPANY_EMAIL: ${COMPANY_EMAIL:-noreply@example.com}
+      # Wompi (Colombia payment gateway).
+      WOMPI_API_URL: ${WOMPI_API_URL:-https://api.wompi.co/v1}
+      WOMPI_PUBLIC_KEY: ${WOMPI_PUBLIC_KEY:?WOMPI_PUBLIC_KEY is required}
+      WOMPI_PRIVATE_KEY: ${WOMPI_PRIVATE_KEY:?WOMPI_PRIVATE_KEY is required}
+      WOMPI_EVENTS_KEY: ${WOMPI_EVENTS_KEY:?WOMPI_EVENTS_KEY is required for webhook signature verification}
+      # MikroTik — optional bootstrap. Per-router config lives in the DB.
+      MIKROTIK_HOST: ${MIKROTIK_HOST:-}
+      MIKROTIK_PORT: ${MIKROTIK_PORT:-8728}
+      MIKROTIK_USER: ${MIKROTIK_USER:-}
+      MIKROTIK_PASSWORD: ${MIKROTIK_PASSWORD:-}
+      # WhatsApp Cloud (Meta) — optional bootstrap. Real config in WhatsAppConfig table.
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
+      WHATSAPP_PHONE_ID: ${WHATSAPP_PHONE_ID:-}
+      WHATSAPP_VERSION: ${WHATSAPP_VERSION:-v18.0}
+      # Twilio — optional scaffold (SMS channel not wired yet).
+      TWILIO_SID: ${TWILIO_SID:-}
+      TWILIO_AUTH: ${TWILIO_AUTH:-}
+      TWILIO_PHONE: ${TWILIO_PHONE:-}
+      # Uploads
+      UPLOADS_PATH: ${UPLOADS_PATH:-/app/uploads}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-10485760}
+      # Rate limiting (defaults: 100 req / 15 min per IP).
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
     ports:
       - "3001:3001"
     depends_on:
@@ -126,8 +142,8 @@ services:
     container_name: isp-pgadmin
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: "admin@isp-manager.com"
-      PGADMIN_DEFAULT_PASSWORD: "admin123"
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@isp-manager.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD is required}
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
     ports:

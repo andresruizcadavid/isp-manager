@@ -25,16 +25,19 @@ const envSchema = z.object({
   SMTP_USER: z.string().min(1),
   SMTP_PASS: z.string().min(1),
   
-  // WhatsApp
-  WHATSAPP_TOKEN: z.string().min(1),
-  WHATSAPP_PHONE_ID: z.string().min(1),
+  // WhatsApp — real credentials live in the WhatsAppConfig DB row and are
+  // hot-reloaded from there (so the operator can rotate tokens without a
+  // restart). These env vars are optional bootstrap fallbacks only.
+  WHATSAPP_TOKEN: z.string().optional(),
+  WHATSAPP_PHONE_ID: z.string().optional(),
   WHATSAPP_VERSION: z.string().default('v18.0'),
-  
-  // Twilio
-  TWILIO_SID: z.string().min(1),
-  TWILIO_AUTH: z.string().min(1),
-  TWILIO_PHONE: z.string().min(1),
-  
+
+  // Twilio — scaffold only. SMS channel not implemented yet; the
+  // notification service no-ops when these are missing.
+  TWILIO_SID: z.string().optional(),
+  TWILIO_AUTH: z.string().optional(),
+  TWILIO_PHONE: z.string().optional(),
+
   // Company
   COMPANY_NAME: z.string().min(1),
   COMPANY_NIT: z.string().min(1),
@@ -42,15 +45,17 @@ const envSchema = z.object({
   COMPANY_ADDRESS: z.string().min(1),
   COMPANY_PHONE: z.string().min(1),
   COMPANY_EMAIL: z.string().email(),
-  
+
   // File Uploads
   UPLOADS_PATH: z.string().default('./uploads'),
   MAX_FILE_SIZE: z.string().transform(Number).default('10485760'),
-  
-  // Mikrotik
-  MIKROTIK_HOST: z.string().min(1),
-  MIKROTIK_USER: z.string().min(1),
-  MIKROTIK_PASSWORD: z.string().min(1),
+
+  // Mikrotik — global default kept for legacy callers. The canonical
+  // per-router config now lives in the `routers` table, so these are
+  // optional and only consumed when a code path explicitly asks for them.
+  MIKROTIK_HOST: z.string().optional(),
+  MIKROTIK_USER: z.string().optional(),
+  MIKROTIK_PASSWORD: z.string().optional(),
   MIKROTIK_PORT: z.string().transform(Number).default('8728'),
   
   // Rate Limiting

@@ -1,7 +1,9 @@
 import { prisma } from '../server.js';
+import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { notificationService } from '../services/notification.service.js';
 import { getMikrotikService, getMikrotikServiceForClient } from '../services/mikrotik.service.js';
+import { generateToken as generateUpdateToken, dispatchLinkToClient } from '../services/client-update-token.service.js';
 
 const MOROSO_LIST = 'Moroso';
 
@@ -170,6 +172,12 @@ class ClientsController {
   createClient = asyncHandler(async (req, res) => {
     const clientData = req.body;
 
+    // Derive top-level Client.status from the mikrotik sub-form so the two
+    // sides don't diverge. If the operator marks the PPPoE as SUSPENDED on
+    // creation, the Client row must also be SUSPENDED.
+    const mkSubStatus = clientData.mikrotik?.status;
+    const initialClientStatus = mkSubStatus === 'SUSPENDED' ? 'SUSPENDED' : 'ACTIVE';
+
     // Map frontend fields to database fields. Phone is expected to come
     // already formatted from the frontend (e.g. "+573001234567").
     const mappedData = {
@@ -178,13 +186,19 @@ class ClientsController {
       phone: clientData.phone || '',
       address: clientData.address || '',
       neighborhood: clientData.neighborhood || null,
-      city: 'Cali',
+      // City: trust the form, fall back to the company's home city, then to
+      // a hard default so the NOT-NULL constraint never trips.
+      city: clientData.city?.trim() || env.COMPANY_CITY || 'Cali',
       documentType: clientData.documentType,
       documentNumber: clientData.documentNumber || null,
-      status: 'ACTIVE',
+      status: initialClientStatus,
       planId: clientData.planId || null,
       zoneId: clientData.zoneId ? Number(clientData.zoneId) : null,
       contractDate: clientData.contractDate ? new Date(clientData.contractDate) : null,
+      installationDate: clientData.installationDate ? new Date(clientData.installationDate) : null,
+      monthlyFee: Number.isFinite(Number(clientData.monthlyFee)) && Number(clientData.monthlyFee) > 0
+        ? Math.round(Number(clientData.monthlyFee))
+        : 0,
       notes: clientData.notes || null,
     };
 
@@ -421,7 +435,16 @@ class ClientsController {
       client = await prisma.client.create({
         data: {
           ...mappedData,
-          serviceIp:     remoteAddress,
+          // Mirror the PPPoE / service fields on the Client row. These
+          // columns are duplicated with MikrotikAccount in the current
+          // schema (see README "Issues conocidos"); until the duplicates
+          // are dropped, keeping both sides in sync prevents reports and
+          // legacy queries that read Client.* from going blind on new rows.
+          pppoeUsername:  pppoeUsername,
+          pppoePassword:  mk.password,
+          serviceIp:      remoteAddress,
+          serviceLocalIp: mk.localAddress || null,
+          coordinates:    mk.coordinates  || null,
           mikrotikAccount: {
             create: {
               routerId:      resolvedRouterId,
@@ -576,6 +599,20 @@ class ClientsController {
       ...(updateData.notes          !== undefined && { notes: updateData.notes || null }),
       ...(updateData.contractDate   !== undefined && { contractDate: updateData.contractDate ? new Date(updateData.contractDate) : null }),
       ...(updateData.installationDate !== undefined && { installationDate: updateData.installationDate ? new Date(updateData.installationDate) : null }),
+      ...(updateData.monthlyFee     !== undefined && {
+        monthlyFee: Number.isFinite(Number(updateData.monthlyFee)) && Number(updateData.monthlyFee) >= 0
+          ? Math.round(Number(updateData.monthlyFee))
+          : 0
+      }),
+      // Mirror mikrotik sub-form fields onto the Client row's duplicated
+      // columns so both sides stay in sync. The MikrotikAccount upsert
+      // below still handles the canonical write; this only keeps the
+      // legacy Client.* columns from going stale.
+      ...(m?.username      !== undefined && { pppoeUsername:  m.username || null }),
+      ...(m?.password      !== undefined && m.password && { pppoePassword: m.password }),
+      ...(m?.remoteAddress !== undefined && { serviceIp:      (m.remoteAddress || '').split('/')[0] || null }),
+      ...(m?.localAddress  !== undefined && { serviceLocalIp: m.localAddress  || null }),
+      ...(m?.coordinates   !== undefined && { coordinates:    m.coordinates   || null }),
     };
 
     const ops = [
@@ -1219,6 +1256,53 @@ class ClientsController {
     res.json({
       success: true,
       data: result
+    });
+  });
+
+  // ── Self-service update token ──────────────────────────────────────
+  // Generates a single-use token and (optionally) dispatches the public
+  // link to the customer through the channels the operator picked.
+  // The public-facing GET/PUT/POST live in routes/public.client-updates.routes.js.
+  createUpdateToken = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { sendChannels = [], notifyChannels = [] } = req.body || {};
+
+    const client = await prisma.client.findUnique({
+      where: { id },
+      select: { id: true, name: true, email: true, phone: true }
+    });
+    if (!client) {
+      throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
+    }
+
+    // Persist the token row + audit who generated it (createdById).
+    const tokenRow = await generateUpdateToken({
+      clientId:       client.id,
+      createdById:    req.user?.id || null,
+      sendChannels,
+      notifyChannels
+    });
+
+    // Best-effort dispatch — a channel failing must NOT 500 the request.
+    // The operator gets the URL back regardless so they can copy-paste.
+    let dispatchResults = {};
+    try {
+      const d = await dispatchLinkToClient(tokenRow, client);
+      dispatchResults = d.results;
+    } catch (e) {
+      console.error('[clients.createUpdateToken] dispatch failed:', e.message);
+    }
+
+    res.status(201).json({
+      success: true,
+      data: {
+        token:     tokenRow.token,
+        publicUrl: tokenRow.publicUrl,
+        expiresAt: tokenRow.expiresAt,
+        sendChannels:   tokenRow.sendChannels,
+        notifyChannels: tokenRow.notifyChannels,
+        dispatch:  dispatchResults
+      }
     });
   });
 }

@@ -81,7 +81,8 @@ model User {
   updatedAt DateTime @updatedAt
 
   // Relations
-  sessions Session[]
+  sessions          Session[]
+  clientUpdateTokens ClientUpdateToken[]
 
   @@map("users")
 }
@@ -157,8 +158,47 @@ model Client {
   payments        Payment[]
   mikrotikAccount MikrotikAccount?
   evidencePhotos  ClientEvidencePhoto[]
+  updateTokens    ClientUpdateToken[]
 
   @@map("clients")
+}
+
+// Single-use, time-boxed token that grants a public URL the ability to
+// patch a whitelisted subset of a Client's fields (contact data + ID
+// document + evidence photos). Created by a technician/admin from
+// /clients/[id], sent to the customer over one or more channels
+// (Email/WhatsApp/Telegram). Status transitions:
+//   pending → used     when the customer submits the form
+//   pending → expired  when expiresAt < now() and a sweep marks it
+// Once used or expired the GET endpoint MUST refuse to load the form.
+model ClientUpdateToken {
+  id           String    @id @default(cuid())
+  clientId     String
+  // 32 random bytes encoded as base64url (≈43 chars). UNIQUE so lookups
+  // by token are O(1) via index and we never collide.
+  token        String    @unique
+  status       String    @default("pending") // pending | used | expired
+  expiresAt    DateTime
+  createdAt    DateTime  @default(now())
+  usedAt       DateTime?
+  // The technician/admin who generated the token. SetNull on user delete
+  // so we don't lose the audit row.
+  createdById  String?
+  // Channels picked by the operator when generating the token. Stored as
+  // string array to keep the API flexible (e.g., ["EMAIL","WHATSAPP"]).
+  sendChannels   String[] @default([])
+  notifyChannels String[] @default([])
+  // Captured on the first GET so the technician can spot suspicious use
+  // (e.g., a token opened from an unexpected IP / device).
+  ipAddress    String?
+  userAgent    String?
+
+  client    Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([clientId])
+  @@index([status, expiresAt])
+  @@map("client_update_tokens")
 }
 
 model ClientEvidencePhoto {

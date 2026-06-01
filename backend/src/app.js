@@ -22,12 +22,29 @@ import smtpRoutes from './routes/smtp.routes.js';
 import networkRoutes from './routes/network.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
 import whatsappRoutes, { webhookRouter as whatsappWebhookRouter } from './routes/whatsapp.routes.js';
+import publicClientUpdatesRoutes from './routes/public.client-updates.routes.js';
 
 const app = express();
 
 // ── Middleware ────────────────────────────────────────────
+// CORS allowlist: derived from FRONTEND_URL plus the local Vite dev origins
+// so a developer running `npm run dev` against a containerized backend isn't
+// blocked. Comma-separated additional origins via CORS_EXTRA_ORIGINS are
+// also honored so a staging/preview host can be added without a code change.
+const corsAllowlist = [
+  env.FRONTEND_URL,
+  'http://localhost:5173',
+  'http://localhost:5174',
+  ...(process.env.CORS_EXTRA_ORIGINS || '')
+    .split(',').map(s => s.trim()).filter(Boolean)
+];
 app.use(cors({
-  origin:      ['http://localhost:5173', 'http://localhost:5174'],
+  origin: (origin, cb) => {
+    // Allow same-origin / curl / health checks (no Origin header).
+    if (!origin) return cb(null, true);
+    if (corsAllowlist.includes(origin)) return cb(null, true);
+    return cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -41,6 +58,10 @@ app.use(morgan('dev'));
 //   • requireAdmin        → plans, routers, invoices, payments, reports, users,
 //                           mikrotik accounts (ADMIN / legacy OPERATOR only)
 app.use('/api/v1/auth',              authRoutes);
+// PUBLIC — customer self-service update flow. No auth: the random token in
+// the URL is the credential. MUST be mounted before any auth middleware
+// would catch /api/v1/* — keeping this above the auth-protected routes.
+app.use('/api/v1/public/client-updates', publicClientUpdatesRoutes);
 app.use('/api/v1/zones',             authMiddleware, requireOperational, zoneRoutes);
 app.use('/api/v1/clients',           authMiddleware, requireOperational, clientRoutes);
 app.use('/api/v1/clients/:id/evidence-photos', authMiddleware, requireOperational, evidenceRoutes);

@@ -75,6 +75,10 @@ const createClientSchema = z.object({
   zoneId:         optionalNumber(),
   contractDate:   optionalDate(),
   installationDate: optionalDate(),
+  // Per-client price override (in cents, WispHub-style). When 0 or omitted,
+  // the plan's monthly price applies. Coerced from string so number inputs
+  // from the form (which arrive as strings via JSON) still validate.
+  monthlyFee:     z.coerce.number().int().nonnegative().optional(),
   notes:          optionalString(),
   planId:         optionalString(),
   mikrotik:       mikrotikSubSchema.optional()
@@ -117,6 +121,21 @@ router.delete('/:id/devices/:deviceId', requireOperatorOrAdmin, validateParams(z
 router.post('/:id/suspend', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.suspendService);
 router.post('/:id/activate', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.activateService);
 router.post('/:id/change-plan', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(z.object({ planId: z.string() })), clientController.changePlan);
+
+// Self-service update token generation. The public-facing GET/PUT/POST
+// that consume the token live under /api/v1/public/client-updates/*.
+const channelEnum = z.enum(['EMAIL', 'WHATSAPP', 'TELEGRAM']);
+const updateTokenSchema = z.object({
+  sendChannels:   z.array(channelEnum).max(3).default([]),
+  notifyChannels: z.array(channelEnum).max(3).default([])
+});
+router.post(
+  '/:id/update-tokens',
+  requireOperatorOrAdmin,
+  validateParams(commonSchemas.idParam),
+  validateBody(updateTokenSchema),
+  clientController.createUpdateToken
+);
 
 // Financial information
 router.get('/:id/invoices', validateParams(commonSchemas.idParam), validateQuery(commonSchemas.pagination), clientController.getClientInvoices);

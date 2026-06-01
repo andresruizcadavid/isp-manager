@@ -381,13 +381,18 @@
         routerId:       c.mikrotikAccount?.routerId ?? '',
         planId:         c.planId ?? '',
         mikrotik: {
-          username:      c.pppoeUsername || '',
-          password:      c.pppoePassword || '',
-          remoteAddress: c.serviceIp || '',
-          localAddress:  c.serviceLocalIp || '',
-          profileName:   c.plan?.name || '',
-          coordinates:   c.coordinates || '',
-          status:        c.status || 'ACTIVE',
+          // Prefer MikrotikAccount as the source of truth; only fall back to
+          // the legacy duplicated columns on Client so old/imported rows
+          // still load. Never seed profileName from c.plan?.name — that's
+          // the commercial plan name, not the technical PPPoE profile, and
+          // putting it there caused the form to overwrite the real profile.
+          username:      c.mikrotikAccount?.username      || c.pppoeUsername  || '',
+          password:      c.mikrotikAccount?.password      || c.pppoePassword  || '',
+          remoteAddress: c.mikrotikAccount?.remoteAddress || c.serviceIp      || '',
+          localAddress:  c.mikrotikAccount?.localAddress  || c.serviceLocalIp || '',
+          profileName:   c.mikrotikAccount?.profileName   || '',
+          coordinates:   c.mikrotikAccount?.coordinates   || c.coordinates    || '',
+          status:        c.mikrotikAccount?.status        || c.status         || 'ACTIVE',
         }
       };
     } catch (e) {

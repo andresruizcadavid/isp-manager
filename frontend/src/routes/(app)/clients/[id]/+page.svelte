@@ -9,8 +9,10 @@
     ArrowLeft, User, Wifi, CreditCard, FileText, AlertCircle, CheckCircle2,
     Eye, EyeOff, PauseCircle, PlayCircle, Loader2, Trash2, Edit3, X,
     Calendar, FileCheck, Phone, Mail, MessageSquare, Copy, Check,
-    MapPin, Receipt, ExternalLink, Camera, ImageUp, Image as ImageIcon
+    MapPin, Receipt, ExternalLink, Camera, ImageUp, Image as ImageIcon,
+    Send, Link2, Share2
   } from 'lucide-svelte';
+  import Sheet from '$lib/components/ui/Sheet.svelte';
 
   let client = null;
   let pageError = '';
@@ -51,8 +53,30 @@
     if (inv) openPaymentDetails(inv);
   }
 
+  // Plans available for the change-plan select. Loaded lazily on first edit.
+  let plansForEdit = [];
+  let plansForEditLoaded = false;
+  async function ensurePlansLoaded() {
+    if (plansForEditLoaded) return;
+    try {
+      plansForEdit = await api.get('/plans');
+      plansForEditLoaded = true;
+    } catch (e) {
+      // Non-fatal — the select just stays empty and the operator can cancel.
+      console.warn('No se pudieron cargar planes:', e.message);
+    }
+  }
+
+  function toDateInput(d) {
+    if (!d) return '';
+    try { return new Date(d).toISOString().slice(0, 10); }
+    catch { return ''; }
+  }
+
   $: if (client) {
     formPersonal = {
+      // Identity / contact
+      fullName:       client.name           || '',
       documentType:   client.documentType   || 'CC',
       documentNumber: client.documentNumber || '',
       email:          client.email          || '',
@@ -60,7 +84,28 @@
       address:        client.address        || '',
       neighborhood:   client.neighborhood   || '',
       city:           client.city           || '',
-      zoneId:         client.zoneId         || null
+      zoneId:         client.zoneId         || null,
+      // Plan / billing
+      planId:         client.planId         || '',
+      // monthlyFee lives in cents on the API; display whole pesos in the form.
+      monthlyFee:     client.monthlyFee
+                        ? Math.round(client.monthlyFee / 100)
+                        : '',
+      // Dates
+      contractDate:     toDateInput(client.contractDate),
+      installationDate: toDateInput(client.installationDate),
+      // Free-form
+      notes:          client.notes          || '',
+      // Mikrotik subform — only the fields that make sense to tweak from
+      // this view. Username is shown read-only since changing it would
+      // recreate the PPPoE secret on the router.
+      mikrotik: {
+        password:      client.mikrotikAccount?.password      || '',
+        remoteAddress: client.mikrotikAccount?.remoteAddress || client.serviceIp      || '',
+        localAddress:  client.mikrotikAccount?.localAddress  || client.serviceLocalIp || '',
+        profileName:   client.mikrotikAccount?.profileName   || '',
+        coordinates:   client.mikrotikAccount?.coordinates   || client.coordinates    || '',
+      }
     };
   }
 
@@ -162,13 +207,125 @@
   async function savePersonal() {
     loadingAction = true;
     try {
-      await api.put(`/clients/${client.id}`, formPersonal);
-      client = { ...client, ...formPersonal };
+      // Build the payload that PUT /clients/:id accepts. Convert monthlyFee
+      // from pesos (what the form shows) back to cents (DB), and drop empty
+      // strings so the backend can distinguish "leave unchanged" from "clear".
+      const payload = {
+        fullName:       formPersonal.fullName,
+        documentType:   formPersonal.documentType,
+        documentNumber: formPersonal.documentNumber,
+        email:          formPersonal.email,
+        phone:          formPersonal.phone,
+        address:        formPersonal.address,
+        neighborhood:   formPersonal.neighborhood,
+        city:           formPersonal.city,
+        zoneId:         formPersonal.zoneId,
+        planId:         formPersonal.planId || null,
+        contractDate:     formPersonal.contractDate     || null,
+        installationDate: formPersonal.installationDate || null,
+        monthlyFee:     formPersonal.monthlyFee !== '' && Number(formPersonal.monthlyFee) >= 0
+                          ? Math.round(Number(formPersonal.monthlyFee) * 100)
+                          : 0,
+        notes:          formPersonal.notes,
+        // Only include the mikrotik sub-form when at least one field changed
+        // from its loaded value. Sending all keys always is harmless (the
+        // backend treats them as "set to this") but the upsert touches the
+        // device — keep it intentional.
+        mikrotik: {
+          ...(formPersonal.mikrotik.password      && { password:      formPersonal.mikrotik.password }),
+          ...(formPersonal.mikrotik.remoteAddress && { remoteAddress: formPersonal.mikrotik.remoteAddress }),
+          ...(formPersonal.mikrotik.localAddress  && { localAddress:  formPersonal.mikrotik.localAddress }),
+          ...(formPersonal.mikrotik.profileName   && { profileName:   formPersonal.mikrotik.profileName }),
+          ...(formPersonal.mikrotik.coordinates   && { coordinates:   formPersonal.mikrotik.coordinates }),
+        }
+      };
+      const updated = await api.put(`/clients/${client.id}`, payload);
+      // Server returns the full client including relations; reuse that so
+      // the read-only view below reflects the new state immediately.
+      client = updated?.data || updated || { ...client, ...payload };
       editPersonal = false;
       showToast('success', 'Datos actualizados');
     } catch (e) {
       showToast('error', e.message || 'Error al guardar');
     } finally { loadingAction = false; }
+  }
+
+  function openPersonalEdit() {
+    ensurePlansLoaded();
+    editPersonal = true;
+  }
+
+  // ── Sheet: solicitar actualización pública de datos ─────────────────
+  // Genera un ClientUpdateToken y dispatcha el link al cliente por los
+  // canales seleccionados. La URL devuelta puede copiarse para envío manual.
+  let showUpdateSheet  = false;
+  let updateSending    = false;
+  let updateError      = '';
+  let updateResult     = null;     // { publicUrl, expiresAt, dispatch }
+  let updateCopied     = false;
+  // Canales por defecto: si el cliente tiene WhatsApp/phone lo precargamos,
+  // si tiene email lo precargamos. Telegram queda off por defecto (raro).
+  let updateSendChannels   = [];
+  let updateNotifyChannels = ['TELEGRAM'];
+
+  function openUpdateSheet() {
+    updateError  = '';
+    updateResult = null;
+    updateCopied = false;
+    // Defaults inteligentes basados en lo que el cliente tiene.
+    updateSendChannels = [
+      ...(client?.email ? ['EMAIL']    : []),
+      ...(client?.phone ? ['WHATSAPP'] : [])
+    ];
+    updateNotifyChannels = ['TELEGRAM'];
+    showUpdateSheet = true;
+  }
+
+  function toggleSendChannel(ch) {
+    updateSendChannels = updateSendChannels.includes(ch)
+      ? updateSendChannels.filter(c => c !== ch)
+      : [...updateSendChannels, ch];
+  }
+  function toggleNotifyChannel(ch) {
+    updateNotifyChannels = updateNotifyChannels.includes(ch)
+      ? updateNotifyChannels.filter(c => c !== ch)
+      : [...updateNotifyChannels, ch];
+  }
+
+  async function requestUpdateToken() {
+    updateSending = true;
+    updateError = '';
+    try {
+      // api.post already unwraps to the inner `data` payload.
+      updateResult = await api.post(`/clients/${client.id}/update-tokens`, {
+        sendChannels:   updateSendChannels,
+        notifyChannels: updateNotifyChannels
+      });
+    } catch (e) {
+      updateError = e.message || 'No se pudo generar el enlace';
+    } finally {
+      updateSending = false;
+    }
+  }
+
+  async function copyUpdateUrl() {
+    if (!updateResult?.publicUrl) return;
+    try {
+      await navigator.clipboard.writeText(updateResult.publicUrl);
+      updateCopied = true;
+      setTimeout(() => updateCopied = false, 2000);
+    } catch (_) { /* clipboard unavailable */ }
+  }
+
+  function fmtChannel(ch) {
+    return { EMAIL: 'Email', WHATSAPP: 'WhatsApp', TELEGRAM: 'Telegram' }[ch] || ch;
+  }
+  function channelOk(result, ch) {
+    return result?.dispatch?.[ch]?.ok === true;
+  }
+  function channelErr(result, ch) {
+    const r = result?.dispatch?.[ch];
+    return r && r.ok === false ? r.error : null;
   }
 
   async function deleteClient() {
@@ -432,8 +589,12 @@
         <CreditCard size={15} /> Registrar Pago
       </button>
     {/if}
-    <button class="btn-secondary" on:click={() => editPersonal = true}>
+    <button class="btn-secondary" on:click={openPersonalEdit}>
       <Edit3 size={15} /> Editar
+    </button>
+    <button class="btn-secondary" on:click={openUpdateSheet}
+            title="Genera un link de un solo uso para que el cliente actualice sus datos">
+      <Share2 size={15} /> Solicitar actualización
     </button>
     <button class="btn-secondary" on:click={toggleStatus} disabled={loadingAction}>
       {#if loadingAction}<Loader2 size={15} class="animate-spin" />
@@ -513,7 +674,7 @@
           <h2 class="font-semibold text-slate-900">Datos Personales</h2>
         </div>
         {#if !editPersonal}
-          <button class="btn-icon" on:click={() => editPersonal = true} title="Editar">
+          <button class="btn-icon" on:click={openPersonalEdit} title="Editar">
             <Edit3 size={14} />
           </button>
         {/if}
@@ -521,6 +682,10 @@
       <div class="card-body">
         {#if editPersonal}
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="md:col-span-2">
+              <label class="label" for="ed-name">Nombre Completo *</label>
+              <input id="ed-name" class="input" bind:value={formPersonal.fullName} required />
+            </div>
             <div>
               <label class="label" for="ed-doctype">Tipo Documento</label>
               <select id="ed-doctype" class="select" bind:value={formPersonal.documentType}>
@@ -554,6 +719,85 @@
               <label class="label" for="ed-city">Ciudad</label>
               <input id="ed-city" class="input" bind:value={formPersonal.city} />
             </div>
+
+            <!-- Fechas -->
+            <div>
+              <label class="label" for="ed-contract">Fecha de Contrato</label>
+              <input id="ed-contract" type="date" class="input" bind:value={formPersonal.contractDate} />
+            </div>
+            <div>
+              <label class="label" for="ed-install">Fecha de Instalación</label>
+              <input id="ed-install" type="date" class="input" bind:value={formPersonal.installationDate} />
+            </div>
+
+            <!-- Plan + override de precio -->
+            <div>
+              <label class="label" for="ed-plan">Plan</label>
+              <select id="ed-plan" class="select" bind:value={formPersonal.planId}>
+                <option value="">Sin plan</option>
+                {#each plansForEdit as p}
+                  <option value={p.id}>
+                    {p.name} — ${((p.monthlyPrice || 0) / 100).toLocaleString('es-CO')} COP
+                  </option>
+                {/each}
+              </select>
+            </div>
+            <div>
+              <label class="label" for="ed-fee">
+                Precio mensual <span class="text-slate-400 text-xs font-normal">(opcional)</span>
+              </label>
+              <div class="flex">
+                <span class="inline-flex items-center px-3 rounded-l-lg border border-r-0
+                             border-slate-200 bg-slate-50 text-slate-700 text-sm font-mono">COP</span>
+                <input id="ed-fee" type="number" min="0" step="1000"
+                       bind:value={formPersonal.monthlyFee}
+                       placeholder="Hereda del plan"
+                       class="input flex-1 rounded-l-none font-mono" />
+              </div>
+            </div>
+
+            <div class="md:col-span-2">
+              <label class="label" for="ed-notes">Notas</label>
+              <textarea id="ed-notes" rows="2" class="input resize-none"
+                        bind:value={formPersonal.notes}
+                        placeholder="Observaciones del cliente..."></textarea>
+            </div>
+
+            <!-- PPPoE / MikroTik -->
+            <div class="md:col-span-2 mt-2 pt-3 border-t border-slate-100">
+              <div class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">
+                Servicio PPPoE
+              </div>
+            </div>
+            <div>
+              <label class="label" for="ed-mk-pwd">Nueva contraseña PPPoE</label>
+              <input id="ed-mk-pwd" type="text" class="input font-mono"
+                     bind:value={formPersonal.mikrotik.password}
+                     placeholder="Dejar vacío para no cambiar" />
+            </div>
+            <div>
+              <label class="label" for="ed-mk-profile">Perfil PPPoE</label>
+              <input id="ed-mk-profile" type="text" class="input font-mono"
+                     bind:value={formPersonal.mikrotik.profileName}
+                     placeholder="Online_basico" />
+            </div>
+            <div>
+              <label class="label" for="ed-mk-remote">Remote Address (IP cliente)</label>
+              <input id="ed-mk-remote" type="text" class="input font-mono"
+                     bind:value={formPersonal.mikrotik.remoteAddress} />
+            </div>
+            <div>
+              <label class="label" for="ed-mk-local">Local Address (gateway)</label>
+              <input id="ed-mk-local" type="text" class="input font-mono"
+                     bind:value={formPersonal.mikrotik.localAddress} />
+            </div>
+            <div class="md:col-span-2">
+              <label class="label" for="ed-mk-coords">Coordenadas GPS</label>
+              <input id="ed-mk-coords" type="text" class="input font-mono"
+                     bind:value={formPersonal.mikrotik.coordinates}
+                     placeholder="3.850149,-76.492356" />
+            </div>
+
             <div class="md:col-span-2 flex gap-2 pt-2">
               <button class="btn-primary" on:click={savePersonal} disabled={loadingAction}>
                 {#if loadingAction}<Loader2 size={14} class="animate-spin" />{/if}
@@ -1217,5 +1461,153 @@
     </div>
   </div>
 {/if}
+
+<!-- ─── Sheet: solicitar actualización pública ─────────────────────── -->
+<Sheet bind:open={showUpdateSheet} title="Solicitar actualización de datos" maxWidth="max-w-lg">
+  {#if !updateResult}
+    <!-- ── Step 1: configure channels ───────────────────────────────── -->
+    <div class="space-y-5 p-5">
+      <p class="text-sm text-text-secondary">
+        Genera un enlace de un solo uso (válido 7 días) para que
+        <strong>{client?.name || 'el cliente'}</strong> actualice sus datos
+        de contacto, documento y suba fotos sin necesidad de iniciar sesión.
+      </p>
+
+      <!-- Send channels -->
+      <div>
+        <div class="label !mb-2">Enviar enlace al cliente vía</div>
+        <div class="space-y-2">
+          {#each ['EMAIL', 'WHATSAPP', 'TELEGRAM'] as ch}
+            {@const disabled = (ch === 'EMAIL' && !client?.email) || (ch === 'WHATSAPP' && !client?.phone)}
+            <label class="flex items-center gap-2 p-2.5 rounded-lg border
+                          {updateSendChannels.includes(ch)
+                            ? 'border-brand-600 bg-brand-50/40'
+                            : 'border-slate-200 hover:border-slate-300'}
+                          {disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}">
+              <input type="checkbox"
+                     checked={updateSendChannels.includes(ch)}
+                     disabled={disabled}
+                     on:change={() => !disabled && toggleSendChannel(ch)}
+                     class="rounded border-slate-300 text-brand-600 focus:ring-brand-600/30" />
+              {#if ch === 'EMAIL'}<Mail size={14} class="text-slate-500" />{/if}
+              {#if ch === 'WHATSAPP'}<MessageSquare size={14} class="text-emerald-600" />{/if}
+              {#if ch === 'TELEGRAM'}<Send size={14} class="text-sky-600" />{/if}
+              <span class="text-sm font-medium text-text-primary">{fmtChannel(ch)}</span>
+              {#if ch === 'EMAIL' && !client?.email}
+                <span class="text-xs text-text-muted ml-auto">cliente sin email</span>
+              {:else if ch === 'WHATSAPP' && !client?.phone}
+                <span class="text-xs text-text-muted ml-auto">cliente sin teléfono</span>
+              {/if}
+            </label>
+          {/each}
+        </div>
+        <p class="text-xs text-text-muted mt-2">
+          Si no seleccionas ningún canal, podrás copiar el enlace al final y enviarlo manualmente.
+        </p>
+      </div>
+
+      <!-- Notify channels -->
+      <div>
+        <div class="label !mb-2">Notificarme cuando el cliente lo complete vía</div>
+        <div class="grid grid-cols-3 gap-2">
+          {#each ['EMAIL', 'WHATSAPP', 'TELEGRAM'] as ch}
+            <button type="button"
+                    on:click={() => toggleNotifyChannel(ch)}
+                    class="text-xs py-2 rounded-lg border font-medium
+                           {updateNotifyChannels.includes(ch)
+                             ? 'border-brand-600 bg-brand-50/40 text-brand-800'
+                             : 'border-slate-200 text-slate-600 hover:border-slate-300'}">
+              {fmtChannel(ch)}
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      {#if updateError}
+        <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
+          <AlertCircle size={14} /> {updateError}
+        </div>
+      {/if}
+    </div>
+
+    <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-200 bg-slate-50">
+      <button type="button" class="btn-secondary" on:click={() => showUpdateSheet = false}>
+        Cancelar
+      </button>
+      <button type="button" class="btn-primary" on:click={requestUpdateToken} disabled={updateSending}>
+        {#if updateSending}
+          <Loader2 size={14} class="animate-spin" /> Generando...
+        {:else}
+          <Link2 size={14} /> Generar enlace
+        {/if}
+      </button>
+    </div>
+
+  {:else}
+    <!-- ── Step 2: token created, show URL + dispatch results ────── -->
+    <div class="space-y-4 p-5">
+      <div class="flex items-start gap-3 p-3 rounded-lg bg-emerald-50 border border-emerald-200">
+        <CheckCircle2 size={18} class="text-emerald-600 flex-shrink-0 mt-0.5" />
+        <div class="text-sm text-emerald-800">
+          <div class="font-semibold">Enlace generado</div>
+          <div class="text-xs text-emerald-700 mt-0.5">
+            Vence el {new Date(updateResult.expiresAt).toLocaleDateString('es-CO', { day:'2-digit', month:'long', year:'numeric' })}.
+          </div>
+        </div>
+      </div>
+
+      <!-- Public URL -->
+      <div>
+        <div class="label !mb-1">URL pública (single-use)</div>
+        <div class="flex items-center gap-2">
+          <input type="text" readonly value={updateResult.publicUrl}
+                 class="input flex-1 font-mono text-xs" />
+          <button type="button" class="btn-secondary" on:click={copyUpdateUrl}>
+            {#if updateCopied}
+              <Check size={14} class="text-emerald-600" /> Copiado
+            {:else}
+              <Copy size={14} /> Copiar
+            {/if}
+          </button>
+        </div>
+      </div>
+
+      <!-- Dispatch results -->
+      {#if updateResult.sendChannels?.length > 0}
+        <div>
+          <div class="label !mb-2">Envío al cliente</div>
+          <ul class="space-y-1.5">
+            {#each updateResult.sendChannels as ch}
+              <li class="flex items-center gap-2 text-sm">
+                {#if channelOk(updateResult, ch)}
+                  <CheckCircle2 size={14} class="text-emerald-600" />
+                  <span class="text-emerald-700">{fmtChannel(ch)} — enviado</span>
+                {:else if channelErr(updateResult, ch)}
+                  <AlertCircle size={14} class="text-amber-600" />
+                  <span class="text-amber-700">{fmtChannel(ch)} — {channelErr(updateResult, ch)}</span>
+                {:else}
+                  <Loader2 size={14} class="text-slate-400" />
+                  <span class="text-text-muted">{fmtChannel(ch)} — pendiente</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {/if}
+
+      {#if updateResult.notifyChannels?.length > 0}
+        <p class="text-xs text-text-muted">
+          Recibirás aviso por <strong>{updateResult.notifyChannels.map(fmtChannel).join(', ')}</strong> cuando el cliente envíe los cambios.
+        </p>
+      {/if}
+    </div>
+
+    <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-200 bg-slate-50">
+      <button type="button" class="btn-primary" on:click={() => showUpdateSheet = false}>
+        Listo
+      </button>
+    </div>
+  {/if}
+</Sheet>
 
 {/if}
