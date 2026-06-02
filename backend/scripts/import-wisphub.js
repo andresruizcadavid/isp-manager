@@ -327,7 +327,7 @@ async function importInvoices(userToWisphubId) {
 
     const invoiceData = {
       wisphubId,
-      number,
+      invoiceNumber: number,
       clientId,
       amount:    subTotal,
       tax:       toCents(inv.impuestos_total),
@@ -349,8 +349,8 @@ async function importInvoices(userToWisphubId) {
       update: invoiceData,
       create: invoiceData,
     }).catch(async (e) => {
-      if (/number/i.test(e.message)) {
-        const safe = { ...invoiceData, number: `WHF-${wisphubId}` };
+      if (/unique.*number|number.*unique|invoiceNumber/i.test(e.message)) {
+        const safe = { ...invoiceData, invoiceNumber: `WHF-${wisphubId}` };
         return prisma.invoice.upsert({ where: { wisphubId }, update: safe, create: safe });
       }
       throw e;
@@ -380,20 +380,20 @@ async function importInvoices(userToWisphubId) {
       }
     }
 
-    // Derived payment — only if invoice is paid AND total_cobrado > 0
-    const cobrado = toCents(inv.total_cobrado);
-    if (cobrado > 0 && (status === 'PAID' || invoiceData.paidDate)) {
+    // Derived payment — always create a Payment record when invoice is PAID
+    if (status === 'PAID' || invoiceData.paidDate) {
+      const cobrado = toCents(inv.total_cobrado);
+      const payAmount = cobrado > 0 ? cobrado : total;
       const paymentData = {
         invoiceId: upserted.id,
         clientId,
-        amount:    cobrado,
+        amount:    payAmount,
         method:    mapPaymentMethod(inv.forma_pago),
         status:    'COMPLETED',
         transactionId: (inv.id_mercadopago || inv.id_payu || inv.referencia || '').trim() || null,
         notes:     `Imported from WispHub invoice ${wisphubId}` + (inv.forma_pago ? ` (${inv.forma_pago})` : ''),
       };
-      // No `wisphubId` on Payment, so we re-create from scratch each time.
-      // Strategy: delete previous "imported" payments for this invoice, then insert.
+      // No `wisphubId` on Payment, so we delete+recreate for idempotency.
       await prisma.payment.deleteMany({
         where: { invoiceId: upserted.id, notes: { startsWith: 'Imported from WispHub invoice' } },
       });

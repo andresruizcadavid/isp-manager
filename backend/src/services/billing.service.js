@@ -35,7 +35,7 @@ class BillingService {
         else if (inv.status === 'OVERDUE') status = 'overdue';
         else if (['PENDING', 'PARTIAL', 'DRAFT'].includes(inv.status)) status = 'pending';
         else if (inv.status === 'CANCELLED') status = 'cancelled';
-        invoice = { id: inv.id, number: inv.number, amount: inv.amount, total: inv.total, status: inv.status, balanceDue: inv.balanceDue };
+        invoice = { id: inv.id, number: inv.invoiceNumber, amount: inv.amount, total: inv.total, status: inv.status, balanceDue: inv.balanceDue };
       }
 
       months.push({
@@ -110,7 +110,7 @@ class BillingService {
 
     return {
       invoices: results.map(r => ({
-        invoice: { id: r.invoice.id, number: r.invoice.number, amount: r.invoice.amount, total: r.invoice.total, status: r.invoice.status, balanceDue: r.invoice.balanceDue },
+        invoice: { id: r.invoice.id, number: r.invoice.invoiceNumber, amount: r.invoice.amount, total: r.invoice.total, status: r.invoice.status, balanceDue: r.invoice.balanceDue },
         action: r.action
       })),
       totalAmount,
@@ -131,8 +131,8 @@ class BillingService {
     }
 
     for (const inv of invoices) {
-      if (inv.status === 'PAID') throw new AppError(`Factura ${inv.number} ya está pagada`, 409, 'INVOICE_ALREADY_PAID');
-      if (inv.status === 'CANCELLED') throw new AppError(`Factura ${inv.number} está cancelada`, 409, 'INVOICE_CANCELLED');
+      if (inv.status === 'PAID') throw new AppError(`Factura ${inv.invoiceNumber} ya está pagada`, 409, 'INVOICE_ALREADY_PAID');
+      if (inv.status === 'CANCELLED') throw new AppError(`Factura ${inv.invoiceNumber} está cancelada`, 409, 'INVOICE_CANCELLED');
     }
 
     const totalDue = invoices.reduce((sum, inv) => sum + inv.balanceDue, 0);
@@ -202,7 +202,7 @@ class BillingService {
         const matched = createdPayments.find(p => p.invoiceId === inv.id);
         return {
           invoiceId: inv.id,
-          number: inv.number,
+          number: inv.invoiceNumber,
           paidAmount: matched?.amount || 0
         };
       })

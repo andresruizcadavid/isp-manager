@@ -679,6 +679,44 @@ class PaymentsController {
     });
   });
 
+  backfillMissingPayments = asyncHandler(async (req, res) => {
+    // Find all PAID invoices WITHOUT any Payment records
+    const candidates = await prisma.invoice.findMany({
+      where: {
+        status: 'PAID',
+        payments: { none: {} }
+      },
+      include: { client: true }
+    });
+
+    const created = [];
+    for (const inv of candidates) {
+      const p = await prisma.payment.create({
+        data: {
+          invoiceId: inv.id,
+          clientId: inv.clientId,
+          amount: inv.total,
+          method: 'OTHER',
+          status: 'COMPLETED',
+          notes: 'Backfill — pago importado desde estado de factura PAID sin registro en payments',
+          createdByUserId: req.user?.id,
+          createdByUserName: req.user?.name || 'system',
+          createdAt: inv.paidDate || inv.updatedAt
+        }
+      });
+      created.push(p);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        scanned: candidates.length,
+        created: created.length
+      },
+      message: `Backfill completado. ${created.length} registro(s) de pago creado(s) de ${candidates.length} factura(s) PAID sin pagos.`
+    });
+  });
+
   getConsolidatedReport = asyncHandler(async (req, res) => {
     const { dateFrom, dateTo } = req.query;
 

@@ -311,10 +311,13 @@ class InvoicesController {
     const payment = await prisma.payment.create({
       data: {
         invoiceId: id,
+        clientId: invoice.clientId,
         amount: amount * 100, // Convert to cents
-        paymentMethod,
+        method: paymentMethod,
         status: 'COMPLETED',
-        paidAt: new Date()
+        notes: notes || null,
+        createdByUserId: req.user?.id,
+        createdByUserName: req.user?.name
       }
     });
 

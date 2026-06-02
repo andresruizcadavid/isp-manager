@@ -95,6 +95,9 @@ router.post('/:id/evidence', requireOperational, uploadEvidence.single('file'), 
 router.post('/webhooks/wompi', paymentController.wompiWebhook);
 router.get('/wompi/checkout/:invoiceId', paymentController.getWompiCheckout);
 
+// Data repair — create Payment records for PAID invoices that lack them
+router.post('/backfill', requireOperatorOrAdmin, paymentController.backfillMissingPayments);
+
 // Reports and statistics
 router.get('/stats/overview', paymentController.getPaymentStats);
 router.get('/stats/by-method', paymentController.getPaymentsByMethod);
