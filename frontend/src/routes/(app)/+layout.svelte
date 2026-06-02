@@ -9,6 +9,7 @@
     CreditCard, Building2, LogOut, ChevronDown, ChevronRight,
     Menu, X, Activity
   } from 'lucide-svelte';
+  import InstallPrompt from '$lib/components/layout/InstallPrompt.svelte';
 
   $: initial = ($user?.name || $user?.email || '?').trim().charAt(0).toUpperCase();
   $: displayName = $user?.name || $user?.email || 'Usuario';
@@ -97,7 +98,7 @@
             <div class="text-sm font-semibold text-white leading-tight truncate">
               ISP Manager
             </div>
-            <div class="text-[11px] text-brand-100 leading-tight truncate">
+            <div class="text-xs text-brand-100 leading-tight truncate">
               Panel Administrativo
             </div>
           </div>
@@ -105,21 +106,22 @@
         <!-- Close button (only on mobile) -->
         <button type="button" on:click={() => $sidebarOpen = false}
                 aria-label="Cerrar menú"
-                class="md:hidden p-2 -mr-2 rounded text-brand-100 hover:text-white
-                       hover:bg-brand-700 active:scale-95 transition">
+                class="md:hidden p-2.5 -mr-2 rounded text-brand-100 hover:text-white
+                       hover:bg-brand-700 active:scale-95 transition
+                       min-h-[44px] min-w-[44px] flex items-center justify-center">
           <X size={18} />
         </button>
       </div>
     </div>
 
     <!-- Nav (filtered by role via sidebarFor) -->
-    <nav class="flex-1 py-3 px-2">
+    <nav class="flex-1 py-2 px-2">
       {#each menu as section}
         {#if !section.key}
           {#each section.items as item}
             <a href={item.href}
-               class="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5
-                      text-xs font-medium transition-colors duration-150
+               class="flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg mb-0.5
+                      text-sm font-medium transition-colors duration-150
                       {isActive(item.href)
                         ? 'bg-brand-600 text-white font-semibold'
                         : 'text-brand-100 hover:bg-brand-700 hover:text-white'}">
@@ -129,8 +131,8 @@
           {/each}
         {:else}
           <button on:click={() => toggle(section.key)}
-                  class="w-full flex items-center justify-between px-3 py-2
-                         rounded-lg text-xs font-medium text-brand-100
+                  class="w-full flex items-center justify-between px-3 min-h-[44px]
+                         rounded-lg text-sm font-medium text-brand-100
                          hover:bg-brand-700 hover:text-white
                          transition-colors duration-150 mb-0.5">
             <div class="flex items-center gap-2.5">
@@ -146,8 +148,8 @@
             <div class="mb-1">
               {#each section.items as item}
                 <a href={item.href}
-                   class="flex items-center gap-2 pl-9 pr-3 py-1.5 rounded-lg
-                          text-xs transition-colors duration-150
+                   class="flex items-center gap-2 pl-9 pr-3 min-h-[44px] rounded-lg
+                          text-sm transition-colors duration-150
                           {isActive(item.href)
                             ? 'text-white bg-brand-600 font-medium'
                             : 'text-brand-200 hover:text-white hover:bg-brand-700'}">
@@ -170,10 +172,10 @@
           {initial}
         </div>
         <div class="min-w-0">
-          <div class="text-xs font-medium text-white truncate leading-tight" title={displayName}>
+          <div class="text-sm font-medium text-white truncate leading-tight" title={displayName}>
             {displayName}
           </div>
-          <div class="text-[10px] text-brand-200 leading-tight mt-0.5">{roleLabel}</div>
+          <div class="text-[11px] text-brand-200 leading-tight mt-0.5">{roleLabel}</div>
         </div>
       </div>
     </div>
@@ -181,8 +183,8 @@
     <!-- Logout (anchored at the very bottom) -->
     <div class="px-3 pb-3">
       <button on:click={async () => { await authStore.logout(); goto('/login'); }}
-              class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg
-                     text-xs text-brand-100 hover:bg-brand-700 hover:text-white
+              class="w-full flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg
+                     text-sm text-brand-100 hover:bg-brand-700 hover:text-white
                      active:scale-[0.98]
                      transition-colors duration-150">
         <LogOut size={14} />
@@ -196,19 +198,20 @@
 
     <!-- Topbar (h-14 consistent across breakpoints) -->
     <header class="h-14 bg-surface-card border-b border-slate-100 px-4 sm:px-6
-                   flex items-center justify-between flex-shrink-0 gap-3">
+                   flex items-center justify-between flex-shrink-0 gap-2 sm:gap-3">
 
-      <div class="flex items-center gap-3 min-w-0">
+      <div class="flex items-center gap-2 sm:gap-3 min-w-0">
         <!-- Hamburger (only < md) -->
         <button type="button" on:click={() => $sidebarOpen = true}
                 aria-label="Abrir menú"
-                class="md:hidden -ml-2 p-2 rounded-lg text-text-secondary
-                       hover:bg-slate-100 active:scale-95 transition">
-          <Menu size={20} />
+                class="md:hidden -ml-2 p-2.5 rounded-lg text-text-secondary
+                       hover:bg-slate-100 active:scale-95 transition
+                       min-h-[44px] min-w-[44px] flex items-center justify-center">
+          <Menu size={22} />
         </button>
 
         <!-- Breadcrumb (md+) / page title only (< md) -->
-        <div class="flex items-center gap-2 text-xs text-text-muted min-w-0">
+        <div class="flex items-center gap-2 text-[13px] sm:text-xs text-text-muted min-w-0 leading-tight">
           <span class="hidden md:inline">ISP Manager</span>
           <span class="hidden md:inline">/</span>
           <span class="text-text-primary font-medium truncate">{getTitle()}</span>
@@ -216,14 +219,14 @@
       </div>
 
       <!-- Right side: system indicator + user avatar -->
-      <div class="flex items-center gap-3 flex-shrink-0">
+      <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
         <div class="flex items-center gap-1.5" title="Sistema en línea">
-          <div class="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+          <div class="w-2 sm:w-1.5 h-2 sm:h-1.5 bg-emerald-500 rounded-full"></div>
           <span class="hidden sm:inline text-xs text-text-secondary">Sistema en línea</span>
         </div>
         <!-- User avatar (mobile-only — sidebar already shows it on md+) -->
-        <div class="md:hidden w-8 h-8 rounded-full bg-brand-600 flex items-center
-                    justify-center text-xs font-bold text-white"
+        <div class="md:hidden w-9 h-9 rounded-full bg-brand-600 flex items-center
+                    justify-center text-sm font-bold text-white"
              title={displayName}>
           {initial}
         </div>
@@ -231,8 +234,9 @@
     </header>
 
     <!-- Content -->
-    <main class="flex-1 overflow-y-auto p-4 sm:p-6">
+    <main class="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6">
       <slot />
     </main>
   </div>
 </div>
+<InstallPrompt />

@@ -1,9 +1,12 @@
 import express        from 'express';
 import cors           from 'cors';
+import helmet         from 'helmet';
+import cookieParser   from 'cookie-parser';
 import morgan         from 'morgan';
 import path           from 'path';
 import { authMiddleware, requireAdmin, requireOperational } from './middleware/auth.middleware.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
+import { globalRateLimiter } from './middleware/rateLimit.middleware.js';
 import { env }        from './config/env.js';
 import authRoutes     from './routes/auth.routes.js';
 import clientRoutes   from './routes/clients.routes.js';
@@ -47,8 +50,29 @@ app.use(cors({
   },
   credentials: true
 }));
+// Trust Nginx proxy so req.secure reflects X-Forwarded-Proto
+app.set('trust proxy', 1);
+
+app.use(helmet({
+  // Disable HSTS until HTTPS is configured (browsers enforce it permanently)
+  strictTransportSecurity: false
+}));
+app.use(cookieParser(env.COOKIE_SECRET));
 app.use(express.json());
 app.use(morgan('dev'));
+
+// ── Auth routes are mounted BEFORE the global rate limiter ──
+// They have their own dedicated authRateLimiter (10 req / 15 min).
+// Keeping them outside the global limiter ensures that a user blocked
+// by the global limit (e.g. heavy API usage) can still log in.
+app.use('/api/v1/auth',              authRoutes);
+
+// PUBLIC — customer self-service update flow. No auth: the random token in
+// the URL is the credential. Has its own per-token rate limiter.
+app.use('/api/v1/public/client-updates', publicClientUpdatesRoutes);
+
+// Global rate limiter for all remaining API routes
+app.use('/api/', globalRateLimiter);
 
 // ── Auth middleware imported from middleware/auth.middleware.js ──
 
@@ -57,11 +81,6 @@ app.use(morgan('dev'));
 //   • requireOperational  → clients, zones, dashboard, evidence (ADMIN + TECHNICIAN)
 //   • requireAdmin        → plans, routers, invoices, payments, reports, users,
 //                           mikrotik accounts (ADMIN / legacy OPERATOR only)
-app.use('/api/v1/auth',              authRoutes);
-// PUBLIC — customer self-service update flow. No auth: the random token in
-// the URL is the credential. MUST be mounted before any auth middleware
-// would catch /api/v1/* — keeping this above the auth-protected routes.
-app.use('/api/v1/public/client-updates', publicClientUpdatesRoutes);
 app.use('/api/v1/zones',             authMiddleware, requireOperational, zoneRoutes);
 app.use('/api/v1/clients',           authMiddleware, requireOperational, clientRoutes);
 app.use('/api/v1/clients/:id/evidence-photos', authMiddleware, requireOperational, evidenceRoutes);
@@ -70,7 +89,7 @@ app.use('/api/v1/plans',             authMiddleware, requireAdmin,       planRou
 app.use('/api/v1/mikrotik/routers',  authMiddleware, requireAdmin,       routerRoutes);
 app.use('/api/v1/mikrotik/accounts', authMiddleware, requireAdmin,       accountsRoutes);
 app.use('/api/v1/invoices',          authMiddleware, requireAdmin,       invoiceRoutes);
-app.use('/api/v1/payments',          authMiddleware, requireAdmin,       paymentRoutes);
+app.use('/api/v1/payments',          authMiddleware, requireOperational, paymentRoutes);
 app.use('/api/v1/reports',           authMiddleware, requireAdmin,       reportRoutes);
 app.use('/api/v1/users',             authMiddleware,                     usersRoutes);
 app.use('/api/v1/notifications',     authMiddleware, requireAdmin,       notificationsRoutes);

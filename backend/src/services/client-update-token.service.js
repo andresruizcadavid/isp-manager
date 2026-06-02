@@ -18,7 +18,7 @@
 // inputs with Zod and calls into these helpers.
 
 import crypto from 'crypto';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { notificationService } from './notification.service.js';
 import * as whatsapp from './whatsapp.service.js';

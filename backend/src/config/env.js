@@ -11,6 +11,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().min(1),
   JWT_SECRET: z.string().min(32),
   JWT_EXPIRES_IN: z.string().default('8h'),
+  COOKIE_SECRET: z.string().min(32),
   FRONTEND_URL: z.string().url(),
   
   // Wompi
@@ -60,7 +61,7 @@ const envSchema = z.object({
   
   // Rate Limiting
   RATE_LIMIT_WINDOW_MS: z.string().transform(Number).default('900000'),
-  RATE_LIMIT_MAX_REQUESTS: z.string().transform(Number).default('100'),
+  RATE_LIMIT_MAX_REQUESTS: z.string().transform(Number).default('1000'),
 });
 
 function validateEnv() {

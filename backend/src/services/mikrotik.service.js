@@ -1,6 +1,5 @@
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { env } from '../config/env.js';
+import { prisma } from '../config/database.js';
 
 const REQUEST_TIMEOUT_MS = 15000;
 // Network-level transient failures we should retry. HTTP 4xx/5xx are NOT
@@ -190,6 +189,19 @@ export class MikrotikService {
     }
     await this.request(`/ppp/profile/${encodeURIComponent(profile['.id'])}`, 'DELETE');
     return { deleted: true, id: profile['.id'] };
+  }
+
+  async createPPPoEProfile({ name, rateLimit, localAddress, remoteAddress, onlyOne, parentQueue }) {
+    if (!name) throw new Error('createPPPoEProfile: name requerido');
+    const existing = await this.findPPPoEProfileByName(name);
+    if (existing) return { skipped: true, reason: 'already_exists', id: existing['.id'] };
+    const body = { name };
+    if (rateLimit) body['rate-limit'] = rateLimit;
+    if (localAddress) body['local-address'] = localAddress;
+    if (remoteAddress) body['remote-address'] = remoteAddress;
+    if (onlyOne) body['only-one'] = String(onlyOne);
+    if (parentQueue) body['parent-queue'] = parentQueue;
+    return this.request('/ppp/profile', 'PUT', body);
   }
 
   async findPPPoESecretByName(name) {

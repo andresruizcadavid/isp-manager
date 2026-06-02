@@ -279,43 +279,43 @@
 </svelte:head>
 
 <!-- Page header -->
-<div class="flex items-center justify-between mb-4">
+<div class="flex flex-col xs:flex-row xs:items-center justify-between gap-2 mb-4">
   <div>
-    <h1 class="text-xl font-semibold text-slate-900">Nuevo Cliente</h1>
-    <p class="text-sm text-slate-500 mt-0.5">Agregar un nuevo abonado al sistema</p>
+    <h1 class="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">Nuevo Cliente</h1>
+    <p class="text-sm sm:text-[13px] text-slate-500 mt-0.5">Agregar un nuevo abonado al sistema</p>
   </div>
-  <a href="/clients" class="btn-secondary">
-    <ArrowLeft size={15} /> Volver a Clientes
+  <a href="/clients" class="btn-secondary self-start">
+    <ArrowLeft size={16} class="sm:w-3.5 sm:h-3.5" /> Volver
   </a>
 </div>
 
 <!-- Stepper -->
 <div class="card mb-4">
-  <div class="px-5 py-4 flex items-center gap-4">
+  <div class="px-3 sm:px-5 py-3 sm:py-4 flex items-center gap-2 sm:gap-4">
     <!-- Step 1 -->
-    <div class="flex items-center gap-2">
-      <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold
+    <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
+      <div class="w-6 sm:w-7 h-6 sm:h-7 rounded-full flex items-center justify-center text-[11px] sm:text-xs font-semibold flex-shrink-0
                   {step >= 0 ? 'bg-brand-800 text-white' : 'bg-slate-200 text-slate-500'}">
         {#if step > 0}
-          <CheckCircle2 size={14} />
+          <CheckCircle2 size={12} class="sm:w-3.5 sm:h-3.5" />
         {:else}
           1
         {/if}
       </div>
-      <span class="text-sm font-medium {step === 0 ? 'text-slate-900' : 'text-slate-500'}">
-        Selección de Zona
+      <span class="text-sm sm:text-[13px] font-medium truncate {step === 0 ? 'text-slate-900' : 'text-slate-500'}">
+        Zona
       </span>
     </div>
 
-    <div class="flex-1 h-px bg-slate-200"></div>
+    <div class="flex-1 h-px bg-slate-200 min-w-[12px]"></div>
 
     <!-- Step 2 -->
-    <div class="flex items-center gap-2">
-      <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold
+    <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
+      <div class="w-6 sm:w-7 h-6 sm:h-7 rounded-full flex items-center justify-center text-[11px] sm:text-xs font-semibold flex-shrink-0
                   {step >= 1 ? 'bg-brand-800 text-white' : 'bg-slate-200 text-slate-500'}">
         2
       </div>
-      <span class="text-sm font-medium {step === 1 ? 'text-slate-900' : 'text-slate-500'}">
+      <span class="text-sm sm:text-[13px] font-medium truncate {step === 1 ? 'text-slate-900' : 'text-slate-500'}">
         Datos del Cliente
       </span>
     </div>
@@ -359,10 +359,10 @@
             </a>
           </div>
         {:else}
-          <p class="text-xs text-slate-500 mb-3">
+          <p class="text-xs sm:text-[11px] text-slate-500 mb-3">
             La zona define el router al que el cliente quedará asociado.
           </p>
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
             {#each zonesAvailable as zone}
               <button type="button"
                       on:click={() => selectedZoneId = zone.id}
@@ -371,25 +371,25 @@
                                ? 'border-brand-800 bg-blue-50/40 shadow-sm'
                                : 'border-slate-200 hover:border-slate-300 bg-white'}">
                 <div class="flex items-start gap-2.5">
-                  <div class="w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0"
+                  <div class="w-3 sm:w-2.5 h-3 sm:h-2.5 rounded-full mt-1 flex-shrink-0"
                        style="background-color: {zone.color || '#3b82f6'}"></div>
                   <div class="min-w-0 flex-1">
-                    <div class="text-sm font-semibold text-slate-900 truncate">{zone.name}</div>
+                    <div class="text-sm sm:text-[13px] font-semibold text-slate-900 truncate">{zone.name}</div>
                     {#if zone.description}
-                      <div class="text-xs text-slate-500 truncate">{zone.description}</div>
+                      <div class="text-xs sm:text-[11px] text-slate-500 truncate">{zone.description}</div>
                     {/if}
                     {#if zone.router}
-                      <div class="text-[11px] text-slate-500 mt-1 truncate">
+                      <div class="text-xs sm:text-[11px] text-slate-500 mt-1 truncate">
                         📡 <span class="font-medium">{zone.router.name}</span>
                         <span class="font-mono text-slate-400">— {(zone.router.routes?.[0]?.ip ?? '—')}</span>
                       </div>
                     {/if}
-                    <div class="text-[11px] text-slate-400 mt-0.5">
+                    <div class="text-xs sm:text-[11px] text-slate-400 mt-0.5">
                       {zone.clientCount || 0} clientes
                     </div>
                   </div>
                   {#if selectedZoneId === zone.id}
-                    <CheckCircle2 size={16} class="text-brand-800 flex-shrink-0" />
+                    <CheckCircle2 size={18} class="sm:w-4 sm:h-4 text-brand-800 flex-shrink-0" />
                   {/if}
                 </div>
               </button>
@@ -400,9 +400,9 @@
               <div class="p-3 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/60 opacity-70"
                    title="Zona sin router asignado">
                 <div class="flex items-start gap-2.5">
-                  <div class="w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 bg-slate-300"></div>
+                  <div class="w-3 sm:w-2.5 h-3 sm:h-2.5 rounded-full mt-1.5 flex-shrink-0 bg-slate-300"></div>
                   <div class="min-w-0 flex-1">
-                    <div class="text-sm font-semibold text-slate-500 truncate">{zone.name}</div>
+                    <div class="text-sm sm:text-[13px] font-semibold text-slate-500 truncate">{zone.name}</div>
                     <div class="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded
                                 bg-amber-50 text-amber-700 ring-1 ring-amber-100 text-[10px]">
                       ⚠️ Sin router
@@ -413,14 +413,14 @@
             {/each}
           </div>
 
-          <div class="flex items-center justify-end gap-2 mt-5">
+          <div class="flex items-center justify-end gap-2 mt-4 sm:mt-5">
             <a href="/clients" class="btn-secondary">
-              <X size={15} /> Cancelar
+              <X size={16} class="sm:w-3.5 sm:h-3.5" /> Cancelar
             </a>
             <button type="button" on:click={continueToData}
                     disabled={!selectedZoneId}
                     class="btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
-              Continuar <ArrowRight size={15} />
+              Continuar <ArrowRight size={16} class="sm:w-3.5 sm:h-3.5" />
             </button>
           </div>
         {/if}
@@ -771,20 +771,20 @@
     </div>
 
     <!-- Buttons -->
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
       <button type="button" on:click={backToZoneStep} class="btn-secondary">
-        <ArrowLeft size={15} /> Atrás
+        <ArrowLeft size={16} class="sm:w-3.5 sm:h-3.5" /> Atrás
       </button>
       <button type="submit" disabled={saving} class="btn-primary">
         {#if saving}
           <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
           Guardando...
         {:else}
-          <Save size={15} /> Guardar Cliente
+          <Save size={16} class="sm:w-3.5 sm:h-3.5" /> Guardar
         {/if}
       </button>
       <a href="/clients" class="btn-secondary ml-auto">
-        <X size={15} /> Cancelar
+        <X size={16} class="sm:w-3.5 sm:h-3.5" /> Cancelar
       </a>
     </div>
   </form>

@@ -83,6 +83,7 @@ model User {
   // Relations
   sessions          Session[]
   clientUpdateTokens ClientUpdateToken[]
+  payments          Payment[]
 
   @@map("users")
 }
@@ -211,13 +212,16 @@ model ClientEvidencePhoto {
   fileName     String? // original filename
   mimeType     String?
   sizeBytes    Int?
+  paymentId    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client  Client  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  payment Payment? @relation(fields: [paymentId], references: [id])
 
   @@index([clientId])
   @@index([technicianId])
+  @@index([paymentId])
   @@map("client_evidence_photos")
 }
 
@@ -280,6 +284,8 @@ model Invoice {
   paidDate   DateTime?
   pdfUrl     String?
   notes      String?
+  periodYear  Int? // year (e.g. 2026) — for month-based billing
+  periodMonth Int? // month (1-12) — for month-based billing
   createdAt  DateTime      @default(now())
   updatedAt  DateTime      @updatedAt
 
@@ -288,6 +294,7 @@ model Invoice {
   payments Payment[]
   items    InvoiceItem[]
 
+  @@unique([clientId, periodYear, periodMonth])
   @@map("invoices")
 }
 
@@ -316,13 +323,18 @@ model Payment {
   transactionId String?       @unique
   externalId    String? // For external payment systems
   notes         String?
+  createdByUserId   String?
+  createdByUserName String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
   // Relations
-  invoice Invoice @relation(fields: [invoiceId], references: [id])
-  client  Client  @relation(fields: [clientId], references: [id])
+  invoice    Invoice              @relation(fields: [invoiceId], references: [id])
+  client     Client               @relation(fields: [clientId], references: [id])
+  createdBy  User?                @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
+  evidencePhotos ClientEvidencePhoto[]
 
+  @@index([createdByUserId])
   @@map("payments")
 }
 

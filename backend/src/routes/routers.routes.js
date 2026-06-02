@@ -1,15 +1,10 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
-import {
-  MikrotikService,
-  buildMikrotikService,
-  testRouterCredentials,
-  pickActiveRoute
-} from '../services/mikrotik.service.js';
+import { prisma } from '../config/database.js';
+import { requireAdmin } from '../middleware/auth.middleware.js';
+import { buildMikrotikService, testRouterCredentials } from '../services/mikrotik.service.js';
 import { probeRouter } from '../services/router-monitor.service.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // Always load routes alongside the router so callers can pick a dial-target
 // without a second round-trip. Sorted by priority so r.routes[0] is the primary.
@@ -278,7 +273,11 @@ router.get('/:id/profiles', async (req, res) => {
   }
 });
 
-// Alias used by /plans sync flow — same payload, semantic URL.
+// GET PPP profiles from MikroTik, normalized with sync metadata.
+// Returns profiles enriched with:
+//   - isBuiltin  (default / default-encryption are protected)
+//   - inUse      (at least one MikrotikAccount references it)
+//   - linkedToPlan (at least one Plan references it by mikrotikProfile or name)
 router.get('/:id/ppp-profiles', async (req, res) => {
   try {
     const r = await prisma.router.findUniqueOrThrow({
@@ -289,17 +288,74 @@ router.get('/:id/ppp-profiles', async (req, res) => {
       return res.status(409).json({ success: false, error: `Router "${r.name}" está desactivado.` });
     }
     const mk = buildMikrotikService(r);
-    const profiles = await mk.getPPPoEProfiles();
-    res.json({ success: true, data: profiles });
+
+    const [rawProfiles, accounts, plans] = await Promise.all([
+      mk.getPPPoEProfiles().catch(() => []),
+      prisma.mikrotikAccount.findMany({ select: { profileName: true } }),
+      prisma.plan.findMany({ select: { name: true, mikrotikProfile: true } })
+    ]);
+
+    const profileNamesInUse = new Set(accounts.map(a => a.profileName).filter(Boolean));
+    const profileNamesReferenced = new Set();
+    for (const p of plans) {
+      if (p.mikrotikProfile) profileNamesReferenced.add(p.mikrotikProfile);
+      else if (p.name) profileNamesReferenced.add(p.name);
+    }
+    const BUILTIN = new Set(['default', 'default-encryption']);
+
+    const profiles = (Array.isArray(rawProfiles) ? rawProfiles : []).map(p => ({
+      id:           p['.id'] || null,
+      name:         p.name || p['name'] || '',
+      rateLimit:    p['rate-limit'] || null,
+      localAddress: p['local-address'] || null,
+      remoteAddress: p['remote-address'] || null,
+      onlyOne:      p['only-one'] || null,
+      comment:      p.comment || null,
+      isBuiltin:    BUILTIN.has(p.name || p['name']),
+      inUse:        profileNamesInUse.has(p.name || p['name']),
+      linkedToPlan: profileNamesReferenced.has(p.name || p['name']),
+    }));
+
+    res.json({ success: true, data: { profiles, totals: {
+      total:    profiles.length,
+      builtin:  profiles.filter(p => p.isBuiltin).length,
+      inUse:    profiles.filter(p => p.inUse).length,
+      linked:   profiles.filter(p => p.linkedToPlan).length,
+      free:     profiles.filter(p => !p.isBuiltin && !p.inUse && !p.linkedToPlan).length,
+    } } });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
   }
 });
 
-// GET orphan PPP profiles — profiles that exist on the router but:
-//   1. No local Plan references them (by mikrotikProfile or name), AND
-//   2. No /ppp/secret on the device uses them.
-// These are safe-to-delete candidates surfaced in the /plans cleanup tool.
+// POST create a PPP profile on the router. Optionally link it to a local plan
+// by setting the plan's mikrotikProfile field afterward.
+router.post('/:id/ppp-profiles', async (req, res) => {
+  try {
+    const r = await prisma.router.findUniqueOrThrow({
+      where:   { id: Number(req.params.id) },
+      include: ROUTER_INCLUDE
+    });
+    if (!r.isActive) {
+      return res.status(409).json({ success: false, error: `Router "${r.name}" está desactivado.` });
+    }
+    const mk = buildMikrotikService(r);
+    const { name, rateLimit, localAddress, remoteAddress, onlyOne, parentQueue } = req.body || {};
+    if (!name) {
+      return res.status(400).json({ success: false, error: 'name es requerido' });
+    }
+    const result = await mk.createPPPoEProfile({ name, rateLimit, localAddress, remoteAddress, onlyOne, parentQueue });
+    res.status(201).json({ success: true, data: result });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+// GET unlinked PPP profiles — profiles that exist on the router but
+// NO local Plan references them (by mikrotikProfile or name).
+// Returns two lists:
+//   - orphans:  safe to delete (not referenced by any plan AND no secret uses them)
+//   - inUse:    has active PPPoE secrets but no local plan (informational)
 router.get('/:id/ppp-profiles/orphans', async (req, res) => {
   try {
     const r = await prisma.router.findUniqueOrThrow({
@@ -317,7 +373,7 @@ router.get('/:id/ppp-profiles/orphans', async (req, res) => {
       prisma.plan.findMany({ select: { name: true, mikrotikProfile: true } })
     ]);
 
-    const inUse = new Set(
+    const secretProfiles = new Set(
       (Array.isArray(secrets) ? secrets : [])
         .map(s => s.profile || s['profile'])
         .filter(Boolean)
@@ -327,22 +383,24 @@ router.get('/:id/ppp-profiles/orphans', async (req, res) => {
       if (p.mikrotikProfile) referenced.add(p.mikrotikProfile);
       else if (p.name)       referenced.add(p.name);
     }
-    // System defaults are never "orphan" — they're protected anyway.
     const BUILTIN = new Set(['default', 'default-encryption']);
 
-    const orphans = (Array.isArray(profiles) ? profiles : [])
-      .map(p => ({
-        name: p.name || p['name'],
-        rateLimit: p['rate-limit'] || p.rateLimit || null,
-        builtin: BUILTIN.has(p.name || p['name'])
-      }))
-      .filter(p => p.name && !BUILTIN.has(p.name) && !inUse.has(p.name) && !referenced.has(p.name));
+    const all = (Array.isArray(profiles) ? profiles : []).map(p => ({
+      name:      p.name || p['name'],
+      rateLimit: p['rate-limit'] || null,
+      comment:   p.comment || null,
+      builtin:   BUILTIN.has(p.name || p['name']),
+    }));
 
-    res.json({ success: true, data: { orphans, totals: {
-      profiles:   profiles.length,
-      inUse:      inUse.size,
-      referenced: referenced.size,
-      orphans:    orphans.length
+    const orphans = all.filter(p => p.name && !p.builtin && !secretProfiles.has(p.name) && !referenced.has(p.name));
+    const inUseUnlinked = all.filter(p => p.name && !p.builtin && secretProfiles.has(p.name) && !referenced.has(p.name));
+
+    res.json({ success: true, data: { orphans, inUseUnlinked, totals: {
+      profiles:       profiles.length,
+      builtin:        all.filter(p => p.builtin).length,
+      referenced:     referenced.size,
+      orphans:        orphans.length,
+      inUseUnlinked:  inUseUnlinked.length,
     } } });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });

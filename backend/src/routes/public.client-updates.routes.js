@@ -21,7 +21,7 @@ import fs        from 'fs';
 import crypto    from 'crypto';
 import { z }     from 'zod';
 import { env }   from '../config/env.js';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import {
   lookupToken,
   applyUpdate,

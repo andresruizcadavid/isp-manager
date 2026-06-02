@@ -12,7 +12,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import crypto from 'crypto';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { validateBody } from '../middleware/validate.middleware.js';
 import { sendTest, verifyWebhook, handleWebhook } from '../services/whatsapp.service.js';
 

@@ -61,23 +61,23 @@
 <!-- Header (mobile: stacked + compact) -->
 <div class="flex flex-wrap items-start justify-between gap-3 mb-4 sm:mb-6">
   <div class="min-w-0">
-    <h1 class="text-xl sm:text-2xl lg:text-3xl font-bold text-slate-900 tracking-tight">
+    <h1 class="page-title">
       Dashboard
     </h1>
-    <p class="hidden sm:block text-sm text-slate-500 mt-1">
+    <p class="page-subtitle">
       Resumen de actividad — internet-online
     </p>
   </div>
   <div class="flex items-center gap-2">
     <button on:click={load} disabled={loading}
-            class="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg
+            class="inline-flex items-center gap-1.5 min-h-[44px] sm:h-9 px-3 sm:px-3.5 rounded-lg
                    bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50
-                   active:scale-95 text-sm text-slate-700 transition
+                   active:scale-95 text-[15px] sm:text-sm text-slate-700 transition
                    disabled:opacity-50">
-      <RefreshCw size={14} class={loading ? 'animate-spin' : ''} />
+      <RefreshCw size={16} class="sm:w-3.5 sm:h-3.5 {loading ? 'animate-spin' : ''}" />
       <span class="hidden xs:inline">Actualizar</span>
     </button>
-    <span class="hidden sm:inline-flex items-center gap-1.5 h-9 px-3 rounded-lg
+    <span class="hidden sm:inline-flex items-center gap-1.5 sm:h-9 px-3 rounded-lg
                  bg-white border border-slate-200 text-sm text-slate-500">
       <Calendar size={14} /> Esta semana
     </span>
@@ -92,11 +92,12 @@
 {/if}
 
 <!-- KPI: horizontal scroll on < sm, grid on sm+ -->
-<div class="flex sm:grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6
-            overflow-x-auto sm:overflow-visible -mx-4 px-4 sm:mx-0 sm:px-0 pb-2 sm:pb-0">
+<div class="flex sm:grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2 sm:gap-4 mb-4 sm:mb-6
+            overflow-x-auto sm:overflow-visible -mx-4 px-4 sm:mx-0 sm:px-0 pb-2 sm:pb-0
+            scrollbar-thin">
 
-  <div class="kpi-tile shrink-0 min-w-[180px] sm:min-w-0">
-    <div class="icon-square-blue"><Users size={14} /></div>
+  <div class="kpi-tile shrink-0 min-w-[150px] sm:min-w-0">
+    <div class="icon-square-blue"><Users size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Clientes</div>
       <div class="kpi-value">{loading ? '–' : fmtNum(stats?.kpis.totalClients)}</div>
@@ -104,8 +105,8 @@
     </div>
   </div>
 
-  <div class="kpi-tile shrink-0 min-w-[180px] sm:min-w-0">
-    <div class="icon-square-green"><CheckCircle2 size={14} /></div>
+  <div class="kpi-tile shrink-0 min-w-[150px] sm:min-w-0">
+    <div class="icon-square-green"><CheckCircle2 size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Activos</div>
       <div class="kpi-value">{loading ? '–' : fmtNum(stats?.kpis.activeClients)}</div>
@@ -113,8 +114,8 @@
     </div>
   </div>
 
-  <div class="kpi-tile shrink-0 min-w-[180px] sm:min-w-0">
-    <div class="icon-square-amber"><FileText size={14} /></div>
+  <div class="kpi-tile shrink-0 min-w-[150px] sm:min-w-0">
+    <div class="icon-square-amber"><FileText size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Facturas</div>
       <div class="kpi-value">{loading ? '–' : fmtNum(stats?.kpis.pendingInvoices)}</div>
@@ -122,8 +123,8 @@
     </div>
   </div>
 
-  <div class="kpi-tile shrink-0 min-w-[180px] sm:min-w-0">
-    <div class="icon-square-rose"><Wallet size={14} /></div>
+  <div class="kpi-tile shrink-0 min-w-[150px] sm:min-w-0">
+    <div class="icon-square-rose"><Wallet size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Cobranza</div>
       <div class="kpi-value">{loading ? '–' : fmtMoney(stats?.kpis.pendingAmount)}</div>
@@ -131,8 +132,8 @@
     </div>
   </div>
 
-  <div class="kpi-tile shrink-0 min-w-[180px] sm:min-w-0">
-    <div class="icon-square-cyan"><Router size={14} /></div>
+  <div class="kpi-tile shrink-0 min-w-[150px] sm:min-w-0">
+    <div class="icon-square-cyan"><Router size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Routers</div>
       <div class="kpi-value">{loading ? '–' : fmtNum(stats?.kpis.totalRouters)}</div>
@@ -146,11 +147,11 @@
 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 sm:mb-6">
 
   <!-- Clientes por Estado -->
-  <div class="card p-4">
-    <div class="flex items-center gap-3 mb-4">
-      <div class="icon-square-green"><Users size={16} /></div>
+  <div class="card p-3 sm:p-4">
+    <div class="flex items-center gap-3 mb-3 sm:mb-4">
+      <div class="icon-square-green"><Users size={16} class="sm:w-3.5 sm:h-3.5" /></div>
       <div>
-        <h3 class="text-sm font-semibold text-slate-900">Clientes por Estado</h3>
+        <h3 class="text-sm sm:text-[13px] font-semibold text-slate-900">Clientes por Estado</h3>
         <p class="text-xs text-slate-500">{stats?.kpis.totalClients ?? 0} usuarios totales</p>
       </div>
     </div>
@@ -176,11 +177,11 @@
   </div>
 
   <!-- Clientes por Plan -->
-  <div class="card p-4">
-    <div class="flex items-center gap-3 mb-4">
-      <div class="icon-square-purple"><Package size={16} /></div>
+  <div class="card p-3 sm:p-4">
+    <div class="flex items-center gap-3 mb-3 sm:mb-4">
+      <div class="icon-square-purple"><Package size={16} class="sm:w-3.5 sm:h-3.5" /></div>
       <div>
-        <h3 class="text-sm font-semibold text-slate-900">Clientes por Plan</h3>
+        <h3 class="text-sm sm:text-[13px] font-semibold text-slate-900">Clientes por Plan</h3>
         <p class="text-xs text-slate-500">Distribución del catálogo</p>
       </div>
     </div>
@@ -206,11 +207,11 @@
   </div>
 
   <!-- Facturas por Estado -->
-  <div class="card p-4">
-    <div class="flex items-center gap-3 mb-4">
-      <div class="icon-square-amber"><BarChart3 size={16} /></div>
+  <div class="card p-3 sm:p-4">
+    <div class="flex items-center gap-3 mb-3 sm:mb-4">
+      <div class="icon-square-amber"><BarChart3 size={16} class="sm:w-3.5 sm:h-3.5" /></div>
       <div>
-        <h3 class="text-sm font-semibold text-slate-900">Facturas por Estado</h3>
+        <h3 class="text-sm sm:text-[13px] font-semibold text-slate-900">Facturas por Estado</h3>
         <p class="text-xs text-slate-500">{stats?.kpis.totalInvoices ?? 0} facturas en total</p>
       </div>
     </div>
@@ -240,11 +241,11 @@
 </div>
 
 <!-- Wide footer card: cobranza del mes -->
-<div class="card p-4">
-  <div class="flex items-center gap-3 mb-4">
-    <div class="icon-square-blue"><Wallet size={16} /></div>
+<div class="card p-3 sm:p-4">
+  <div class="flex items-center gap-3 mb-3 sm:mb-4">
+    <div class="icon-square-blue"><Wallet size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div>
-      <h3 class="text-sm font-semibold text-slate-900">Cobranza del mes</h3>
+      <h3 class="text-sm sm:text-[13px] font-semibold text-slate-900">Cobranza del mes</h3>
       <p class="text-xs text-slate-500">Recaudo de pagos completados desde el día 1</p>
     </div>
   </div>

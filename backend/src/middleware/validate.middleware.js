@@ -8,17 +8,8 @@ export const validateBody = (schema) => {
       next();
     } catch (error) {
       if (error instanceof z.ZodError) {
-        const issues = error.errors.map(e => ({
-          path: e.path.join('.'),
-          message: e.message,
-          code: e.code
-        }));
-        console.error('[validateBody] ZodError on', req.method, req.originalUrl, '\n', JSON.stringify(issues, null, 2));
-        throw new AppError(
-          'Error de validación en los datos enviados',
-          400,
-          'VALIDATION_ERROR'
-        );
+        next(error);
+        return;
       }
       next(error);
     }
@@ -32,11 +23,8 @@ export const validateQuery = (schema) => {
       next();
     } catch (error) {
       if (error instanceof z.ZodError) {
-        throw new AppError(
-          'Error de validación en los parámetros de consulta',
-          400,
-          'QUERY_VALIDATION_ERROR'
-        );
+        next(error);
+        return;
       }
       next(error);
     }
@@ -50,11 +38,8 @@ export const validateParams = (schema) => {
       next();
     } catch (error) {
       if (error instanceof z.ZodError) {
-        throw new AppError(
-          'Error de validación en los parámetros de ruta',
-          400,
-          'PARAMS_VALIDATION_ERROR'
-        );
+        next(error);
+        return;
       }
       next(error);
     }

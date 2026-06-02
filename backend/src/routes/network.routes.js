@@ -5,7 +5,7 @@
 // Events: list with filters (deviceId, zoneId, status, from, to) + CSV export.
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { validateBody } from '../middleware/validate.middleware.js';
 import { runSweep } from '../services/network-monitor.service.js';
 

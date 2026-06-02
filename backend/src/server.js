@@ -1,16 +1,18 @@
 import http from 'http';
 import app from './app.js';
 import { env } from './config/env.js';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from './config/database.js';
 import { createRedisClient } from './services/redis.service.js';
 import { initSocket } from './services/socket.service.js';
 import { startMonitor } from './services/network-monitor.service.js';
 import { startRouterMonitor } from './services/router-monitor.service.js';
 
-// Initialize database connection
-export const prisma = new PrismaClient({
-  log: env.NODE_ENV === 'development' ? ['query', 'info', 'warn', 'error'] : ['error']
-});
+// ── Scheduled jobs ──────────────────────────────────────────
+// Each import instantiates its singleton, which calls setupSchedules() in the
+// constructor to register node-cron tasks.
+import './jobs/billing.job.js';
+import './jobs/overdue.job.js';
+import './jobs/debtor-notification.job.js';
 
 // Initialize Redis connection
 export const redis = createRedisClient();

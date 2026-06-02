@@ -5,7 +5,7 @@
 // active config exists the send is a no-op, logged once, so the rest of the
 // monitor keeps working unchanged.
 import TelegramBot from 'node-telegram-bot-api';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 
 let warnedNoConfig = false;
 

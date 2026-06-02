@@ -1,5 +1,14 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  ⚠️  THIS FILE IS DEPRECATED / STALE — DO NOT USE                     ║
+// ║  The active schema lives at backend/prisma/schema.prisma              ║
+// ║  This copy is kept only as reference but MUST NOT be used for         ║
+// ║  prisma generate, prisma migrate, or any other Prisma operation.      ║
+// ║  Differences from active schema include:                              ║
+// ║    - Device.macAddress → Device.mac                                    ║
+// ║    - Missing models: Zone, Router, MikrotikAccount, NetworkDevice,     ║
+// ║      NetworkConnection, NetworkEvent, ClientUpdateToken, etc.          ║
+// ║    - Different enums and field types                                   ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
 
 generator client {
   provider = "prisma-client-js"

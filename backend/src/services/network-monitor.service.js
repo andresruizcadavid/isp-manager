@@ -20,7 +20,7 @@
 //
 // Single in-process instance is enough for the project scale (≤30 nodes).
 import ping from 'ping';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { emit } from './socket.service.js';
 import { alertDown, alertRecovery } from './telegram.service.js';
 

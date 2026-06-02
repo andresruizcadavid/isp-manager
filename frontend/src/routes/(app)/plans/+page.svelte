@@ -19,11 +19,13 @@
   let profilesLoading = false;
   let profilesError = '';
 
-  // Edit modal
+  // Edit / Create modal
   let showEdit = false;
+  let createMode = false;
   let editing = null;
   let editError = '';
   let saving = false;
+  let syncToRouter = false;
 
   async function loadPlans() {
     loading = true; error = '';
@@ -44,7 +46,8 @@
     if (!routerId) { profiles = []; return; }
     profilesLoading = true; profilesError = '';
     try {
-      profiles = (await routersApi.pppProfiles(Number(routerId))) || [];
+      const res = await routersApi.pppProfiles(Number(routerId));
+      profiles = (res && res.profiles) || [];
     } catch (e) {
       profilesError = e.message || 'No se pudo consultar el router';
       profiles = [];
@@ -57,21 +60,24 @@
     loadOrphans();
   }
 
-  // ── Orphan profiles (cleanup tool) ──────────────────────────────
+  // ── Orphan / Unlinked profiles (cleanup tool) ───────────────────
   let orphans = [];
+  let inUseUnlinked = [];
   let orphansLoading = false;
   let orphansError = '';
   let orphansOpen = false;
 
   async function loadOrphans() {
-    if (!routerId) { orphans = []; return; }
+    if (!routerId) { orphans = []; inUseUnlinked = []; return; }
     orphansLoading = true; orphansError = '';
     try {
       const data = await routersApi.orphanPppProfiles(Number(routerId));
       orphans = data?.orphans || [];
+      inUseUnlinked = data?.inUseUnlinked || [];
     } catch (e) {
       orphansError = e.message || 'No se pudieron leer huérfanos';
       orphans = [];
+      inUseUnlinked = [];
     } finally { orphansLoading = false; }
   }
 
@@ -85,12 +91,33 @@
     }
   }
 
+  async function importProfile(profile) {
+    const name = prompt('Nombre del plan a crear desde "' + profile.name + '":', profile.name);
+    if (!name) return;
+    try {
+      await plansApi.create({
+        name,
+        type: 'PPPoE',
+        mikrotikProfile: profile.name,
+        price: 0,
+        monthlyPrice: 0,
+        downloadSpeed: 0,
+        uploadSpeed: 0,
+        dataLimit: null,
+        isActive: true,
+      });
+      await Promise.all([loadPlans(), loadProfiles(), loadOrphans()]);
+    } catch (e) {
+      alert('Error al importar: ' + e.message);
+    }
+  }
+
   onMount(async () => {
     await Promise.all([loadPlans(), loadRouters()]);
   });
 
   // Sync status helper.
-  $: profileNames = new Set(profiles.map(p => p.name || p['name']).filter(Boolean));
+  $: profileNames = new Set(profiles.map(p => p.name).filter(Boolean));
   function syncStatus(plan) {
     if (!routerId) return 'no_router';
     if (!plan.mikrotikProfile) return 'unset';
@@ -102,6 +129,11 @@
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(cents / 100);
   }
   const mbps = (kbps) => kbps ? (kbps / 1000).toFixed(kbps % 1000 ? 1 : 0) : 0;
+  function fmtRate(rateLimit) {
+    if (!rateLimit) return '—';
+    const parts = rateLimit.split(' ');
+    return parts[0] || rateLimit;
+  }
 
   // KPIs
   $: kpiTotal    = plans.length;
@@ -124,18 +156,36 @@
     };
     editError = ''; showEdit = true;
   }
-  function closeEdit() { showEdit = false; editing = null; editError = ''; }
+  function newPlan() {
+    createMode = true;
+    editing = {
+      id: null,
+      name: '',
+      type: 'PPPoE',
+      mikrotikProfile: '',
+      monthlyPesos: 0,
+      downloadMbps: 0,
+      uploadMbps: 0,
+      dataLimit: '',
+      isActive: true,
+    };
+    syncToRouter = false;
+    editError = ''; showEdit = true;
+  }
+
+  function closeEdit() { showEdit = false; createMode = false; editing = null; editError = ''; syncToRouter = false; }
 
   async function saveEdit() {
     if (!editing) return;
     saving = true; editError = '';
     try {
       const cents = Math.round(Number(editing.monthlyPesos || 0) * 100);
-      // Reject save if a profile is selected but doesn't exist on the router.
-      if (editing.mikrotikProfile && !profileNames.has(editing.mikrotikProfile)) {
+      // Reject save if a profile is selected but doesn't exist on the router
+      // (skip check when creating with sync-to-router — profile will be created).
+      if (editing.mikrotikProfile && !profileNames.has(editing.mikrotikProfile) && !(createMode && syncToRouter)) {
         throw new Error(`El perfil "${editing.mikrotikProfile}" no existe en el router seleccionado.`);
       }
-      await plansApi.update(editing.id, {
+      const planData = {
         name: editing.name.trim(),
         type: editing.type || null,
         mikrotikProfile: editing.mikrotikProfile || null,
@@ -145,9 +195,23 @@
         uploadSpeed:   Math.round(Number(editing.uploadMbps   || 0) * 1000),
         dataLimit:     editing.dataLimit === '' ? null : Number(editing.dataLimit),
         isActive: !!editing.isActive,
-      });
+      };
+
+      if (createMode && syncToRouter && routerId && editing.mikrotikProfile) {
+        const rateLimit = `${editing.downloadMbps || 0}M/${editing.uploadMbps || 0}M`;
+        await routersApi.createPppProfile(Number(routerId), {
+          name: editing.mikrotikProfile,
+          rateLimit,
+        });
+      }
+
+      if (createMode) {
+        await plansApi.create(planData);
+      } else {
+        await plansApi.update(editing.id, planData);
+      }
       closeEdit();
-      await loadPlans();
+      await Promise.all([loadPlans(), loadProfiles()]);
     } catch (e) { editError = e.message || 'No se pudo guardar'; }
     finally { saving = false; }
   }
@@ -182,6 +246,9 @@
       Catálogo del ISP, sincronizado con los PPP Profiles del MikroTik.
     </p>
   </div>
+  <button type="button" class="btn-primary" on:click={newPlan}>
+    <Package size={14} /> Crear plan
+  </button>
 </div>
 
 <!-- Router selector + sync action -->
@@ -373,19 +440,89 @@
   </div>
 </div>
 
-<!-- ─── Perfiles huérfanos en el router ──────────────────────────── -->
+<!-- ─── Perfiles disponibles en MikroTik ──────────────────────────── -->
+{#if routerId && profiles.length > 0}
+  <div class="card mt-4 overflow-hidden">
+    <div class="flex items-center justify-between px-5 py-3 border-b border-slate-100">
+      <div class="flex items-center gap-2">
+        <RouterIcon size={14} class="text-slate-400" />
+        <span class="text-sm font-medium text-text-primary">
+          Perfiles PPP en {selectedRouter?.name || 'el router'}
+        </span>
+        <span class="badge bg-slate-100 text-slate-600 ring-slate-200 text-[11px]">{profiles.length}</span>
+      </div>
+      {#if profilesLoading}
+        <Loader2 size={12} class="animate-spin text-blue-400" />
+      {/if}
+    </div>
+
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Perfil</th>
+            <th>Rate Limit</th>
+            <th>Estado</th>
+            <th class="text-right">Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each profiles as p (p.id || p.name)}
+            <tr>
+              <td>
+                <div class="font-medium text-sm text-slate-900 font-mono">{p.name}</div>
+                {#if p.comment}
+                  <div class="text-[11px] text-slate-500">{p.comment}</div>
+                {/if}
+              </td>
+              <td class="font-mono text-xs text-slate-600">
+                {p.rateLimit ? fmtRate(p.rateLimit) : '—'}
+              </td>
+              <td>
+                {#if p.isBuiltin}
+                  <span class="badge bg-slate-100 text-slate-500 ring-slate-200 text-[11px]">Sistema</span>
+                {:else if p.linkedToPlan}
+                  <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100 inline-flex items-center gap-1">
+                    <CheckCircle2 size={10} /> Vinculado a plan
+                  </span>
+                {:else if p.inUse}
+                  <span class="badge bg-amber-50 text-amber-700 ring-amber-100 inline-flex items-center gap-1">
+                    <AlertTriangle size={10} /> En uso sin plan
+                  </span>
+                {:else}
+                  <span class="badge bg-blue-50 text-blue-700 ring-blue-100 inline-flex items-center gap-1">
+                    Disponible
+                  </span>
+                {/if}
+              </td>
+              <td class="text-right">
+                {#if !p.isBuiltin && !p.linkedToPlan}
+                  <button class="btn-primary !py-1 !px-3 text-xs" on:click={() => importProfile(p)}>
+                    Importar
+                  </button>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{/if}
+
+<!-- ─── Perfiles sin vínculo en el router ──────────────────────────── -->
 {#if routerId}
   <div class="card mt-4">
     <button type="button" on:click={() => orphansOpen = !orphansOpen}
             class="w-full flex items-center justify-between px-5 py-3
                    text-left hover:bg-slate-50 transition rounded-xl">
       <div class="flex items-center gap-2">
-        <Trash2 size={14} class="text-slate-400" />
+        <AlertCircle size={14} class="text-slate-400" />
         <span class="text-sm font-medium text-text-primary">
-          Perfiles huérfanos en {selectedRouter?.name || 'el router'}
+          Perfiles sin plan local en {selectedRouter?.name || 'el router'}
         </span>
-        {#if orphans.length > 0}
-          <span class="badge bg-amber-50 text-amber-700 ring-amber-100">{orphans.length}</span>
+        {#if orphans.length + inUseUnlinked.length > 0}
+          <span class="badge bg-amber-50 text-amber-700 ring-amber-100">{orphans.length + inUseUnlinked.length}</span>
         {/if}
       </div>
       <svelte:component this={orphansOpen ? ChevronDown : ChevronRight} size={14} class="text-slate-400" />
@@ -393,40 +530,67 @@
 
     {#if orphansOpen}
       <div class="px-5 pb-4 border-t border-slate-100">
-        <p class="text-xs text-text-secondary py-3">
-          Perfiles que existen en MikroTik pero <strong>ningún plan local los referencia</strong>
-          y <strong>ningún cliente PPPoE los usa</strong>. Son seguros de eliminar.
-        </p>
-
         {#if orphansLoading}
-          <div class="flex items-center gap-2 text-xs text-slate-500 py-2">
+          <div class="flex items-center gap-2 text-xs text-slate-500 py-3">
             <Loader2 size={12} class="animate-spin" /> Analizando...
           </div>
         {:else if orphansError}
           <div class="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
             {orphansError}
           </div>
-        {:else if orphans.length === 0}
+        {:else if orphans.length === 0 && inUseUnlinked.length === 0}
           <div class="text-xs text-emerald-700 inline-flex items-center gap-1.5">
-            <CheckCircle2 size={12} /> Sin huérfanos — el router está limpio.
+            <CheckCircle2 size={12} /> Todos los perfiles están vinculados a un plan.
           </div>
         {:else}
-          <div class="flex flex-wrap gap-2">
-            {#each orphans as o (o.name)}
-              <div class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg
-                          bg-slate-50 border border-slate-200 text-xs">
-                <span class="font-mono text-slate-700">{o.name}</span>
-                {#if o.rateLimit}
-                  <span class="text-slate-400 text-[10px]">· {o.rateLimit}</span>
-                {/if}
-                <button type="button" on:click={() => deleteOrphan(o.name)}
-                        title="Eliminar del router"
-                        class="ml-1 text-slate-400 hover:text-red-600 transition">
-                  <Trash2 size={12} />
-                </button>
+          {#if orphans.length > 0}
+            <div class="py-3">
+              <p class="text-xs font-medium text-slate-600 mb-2 flex items-center gap-1.5">
+                <Trash2 size={12} class="text-amber-500" />
+                Huérfanos — no los usa ningún cliente ni plan ({orphans.length})
+              </p>
+              <div class="flex flex-wrap gap-2">
+                {#each orphans as o (o.name)}
+                  <div class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg
+                              bg-amber-50 border border-amber-200 text-xs">
+                    <span class="font-mono text-slate-700">{o.name}</span>
+                    {#if o.rateLimit}
+                      <span class="text-slate-400 text-[10px]">· {fmtRate(o.rateLimit)}</span>
+                    {/if}
+                    <button type="button" on:click={() => deleteOrphan(o.name)}
+                            title="Eliminar del router"
+                            class="ml-1 text-slate-400 hover:text-red-600 transition">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                {/each}
               </div>
-            {/each}
-          </div>
+            </div>
+          {/if}
+
+          {#if inUseUnlinked.length > 0}
+            <div class="py-3 border-t border-slate-100">
+              <p class="text-xs font-medium text-slate-600 mb-2 flex items-center gap-1.5">
+                <AlertTriangle size={12} class="text-blue-500" />
+                En uso por clientes pero sin plan local ({inUseUnlinked.length})
+              </p>
+              <div class="flex flex-wrap gap-2">
+                {#each inUseUnlinked as o (o.name)}
+                  <div class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg
+                              bg-blue-50 border border-blue-200 text-xs">
+                    <span class="font-mono text-slate-700">{o.name}</span>
+                    {#if o.rateLimit}
+                      <span class="text-slate-400 text-[10px]">· {fmtRate(o.rateLimit)}</span>
+                    {/if}
+                    <button class="ml-1 text-blue-500 hover:text-blue-700 transition font-medium"
+                            on:click={() => importProfile(o)}>
+                      Importar
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -437,7 +601,7 @@
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" on:click|self={closeEdit}>
     <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
       <div class="flex items-center justify-between p-6 border-b border-slate-200">
-        <h2 class="text-lg font-semibold text-slate-900">Editar plan</h2>
+        <h2 class="text-lg font-semibold text-slate-900">{createMode ? 'Crear plan' : 'Editar plan'}</h2>
         <button class="text-slate-400 hover:text-slate-600" on:click={closeEdit}>
           <X size={20} />
         </button>
@@ -455,7 +619,13 @@
 
         <div>
           <label for="plan-profile" class="label">Perfil MikroTik (técnico)</label>
-          {#if !routerId}
+          {#if createMode && syncToRouter}
+            <input id="plan-profile" type="text" class="input font-mono" bind:value={editing.mikrotikProfile}
+                   placeholder="ej. Online_basico" />
+            <p class="text-xs text-text-secondary mt-1.5">
+              Nombre del nuevo perfil que se creará en {selectedRouter?.name || 'el router'}.
+            </p>
+          {:else if !routerId}
             <div class="input flex items-center text-text-secondary bg-slate-50 cursor-not-allowed">
               Selecciona un router arriba para listar perfiles
             </div>
@@ -479,6 +649,14 @@
             </p>
           {/if}
         </div>
+
+        {#if createMode && routerId}
+          <label class="inline-flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input type="checkbox" class="rounded border-slate-300" bind:checked={syncToRouter} />
+            <span class="text-text-primary">Crear perfil PPP en MikroTik</span>
+            <span class="text-xs text-text-secondary">(se usará el nombre del perfil + velocidad)</span>
+          </label>
+        {/if}
 
         <div class="grid grid-cols-2 gap-4">
           <div>

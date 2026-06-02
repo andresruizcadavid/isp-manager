@@ -1,11 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
-import { validateBody } from '../middleware/validate.middleware.js';
-import { runCampaign, retryFailed } from '../services/notification.campaign.service.js';
+import { prisma } from '../config/database.js';
+import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
+import { validateBody, validateQuery } from '../middleware/validate.middleware.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const CHANNEL = z.enum(['EMAIL', 'WHATSAPP', 'BOTH']);
 const CHANNEL_SINGLE = z.enum(['EMAIL', 'WHATSAPP']);

@@ -1,4 +1,4 @@
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { notificationService } from '../services/notification.service.js';
@@ -507,13 +507,52 @@ class ClientsController {
     });
   });
 
+  /** ─── helpers ────────────────────────────────────────── */
+  async #resolvePlanProfile(plan) {
+    if (!plan) return null;
+    return plan.mikrotikProfile?.trim() || plan.name?.trim() || null;
+  }
+
+  /** Best-effort: sync the PPPoE profile on MikroTik to match the client's plan.
+   *  Returns { synced, warning }. Never throws. */
+  async #syncPlanToMikrotik(clientId, plan, mkAccount) {
+    if (!mkAccount) return { synced: false, warning: null };
+    const profile = await this.#resolvePlanProfile(plan);
+    if (!profile) {
+      return {
+        synced: false,
+        warning: `Plan "${plan.name}" no tiene perfil MikroTik asociado. El cliente se actualizó localmente pero el perfil PPPoE remoto no cambió.`
+      };
+    }
+    try {
+      const { service } = await getMikrotikServiceForClient(clientId);
+      await service.setPPPoEProfile(mkAccount.username, profile);
+      // Update local reference
+      await prisma.mikrotikAccount.update({
+        where: { clientId },
+        data: { profileName: profile }
+      });
+      return { synced: true, warning: null };
+    } catch (e) {
+      console.error(`[clients.update] MikroTik sync failed for ${mkAccount.username}:`, e.message);
+      return {
+        synced: false,
+        warning: `Plan actualizado localmente, pero no se pudo sincronizar el perfil PPPoE en MikroTik: ${e.message}. Puedes reintentar desde "Cambiar plan".`
+      };
+    }
+  }
+
+  /** ─── updateClient ─────────────────────────────────────
+   *  PUT /clients/:id
+   *  Actualiza datos del cliente y, si cambió el plan, sincroniza
+   *  el perfil PPPoE en MikroTik (best-effort). */
   updateClient = asyncHandler(async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
 
-    // Check if client exists
     const existingClient = await prisma.client.findUnique({
-      where: { id }
+      where: { id },
+      include: { mikrotikAccount: true }
     });
 
     if (!existingClient) {
@@ -542,13 +581,16 @@ class ClientsController {
       }
     }
 
-    // Verify plan if it's being changed
-    if (updateData.planId && updateData.planId !== existingClient.planId) {
-      const plan = await prisma.plan.findUnique({
+    // Resolve target plan if planId is changing
+    let targetPlan = null;
+    const planIdChanged = updateData.planId !== undefined
+      && String(updateData.planId) !== String(existingClient.planId || '');
+
+    if (planIdChanged && updateData.planId) {
+      targetPlan = await prisma.plan.findUnique({
         where: { id: updateData.planId }
       });
-
-      if (!plan) {
+      if (!targetPlan) {
         throw new AppError('Plan no encontrado', 404, 'PLAN_NOT_FOUND');
       }
     }
@@ -626,7 +668,7 @@ class ClientsController {
     // Mikrotik account upsert: always force routerId from the (current or new) zone.
     // We upsert when a mikrotik payload is provided OR when the zone changed
     // (so the account follows the new zone's router).
-    if (m || resolvedRouterId !== null) {
+    if ((m || resolvedRouterId !== null) && nextZoneId) {
       const targetRouterId = resolvedRouterId
         ?? (await prisma.zone.findUnique({ where: { id: nextZoneId }, select: { routerId: true } }))?.routerId;
       if (targetRouterId) {
@@ -661,11 +703,34 @@ class ClientsController {
 
     const [client] = await prisma.$transaction(ops);
 
-    res.json({
-      success: true,
-      data: client,
-      message: 'Cliente actualizado exitosamente'
+    // ── Post-transaction: sync plan profile to MikroTik ───────────────
+    let warnings = [];
+    if (planIdChanged && targetPlan) {
+      const result = await this.#syncPlanToMikrotik(id, targetPlan, client.mikrotikAccount);
+      if (result.warning) warnings.push(result.warning);
+    }
+
+    // Re-fetch client so returned data includes any profileName update
+    const fresh = await prisma.client.findUnique({
+      where: { id },
+      include: {
+        plan: true,
+        zone: true,
+        mikrotikAccount: { include: { router: true } },
+        invoices: {
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+          include: { payments: true }
+        },
+        payments: { orderBy: { createdAt: 'desc' }, take: 10 }
+      }
     });
+
+    const msg = warnings.length > 0
+      ? `Cliente actualizado. ${warnings.join(' ')}`
+      : 'Cliente actualizado exitosamente';
+
+    res.json({ success: true, data: fresh, message: msg });
   });
 
   deleteClient = asyncHandler(async (req, res) => {
@@ -739,9 +804,11 @@ class ClientsController {
     }
 
     // Check if MAC address already exists
-    const existingDevice = await prisma.device.findUnique({
-      where: { macAddress: deviceData.macAddress }
-    });
+    const existingDevice = deviceData.mac
+      ? await prisma.device.findUnique({
+          where: { mac: deviceData.mac }
+        })
+      : null;
 
     if (existingDevice) {
       throw new AppError('La dirección MAC ya está registrada', 409, 'MAC_ADDRESS_EXISTS');
@@ -780,9 +847,9 @@ class ClientsController {
     }
 
     // Check for duplicate MAC address if it's being changed
-    if (updateData.macAddress && updateData.macAddress !== device.macAddress) {
+    if (updateData.mac && updateData.mac !== device.mac) {
       const existingDevice = await prisma.device.findUnique({
-        where: { macAddress: updateData.macAddress }
+        where: { mac: updateData.mac }
       });
 
       if (existingDevice) {
@@ -999,7 +1066,8 @@ class ClientsController {
     const { planId } = req.body;
 
     const client = await prisma.client.findUnique({
-      where: { id }
+      where: { id },
+      include: { mikrotikAccount: true }
     });
 
     if (!client) {
@@ -1017,16 +1085,33 @@ class ClientsController {
     const updatedClient = await prisma.client.update({
       where: { id },
       data: { planId },
-      include: { plan: true }
+      include: { plan: true, mikrotikAccount: { include: { router: true } } }
     });
 
-    // TODO: Update plan in Mikrotik via REST API when write support is implemented
+    // ── Sync plan profile to MikroTik ─────────────────────────────────
+    let warning = null;
+    if (updatedClient.mikrotikAccount) {
+      const result = await this.#syncPlanToMikrotik(id, plan, updatedClient.mikrotikAccount);
+      warning = result.warning;
+    }
 
-    res.json({
-      success: true,
-      data: updatedClient,
-      message: 'Plan cambiado exitosamente'
+    // Re-fetch to get latest state
+    const fresh = await prisma.client.findUnique({
+      where: { id },
+      include: {
+        plan: true,
+        zone: true,
+        mikrotikAccount: { include: { router: true } },
+        invoices: { orderBy: { createdAt: 'desc' }, take: 10, include: { payments: true } },
+        payments: { orderBy: { createdAt: 'desc' }, take: 10 }
+      }
     });
+
+    const msg = warning
+      ? `Plan cambiado. ${warning}`
+      : 'Plan cambiado exitosamente';
+
+    res.json({ success: true, data: fresh, message: msg });
   });
 
   getClientInvoices = asyncHandler(async (req, res) => {

@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { notificationService } from '../services/notification.service.js';
 import { mikrotikService } from '../services/mikrotik.service.js';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 
 class OverdueJob {
   constructor() {
@@ -10,11 +10,11 @@ class OverdueJob {
   }
 
   setupSchedules() {
-    // Check for suspensions - Run daily at 8:00 AM
-    cron.schedule('0 8 * * *', async () => {
-      console.log('🔄 Starting suspension check job...');
-      await this.checkSuspensions();
-    });
+    // Suspension check disabled per requirement — suspension is manual only.
+    // cron.schedule('0 8 * * *', async () => {
+    //   console.log('🔄 Starting suspension check job...');
+    //   await this.checkSuspensions();
+    // });
 
     // Check for reactivations - Run daily at 10:00 AM
     cron.schedule('0 10 * * *', async () => {

@@ -1,16 +1,11 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../config/database.js';
 import nodemailer from 'nodemailer';
+import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
 import { validateBody } from '../middleware/validate.middleware.js';
-import { notificationService } from '../services/notification.service.js';
-import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
-// Ported from the legacy "hotspot-system" SMTP module — adapted from Next.js
-// route handlers to Express + Prisma. Same semantics: one active config at a
-// time, password write-only, test endpoint stores verification result.
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const createSchema = z.object({
   provider:  z.string().nullish(),

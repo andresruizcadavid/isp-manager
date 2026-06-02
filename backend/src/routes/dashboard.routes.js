@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 const router = Router();
 
 router.get('/stats', async (req, res) => {

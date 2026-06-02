@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authController } from '../controllers/auth.controller.js';
 import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
+import { authRateLimiter } from '../middleware/rateLimit.middleware.js';
 import { validateBody } from '../middleware/validate.middleware.js';
 import { z } from 'zod';
 
@@ -25,7 +26,7 @@ const changePasswordSchema = z.object({
 });
 
 // Public routes
-router.post('/login', validateBody(loginSchema), authController.login);
+router.post('/login', authRateLimiter, validateBody(loginSchema), authController.login);
 // /register is admin-only — for general user management use /api/v1/users.
 router.post('/register', authMiddleware, requireAdmin, validateBody(registerSchema), authController.register);
 

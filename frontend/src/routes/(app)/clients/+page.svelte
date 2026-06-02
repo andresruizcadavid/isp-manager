@@ -16,6 +16,8 @@
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import ResponsiveTable from '$lib/components/ui/ResponsiveTable.svelte';
+  import { user } from '$lib/stores/auth.store.js';
+  import { isAdmin } from '$lib/permissions.js';
 
   // ── Data ────────────────────────────────────────────
   let clients = [];
@@ -562,26 +564,26 @@
 
 <div class="h-full flex flex-col gap-3">
 
-  <!-- 1. Compact header (h-12) -->
-  <div class="h-12 flex items-center justify-between gap-3 flex-shrink-0">
-    <div class="flex items-baseline gap-3 min-w-0">
-      <h1 class="text-lg font-semibold text-slate-900 tracking-tight">Clientes</h1>
-      <span class="text-xs text-slate-500 truncate">
-        Gestiona los abonados del ISP · {total} {total === 1 ? 'cliente' : 'clientes'}
+  <!-- 1. Compact header -->
+  <div class="flex items-center justify-between gap-3 flex-shrink-0 min-h-[48px]">
+    <div class="flex items-baseline gap-2 sm:gap-3 min-w-0">
+      <h1 class="text-xl sm:text-lg font-bold sm:font-semibold text-slate-900 tracking-tight">Clientes</h1>
+      <span class="text-xs sm:text-[11px] text-slate-500 truncate hidden xs:inline">
+        {total} {total === 1 ? 'cliente' : 'clientes'}
       </span>
     </div>
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-1.5 sm:gap-2">
       <button type="button" on:click={openImport}
-              class="inline-flex items-center gap-1.5 px-3 py-1.5
+              class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 min-h-[44px] sm:py-1.5
                      bg-white border border-slate-200 hover:border-brand-600 hover:text-brand-700
                      text-slate-700 text-xs font-medium rounded-lg shadow-sm transition-colors">
-        <Download size={14} /> Importar desde MikroTik
+        <Download size={14} /> <span class="hidden xs:inline">Importar</span>
       </button>
       <a href={zoneId ? `/clients/new?zone_id=${zoneId}` : '/clients/new'}
-         class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-brand-600 hover:bg-brand-700
+         class="inline-flex items-center gap-1.5 px-3 min-h-[44px] sm:py-1.5 bg-brand-600 hover:bg-brand-700
                 active:bg-brand-800 text-white text-xs font-semibold rounded-lg
                 shadow-sm transition-colors">
-        <Plus size={14} /> Nuevo Cliente
+        <Plus size={16} class="sm:w-3.5 sm:h-3.5" /> <span class="hidden xs:inline">Nuevo Cliente</span>
       </a>
     </div>
   </div>
@@ -590,22 +592,22 @@
   <div class="flex items-center gap-1.5 md:flex-wrap flex-shrink-0
               overflow-x-auto md:overflow-visible -mx-4 px-4 sm:mx-0 sm:px-0 pb-1 md:pb-0
               scrollbar-thin">
-    <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-white border border-slate-200 text-xs flex-shrink-0 min-w-[110px] justify-center md:min-w-0 md:justify-start">
-      <Users size={11} class="text-slate-400" />
+    <span class="inline-flex items-center gap-1 py-0.5 px-2.5 rounded-full bg-white border border-slate-200 text-xs flex-shrink-0 min-w-[90px] justify-center md:min-w-0 md:justify-start">
+      <Users size={12} class="text-slate-400 hidden xs:inline" />
       <strong class="text-slate-900 tabular-nums">{kpiTotal}</strong>
-      <span class="text-slate-500">Total</span>
+      <span class="text-slate-500 hidden xs:inline">Total</span>
     </span>
-    <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-emerald-50 border border-emerald-100 text-xs flex-shrink-0 min-w-[140px] justify-center md:min-w-0 md:justify-start">
+    <span class="inline-flex items-center gap-1 py-0.5 px-2.5 rounded-full bg-emerald-50 border border-emerald-100 text-xs flex-shrink-0 min-w-[90px] justify-center md:min-w-0 md:justify-start">
       <strong class="text-emerald-700 tabular-nums">{kpiActive}</strong>
-      <span class="text-emerald-700/80">Activos (pág.)</span>
+      <span class="text-emerald-700/80 hidden xs:inline">Activos</span>
     </span>
-    <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-amber-50 border border-amber-100 text-xs flex-shrink-0 min-w-[170px] justify-center md:min-w-0 md:justify-start">
+    <span class="inline-flex items-center gap-1 py-0.5 px-2.5 rounded-full bg-amber-50 border border-amber-100 text-xs flex-shrink-0 min-w-[90px] justify-center md:min-w-0 md:justify-start">
       <strong class="text-amber-700 tabular-nums">{kpiSuspended}</strong>
-      <span class="text-amber-700/80">Suspendidos (pág.)</span>
+      <span class="text-amber-700/80 hidden xs:inline">Suspendidos</span>
     </span>
-    <span class="inline-flex items-center gap-1.5 py-1 px-3 rounded-full bg-rose-50 border border-rose-100 text-xs flex-shrink-0 min-w-[160px] justify-center md:min-w-0 md:justify-start">
+    <span class="inline-flex items-center gap-1 py-0.5 px-2.5 rounded-full bg-rose-50 border border-rose-100 text-xs flex-shrink-0 min-w-[110px] justify-center md:min-w-0 md:justify-start">
       <strong class="text-rose-700 tabular-nums">{fmtMoney(kpiBalance)}</strong>
-      <span class="text-rose-700/80">Saldo (pág.)</span>
+      <span class="text-rose-700/80 hidden xs:inline">Saldo</span>
     </span>
   </div>
 
@@ -625,7 +627,7 @@
       <div class="relative flex-1 md:max-w-xs">
         <Search size={12} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
         <input
-          class="w-full h-9 md:h-7 pl-7 pr-2 text-sm md:text-xs bg-white text-slate-900 placeholder-slate-400
+          class="w-full min-h-[44px] md:h-7 pl-7 pr-2 text-sm md:text-xs bg-white text-slate-900 placeholder-slate-400
                  border border-slate-200 rounded-md
                  focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
           placeholder="Buscar cliente..."
@@ -635,7 +637,7 @@
 
       <!-- Mobile: Filters button -->
       <button type="button" on:click={() => filtersOpen = true}
-              class="md:hidden inline-flex items-center gap-1.5 h-9 px-3 rounded-md
+              class="md:hidden inline-flex items-center gap-1.5 min-h-[44px] px-3 rounded-md
                      border border-slate-200 bg-white hover:bg-slate-50 active:scale-95
                      text-sm text-slate-700 transition relative">
         <SlidersHorizontal size={14} />
@@ -820,20 +822,22 @@
                           on:click={() => openClientModal(client, 'edit')}>
                     <Pencil size={14} />
                   </button>
-                  {#if client.status === 'ACTIVE'}
-                    <button class="btn-icon" title="Suspender" on:click={() => suspendClient(client)}>
-                      <PowerOff size={14} />
-                    </button>
-                  {:else}
-                    <button class="btn-icon" title="Activar" on:click={() => activateClient(client)}>
-                      <Power size={14} />
+                  {#if isAdmin($user?.role)}
+                    {#if client.status === 'ACTIVE'}
+                      <button class="btn-icon" title="Suspender" on:click={() => suspendClient(client)}>
+                        <PowerOff size={14} />
+                      </button>
+                    {:else}
+                      <button class="btn-icon" title="Activar" on:click={() => activateClient(client)}>
+                        <Power size={14} />
+                      </button>
+                    {/if}
+                    <button class="btn-icon hover:!text-red-600 hover:!bg-red-50"
+                            title="Eliminar"
+                            on:click={() => deleteClient(client)}>
+                      <Trash2 size={14} />
                     </button>
                   {/if}
-                  <button class="btn-icon hover:!text-red-600 hover:!bg-red-50"
-                          title="Eliminar"
-                          on:click={() => deleteClient(client)}>
-                    <Trash2 size={14} />
-                  </button>
                 </div>
               </td>
             </tr>
@@ -842,27 +846,27 @@
 
       <!-- Mobile card per row -->
       <svelte:fragment slot="mobile" let:row={client}>
-        <div class="flex items-start gap-3">
-          <a href="/clients/{client.id}" class="avatar shrink-0">
+        <div class="flex items-start gap-2.5">
+          <a href="/clients/{client.id}" class="w-9 h-9 sm:w-8 sm:h-8 rounded-full bg-gradient-to-br from-brand-800 to-brand-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
             {initials(client.name || client.fullName)}
           </a>
           <a href="/clients/{client.id}" class="min-w-0 flex-1">
             <div class="flex items-center gap-1.5">
-              <span class="text-sm font-semibold text-slate-900 truncate">
+              <span class="text-[15px] sm:text-sm font-semibold text-slate-900 truncate leading-snug">
                 {client.name || client.fullName || '—'}
               </span>
               {#if isImported(client)}
                 <span class="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded
                              bg-brand-50 text-brand-700 ring-1 ring-brand-100
-                             text-[9px] font-semibold flex-shrink-0">
+                             text-[10px] font-semibold flex-shrink-0">
                   <Download size={8} /> Importado
                 </span>
               {/if}
             </div>
-            <div class="text-xs text-slate-500 truncate">
+            <div class="text-sm sm:text-xs text-slate-500 truncate leading-normal mt-0.5">
               {client.plan?.name || 'Sin plan'}{#if client.zone} · {client.zone.name}{/if}
             </div>
-            <div class="text-[11px] font-mono text-slate-500 mt-0.5 truncate">
+            <div class="text-xs font-mono text-slate-400 truncate leading-normal mt-0.5">
               {client.pppoeUsername || client.mikrotikAccount?.username || '—'}
               {#if client.serviceIp || client.mikrotikAccount?.remoteAddress}
                 · {client.serviceIp || client.mikrotikAccount?.remoteAddress}
@@ -875,56 +879,58 @@
               <button type="button" on:click={() => openPaymentModal(client)}
                       class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md
                              bg-brand-600 hover:bg-brand-700 active:bg-brand-800 active:scale-95
-                             text-white text-xs font-semibold transition">
-                <CreditCard size={12} /> Pagar
+                             text-white text-[13px] font-semibold transition">
+                <CreditCard size={13} /> Pagar
               </button>
             {:else}
-              <span class="text-[11px] text-emerald-700 font-medium">✓ Al día</span>
+              <span class="text-xs text-emerald-700 font-medium whitespace-nowrap">✓ Al día</span>
             {/if}
             <button type="button"
                     on:click|stopPropagation={() => mobileMenuId = mobileMenuId === client.id ? null : client.id}
                     class="p-1.5 rounded text-slate-500 hover:bg-slate-100 active:scale-95
-                           min-h-[36px] min-w-[36px] flex items-center justify-center"
+                           min-h-[44px] min-w-[44px] flex items-center justify-center"
                     aria-label="Más acciones">
-              <MoreVertical size={16} />
+              <MoreVertical size={18} />
             </button>
           </div>
         </div>
 
         {#if mobileMenuId === client.id}
-          <div class="mt-2 pt-2 border-t border-slate-100 flex flex-wrap gap-2">
+          <div class="mt-2.5 pt-2.5 border-t border-slate-100 grid grid-cols-2 gap-1.5">
             <a href="/clients/{client.id}"
-               class="inline-flex items-center gap-1.5 px-3 py-2 rounded-md
-                      bg-slate-100 hover:bg-slate-200 text-xs text-slate-700">
-              <Eye size={13} /> Ver detalle
+               class="inline-flex items-center justify-center gap-1.5 px-3 min-h-[44px] rounded-md
+                      bg-slate-100 hover:bg-slate-200 text-[15px] sm:text-sm text-slate-700 font-medium">
+              <Eye size={15} /> Ver detalle
             </a>
             <button type="button"
                     on:click={() => { mobileMenuId = null; openClientModal(client, 'edit'); }}
-                    class="inline-flex items-center gap-1.5 px-3 py-2 rounded-md
-                           bg-slate-100 hover:bg-slate-200 text-xs text-slate-700">
-              <Pencil size={13} /> Editar
+                    class="inline-flex items-center justify-center gap-1.5 px-3 min-h-[44px] rounded-md
+                           bg-slate-100 hover:bg-slate-200 text-[15px] sm:text-sm text-slate-700 font-medium">
+              <Pencil size={15} /> Editar
             </button>
-            {#if client.status === 'ACTIVE'}
+            {#if isAdmin($user?.role)}
+              {#if client.status === 'ACTIVE'}
+                <button type="button"
+                        on:click={() => { mobileMenuId = null; suspendClient(client); }}
+                        class="inline-flex items-center justify-center gap-1.5 px-3 min-h-[44px] rounded-md
+                               bg-amber-50 hover:bg-amber-100 text-[15px] sm:text-sm text-amber-700 font-medium">
+                  <PowerOff size={15} /> Suspender
+                </button>
+              {:else}
+                <button type="button"
+                        on:click={() => { mobileMenuId = null; activateClient(client); }}
+                        class="inline-flex items-center justify-center gap-1.5 px-3 min-h-[44px] rounded-md
+                               bg-brand-50 hover:bg-brand-100 text-[15px] sm:text-sm text-brand-700 font-medium">
+                  <Power size={15} /> Activar
+                </button>
+              {/if}
               <button type="button"
-                      on:click={() => { mobileMenuId = null; suspendClient(client); }}
-                      class="inline-flex items-center gap-1.5 px-3 py-2 rounded-md
-                             bg-amber-50 hover:bg-amber-100 text-xs text-amber-700">
-                <PowerOff size={13} /> Suspender
-              </button>
-            {:else}
-              <button type="button"
-                      on:click={() => { mobileMenuId = null; activateClient(client); }}
-                      class="inline-flex items-center gap-1.5 px-3 py-2 rounded-md
-                             bg-brand-50 hover:bg-brand-100 text-xs text-brand-700">
-                <Power size={13} /> Activar
+                      on:click={() => { mobileMenuId = null; deleteClient(client); }}
+                      class="inline-flex items-center justify-center gap-1.5 px-3 min-h-[44px] rounded-md
+                             bg-red-50 hover:bg-red-100 text-[15px] sm:text-sm text-red-700 font-medium">
+                <Trash2 size={15} /> Eliminar
               </button>
             {/if}
-            <button type="button"
-                    on:click={() => { mobileMenuId = null; deleteClient(client); }}
-                    class="inline-flex items-center gap-1.5 px-3 py-2 rounded-md
-                           bg-red-50 hover:bg-red-100 text-xs text-red-700">
-              <Trash2 size={13} /> Eliminar
-            </button>
           </div>
         {/if}
       </svelte:fragment>
@@ -937,9 +943,9 @@
         Mostrando {clients.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} de {total}
       </span>
       <div class="flex items-center gap-1">
-        <button class="btn-ghost text-xs py-1" disabled={page <= 1} on:click={() => setPage(page - 1)}>← Anterior</button>
-        <span class="px-3 py-1 bg-brand-800 text-white text-xs rounded-md font-medium">{page} / {totalPages}</span>
-        <button class="btn-ghost text-xs py-1" disabled={page >= totalPages} on:click={() => setPage(page + 1)}>Siguiente →</button>
+        <button class="btn-ghost text-xs min-h-[44px] sm:min-h-0 sm:py-1" disabled={page <= 1} on:click={() => setPage(page - 1)}>← Anterior</button>
+        <span class="px-3 min-h-[44px] sm:py-1 inline-flex items-center bg-brand-800 text-white text-xs rounded-md font-medium">{page} / {totalPages}</span>
+        <button class="btn-ghost text-xs min-h-[44px] sm:min-h-0 sm:py-1" disabled={page >= totalPages} on:click={() => setPage(page + 1)}>Siguiente →</button>
       </div>
     </div>
   </div>

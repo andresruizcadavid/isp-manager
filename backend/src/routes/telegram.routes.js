@@ -4,7 +4,7 @@
 // reads/writes the row and can fire a test message before saving.
 import { Router } from 'express';
 import { z } from 'zod';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { validateBody } from '../middleware/validate.middleware.js';
 import { sendTest } from '../services/telegram.service.js';
 

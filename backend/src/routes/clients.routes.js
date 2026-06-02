@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { clientController } from '../controllers/clients.controller.js';
-import { requireOperatorOrAdmin } from '../middleware/auth.middleware.js';
+import { billingController } from '../controllers/billing.controller.js';
+import { requireOperational, requireOperatorOrAdmin } from '../middleware/auth.middleware.js';
 import { validateBody, validateQuery, validateParams, commonSchemas } from '../middleware/validate.middleware.js';
 import { z } from 'zod';
 
@@ -93,7 +94,7 @@ const clientQuerySchema = commonSchemas.pagination.extend({
 });
 
 const deviceSchema = z.object({
-  macAddress: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'MAC address inválida'),
+  mac: z.string().regex(/^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$/, 'MAC address inválida'),
   ipAddress: z.string().ip('IP address inválida').optional(),
   hostname: z.string().optional(),
   deviceType: z.enum(['ROUTER', 'ACCESS_POINT', 'SWITCH', 'OTHER']).default('ROUTER')
@@ -141,6 +142,10 @@ router.post(
 router.get('/:id/invoices', validateParams(commonSchemas.idParam), validateQuery(commonSchemas.pagination), clientController.getClientInvoices);
 router.get('/:id/payments', validateParams(commonSchemas.idParam), validateQuery(commonSchemas.pagination), clientController.getClientPayments);
 router.get('/:id/balance', validateParams(commonSchemas.idParam), clientController.getClientBalance);
+
+// Billing / Cashier
+router.get('/:id/billing-months', validateParams(commonSchemas.idParam), billingController.getBillingMonths);
+router.post('/:id/generate-invoices', requireOperational, validateParams(commonSchemas.idParam), billingController.generateInvoices);
 
 // Statistics
 router.get('/stats/overview', clientController.getClientStats);

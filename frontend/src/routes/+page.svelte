@@ -1,12 +1,22 @@
 <script>
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { get } from 'svelte/store';
-	import { token } from '$lib/stores/auth.store.js';
+	import { authStore } from '$lib/stores/auth.store.js';
 
-	onMount(() => {
-		const t = get(token);
-		goto(t ? '/dashboard' : '/login', { replaceState: true });
+	onMount(async () => {
+		try {
+			const res = await fetch('/api/v1/auth/me');
+			if (res.ok) {
+				const json = await res.json();
+				const u = json.data?.user ?? json.user;
+				if (u) {
+					authStore.setUser(u);
+					goto('/dashboard', { replaceState: true });
+					return;
+				}
+			}
+		} catch {}
+		goto('/login', { replaceState: true });
 	});
 </script>
 

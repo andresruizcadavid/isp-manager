@@ -1,13 +1,18 @@
 import jwt from 'jsonwebtoken';
 import { env } from '../config/env.js';
-import { PrismaClient } from '@prisma/client';
-const prisma = new PrismaClient();
+import { prisma } from '../config/database.js';
 
 export const authMiddleware = async (req, res, next) => {
   try {
+    // Read token from signed cookie first, then from Authorization header
+    let token = req.signedCookies?.token;
     const authHeader = req.headers.authorization;
-    
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+
+    if (!token && authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+
+    if (!token) {
       return res.status(401).json({
         success: false,
         error: {
@@ -16,8 +21,6 @@ export const authMiddleware = async (req, res, next) => {
         }
       });
     }
-
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
 
     // Verify JWT signature/expiration
     jwt.verify(token, env.JWT_SECRET);

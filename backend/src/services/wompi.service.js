@@ -2,7 +2,7 @@ import axios from 'axios';
 import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/error.middleware.js';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 
 class WompiService {
   constructor() {

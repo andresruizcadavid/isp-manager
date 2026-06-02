@@ -47,10 +47,8 @@
   }
 
   function downloadCsv() {
-    const token = localStorage.getItem('isp_token');
     const url = networkApi.csvUrl(buildQuery());
-    // The CSV endpoint needs the Authorization header — fetch then blob it.
-    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(url)
       .then(r => r.blob())
       .then(blob => {
         const a = document.createElement('a');

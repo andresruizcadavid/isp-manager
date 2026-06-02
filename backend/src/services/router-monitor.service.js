@@ -22,7 +22,7 @@
 // probeTimeoutSec / probeDownCount) so the operator tunes everything from
 // one place.
 import ping from 'ping';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { emit } from './socket.service.js';
 import { sendMessage } from './telegram.service.js';
 

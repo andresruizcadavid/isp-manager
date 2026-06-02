@@ -3,13 +3,16 @@
   import { paymentsApi } from '$lib/api/payments.api.js';
   import {
     Search, CreditCard, Eye, AlertCircle,
-    DollarSign, Clock, CheckCircle2, XCircle, RefreshCw
+    DollarSign, Clock, CheckCircle2, XCircle, RefreshCw, Download
   } from 'lucide-svelte';
 
   let payments = [];
   let total = 0;
   let loading = true;
   let error = '';
+
+  let stats = { total: 0, completedCount: 0, pendingCount: 0, completedAmount: 0 };
+  let statsLoading = true;
 
   let q = '';
   let status = '';
@@ -32,7 +35,23 @@
       error = e.message || 'Error al cargar pagos';
     } finally { loading = false; }
   }
-  onMount(load);
+
+  async function loadStats() {
+    statsLoading = true;
+    try {
+      const res = await paymentsApi.getStats();
+      stats = {
+        total: res?.total ?? 0,
+        completedCount: res?.completedCount ?? 0,
+        pendingCount: res?.pendingCount ?? 0,
+        completedAmount: res?.completedAmount ?? 0
+      };
+    } catch (e) {
+      console.warn('Error loading payment stats:', e);
+    } finally { statsLoading = false; }
+  }
+
+  onMount(() => { load(); loadStats(); });
 
   function onSearchInput() {
     clearTimeout(searchTimer);
@@ -42,11 +61,6 @@
   $: totalPages = Math.max(1, Math.ceil(total / pageSize));
   function setPage(p) { if (p < 1 || p > totalPages || p === page) return; page = p; load(); }
 
-  $: kpiTotal = total;
-  $: kpiCompleted = payments.filter(p => p.status === 'COMPLETED').length;
-  $: kpiPending = payments.filter(p => p.status === 'PENDING').length;
-  $: kpiAmount = payments.filter(p => p.status === 'COMPLETED').reduce((s, p) => s + (p.amount || 0), 0);
-
   function fmtMoney(cents) {
     if (cents == null) return '—';
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(cents / 100);
@@ -54,6 +68,13 @@
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+
+  const BASE = import.meta.env.PUBLIC_API_URL || '';
+  function downloadReport() {
+    const to = new Date().toISOString().split('T')[0];
+    const from = new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0];
+    window.open(`${BASE}/api/v1/payments/report/consolidated?format=csv&dateFrom=${from}&dateTo=${to}`, '_blank');
   }
 
   const STATUS_PT = { PENDING:'Pendiente', COMPLETED:'Completado', FAILED:'Fallido', REFUNDED:'Reembolsado', CANCELLED:'Cancelado' };
@@ -68,6 +89,11 @@
     <h1 class="page-title">Pagos Recibidos</h1>
     <p class="page-subtitle">{total} {total === 1 ? 'pago' : 'pagos'} registrados</p>
   </div>
+  <div class="flex items-center gap-2">
+    <button class="btn-ghost text-xs" on:click={downloadReport}>
+      <Download size={14} /> Reporte CSV
+    </button>
+  </div>
 </div>
 
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
@@ -75,7 +101,7 @@
     <div class="icon-square-blue"><CreditCard size={14} /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Total</div>
-      <div class="kpi-value">{kpiTotal}</div>
+      <div class="kpi-value">{statsLoading ? '...' : stats.total}</div>
       <div class="kpi-sub">Pagos registrados</div>
     </div>
   </div>
@@ -83,23 +109,23 @@
     <div class="icon-square-green"><CheckCircle2 size={14} /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Completados</div>
-      <div class="kpi-value">{kpiCompleted}</div>
-      <div class="kpi-sub">En esta página</div>
+      <div class="kpi-value">{statsLoading ? '...' : stats.completedCount}</div>
+      <div class="kpi-sub">Total consolidado</div>
     </div>
   </div>
   <div class="kpi-tile">
     <div class="icon-square-amber"><Clock size={14} /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Pendientes</div>
-      <div class="kpi-value">{kpiPending}</div>
+      <div class="kpi-value">{statsLoading ? '...' : stats.pendingCount}</div>
       <div class="kpi-sub">Por procesar</div>
     </div>
   </div>
   <div class="kpi-tile">
     <div class="icon-square-rose"><DollarSign size={14} /></div>
     <div class="kpi-tile-text">
-      <div class="kpi-label">Ingresos (página)</div>
-      <div class="kpi-value">{fmtMoney(kpiAmount)}</div>
+      <div class="kpi-label">Ingresos</div>
+      <div class="kpi-value">{statsLoading ? '...' : fmtMoney(stats.completedAmount)}</div>
       <div class="kpi-sub">Total completado</div>
     </div>
   </div>

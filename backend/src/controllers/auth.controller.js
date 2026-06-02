@@ -1,9 +1,8 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
-import { authMiddleware } from '../middleware/auth.middleware.js';
 
 class AuthController {
   login = asyncHandler(async (req, res) => {
@@ -27,8 +26,18 @@ class AuthController {
       throw new AppError('Credenciales inválidas', 401, 'INVALID_CREDENTIALS');
     }
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    // Guard against null-password users (e.g. created via broken code path)
+    if (!user.password) {
+      throw new AppError('Credenciales inválidas', 401, 'INVALID_CREDENTIALS');
+    }
+
+    // Verify password (wrap in try/catch to guard against corrupted hashes)
+    let isPasswordValid = false;
+    try {
+      isPasswordValid = await bcrypt.compare(password, user.password);
+    } catch {
+      throw new AppError('Credenciales inválidas', 401, 'INVALID_CREDENTIALS');
+    }
     if (!isPasswordValid) {
       throw new AppError('Credenciales inválidas', 401, 'INVALID_CREDENTIALS');
     }
@@ -48,9 +57,10 @@ class AuthController {
       { expiresIn: env.JWT_EXPIRES_IN }
     );
 
-    // Store session in database (optional)
-    const expiresAt = new Date();
-    expiresAt.setHours(expiresAt.getHours() + 8); // 8 hours from now
+    // Store session in database — TTL from JWT_EXPIRES_IN
+    const match = env.JWT_EXPIRES_IN.match(/^(\d+)h$/);
+    const ttlHours = match ? parseInt(match[1]) : 8;
+    const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000);
 
     await prisma.session.create({
       data: {
@@ -62,6 +72,19 @@ class AuthController {
 
     // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
+
+    // Set HttpOnly signed cookie
+    // secure: true only when request arrives over HTTPS (trust proxy enabled
+    // so req.secure works behind Nginx with X-Forwarded-Proto).
+    const maxAge = ttlHours * 3600 * 1000;
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: env.NODE_ENV === 'production' && req.secure,
+      sameSite: 'lax',
+      maxAge,
+      path: '/',
+      signed: true
+    });
 
     res.json({
       success: true,
@@ -123,6 +146,9 @@ class AuthController {
         where: { token }
       });
     }
+
+    // Clear cookie
+    res.clearCookie('token', { path: '/' });
 
     res.json({
       success: true,
@@ -204,12 +230,17 @@ class AuthController {
       }
     });
 
-    if (!user) {
+    if (!user || !user.password) {
       throw new AppError('Usuario no encontrado', 404, 'USER_NOT_FOUND');
     }
 
     // Verify current password
-    const isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    let isCurrentPasswordValid = false;
+    try {
+      isCurrentPasswordValid = await bcrypt.compare(currentPassword, user.password);
+    } catch {
+      throw new AppError('Contraseña actual incorrecta', 400, 'INVALID_CURRENT_PASSWORD');
+    }
     if (!isCurrentPasswordValid) {
       throw new AppError('Contraseña actual incorrecta', 400, 'INVALID_CURRENT_PASSWORD');
     }

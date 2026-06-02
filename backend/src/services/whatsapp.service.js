@@ -15,7 +15,7 @@
 // Reads the single active WhatsAppConfig row on each send (cheap, infrequent)
 // so the operator can rotate token/phone-id without restarting the API.
 import axios from 'axios';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 
 let warnedNoConfig = false;

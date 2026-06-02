@@ -1,7 +1,7 @@
 import nodemailer from 'nodemailer';
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/error.middleware.js';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from './email-base.template.js';
 
 class NotificationService {

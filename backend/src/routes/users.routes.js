@@ -1,12 +1,11 @@
-import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import { Router } from 'express';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
-import { requireAdmin } from '../middleware/auth.middleware.js';
+import { prisma } from '../config/database.js';
+import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
 import { validateBody } from '../middleware/validate.middleware.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const ROLE_ENUM = z.enum(['ADMIN', 'OPERATOR', 'TECHNICIAN', 'VIEWER']);
 

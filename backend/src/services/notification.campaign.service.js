@@ -1,7 +1,5 @@
-import { PrismaClient } from '@prisma/client';
 import { notificationService } from './notification.service.js';
-
-const prisma = new PrismaClient();
+import { prisma } from '../config/database.js';
 
 /**
  * Variable substitution. Supports {{name}}, {{plan}}, {{balance}}, {{email}},

@@ -1,10 +1,9 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
+import { prisma } from '../config/database.js';
 import { validateBody } from '../middleware/validate.middleware.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 const zoneSchema = z.object({
   name:        z.string().min(1, 'Nombre requerido'),

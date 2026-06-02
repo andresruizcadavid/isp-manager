@@ -1,4 +1,4 @@
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { wompiService } from '../services/wompi.service.js';
 import { notificationService } from '../services/notification.service.js';
@@ -159,7 +159,9 @@ class PaymentsController {
           amount: amountCents,
           method: paymentMethod,
           status: 'COMPLETED',
-          notes: notes || null
+          notes: notes || null,
+          createdByUserId: req.user?.id,
+          createdByUserName: req.user?.name
         },
         include: {
           invoice: { include: { client: true } }
@@ -349,12 +351,16 @@ class PaymentsController {
       return sum + (p.id === id ? updatedPayment.amount : (p.status === 'COMPLETED' ? p.amount : 0));
     }, 0);
 
-    if (totalPaid >= payment.invoice.amount) {
-      await prisma.invoice.update({
-        where: { id: payment.invoiceId },
-        data: { status: 'PAID' }
-      });
-    }
+    const remaining = Math.max(0, payment.invoice.amount - totalPaid);
+
+    await prisma.invoice.update({
+      where: { id: payment.invoiceId },
+      data: {
+        status: remaining === 0 ? 'PAID' : 'PARTIAL',
+        balanceDue: remaining,
+        ...(remaining === 0 && { paidDate: new Date() })
+      }
+    });
 
     // Send payment confirmation
     await notificationService.sendPaymentConfirmation(payment.invoice, updatedPayment);
@@ -532,7 +538,7 @@ class PaymentsController {
   });
 
   getPaymentStats = asyncHandler(async (req, res) => {
-    const [total, byStatus, byMethod, totalAmount] = await Promise.all([
+    const [total, byStatus, byMethod, completedAgg] = await Promise.all([
       prisma.payment.count(),
       prisma.payment.groupBy({
         by: ['status'],
@@ -541,22 +547,30 @@ class PaymentsController {
       }),
       prisma.payment.groupBy({
         by: ['paymentMethod'],
+        where: { status: 'COMPLETED' },
         _count: true,
         _sum: { amount: true }
       }),
       prisma.payment.aggregate({
         where: { status: 'COMPLETED' },
-        _sum: { amount: true }
+        _sum: { amount: true },
+        _count: true
       })
     ]);
+
+    const completedCount = byStatus.find(s => s.status === 'COMPLETED')?._count || 0;
+    const pendingCount   = byStatus.find(s => s.status === 'PENDING')?._count   || 0;
+    const completedSum   = completedAgg._sum.amount || 0;
 
     res.json({
       success: true,
       data: {
         total,
+        completedCount,
+        pendingCount,
+        completedAmount: completedSum,
         byStatus,
-        byMethod,
-        totalAmount: totalAmount._sum.amount || 0
+        byMethod
       }
     });
   });
@@ -661,6 +675,74 @@ class PaymentsController {
       error: {
         code: 'NOT_IMPLEMENTED',
         message: 'Reconciliación no implementada aún'
+      }
+    });
+  });
+
+  getConsolidatedReport = asyncHandler(async (req, res) => {
+    const { dateFrom, dateTo } = req.query;
+
+    if (!dateFrom || !dateTo) {
+      throw new AppError('dateFrom y dateTo son requeridos (formato YYYY-MM-DD)', 400, 'MISSING_DATES');
+    }
+
+    const from = new Date(dateFrom);
+    const to = new Date(dateTo);
+    to.setHours(23, 59, 59, 999);
+
+    const [payments, byMethod, totalAgg] = await Promise.all([
+      prisma.payment.findMany({
+        where: {
+          createdAt: { gte: from, lte: to }
+        },
+        include: {
+          invoice: { select: { number: true } },
+          client: { select: { name: true, documentNumber: true } }
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+      prisma.payment.groupBy({
+        by: ['paymentMethod'],
+        where: {
+          status: 'COMPLETED',
+          createdAt: { gte: from, lte: to }
+        },
+        _count: true,
+        _sum: { amount: true }
+      }),
+      prisma.payment.aggregate({
+        where: {
+          status: 'COMPLETED',
+          createdAt: { gte: from, lte: to }
+        },
+        _sum: { amount: true },
+        _count: true
+      })
+    ]);
+
+    const format = req.query.format;
+
+    if (format === 'csv') {
+      const header = 'ID,Factura,Cliente,Documento,Monto,Metodo,Estado,Fecha,Creado por\n';
+      const rows = payments.map(p =>
+        `"${p.id.slice(-8)}","${p.invoice?.number || ''}","${p.client?.name || ''}","${p.client?.documentNumber || ''}",${(p.amount / 100).toFixed(2)},${p.method},${p.status},${p.createdAt?.toISOString().split('T')[0] || ''},"${p.createdByUserName || ''}"`
+      ).join('\n');
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="reporte-pagos-${dateFrom}-${dateTo}.csv"`);
+      return res.send('\uFEFF' + header + rows);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        period: { from: dateFrom, to: dateTo },
+        summary: {
+          totalPayments: totalAgg._count,
+          totalAmount: totalAgg._sum.amount || 0,
+          byMethod
+        },
+        payments
       }
     });
   });

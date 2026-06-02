@@ -13,6 +13,7 @@ export const routersApi = {
   pppoeProfiles:        (id)       => api.get(`/mikrotik/routers/${id}/profiles`),
   pppProfiles:          (id)       => api.get(`/mikrotik/routers/${id}/ppp-profiles`),
   orphanPppProfiles:    (id)       => api.get(`/mikrotik/routers/${id}/ppp-profiles/orphans`),
+  createPppProfile:     (id, data) => api.post(`/mikrotik/routers/${id}/ppp-profiles`, data),
   deletePppProfile:     (id, name) => api.delete(`/mikrotik/routers/${id}/ppp-profiles/${encodeURIComponent(name)}`),
   importPppoeClients:   (id)       => api.post(`/mikrotik/routers/${id}/import-pppoe-clients`),
   preview:       (id)       => api.get(`/mikrotik/routers/${id}/pppoe-preview`),

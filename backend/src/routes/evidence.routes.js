@@ -3,11 +3,10 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
-import { PrismaClient } from '@prisma/client';
 import { env } from '../config/env.js';
+import { prisma } from '../config/database.js';
 
 const router = Router({ mergeParams: true });
-const prisma = new PrismaClient();
 
 // ── Storage configuration ─────────────────────────────────────────────
 // Disk storage under <UPLOADS_PATH>/evidence/. Filenames are random to

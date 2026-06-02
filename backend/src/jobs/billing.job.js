@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { invoiceService } from '../services/invoice.service.js';
 import { notificationService } from '../services/notification.service.js';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 
 class BillingJob {
   constructor() {
@@ -50,6 +50,12 @@ class BillingJob {
         console.log('🔄 Starting monthly reports generation job...');
         await this.generateMonthlyReports();
       }
+    });
+
+    // Send daily consolidated report to admins — runs at 8:00
+    cron.schedule('0 8 * * *', async () => {
+      console.log('🔄 Starting daily consolidated report email...');
+      await this.sendDailyConsolidatedReport();
     });
 
     console.log('📅 Billing jobs scheduled successfully');
@@ -409,6 +415,99 @@ class BillingJob {
     }
   }
 
+  async sendDailyConsolidatedReport() {
+    try {
+      const yesterday = new Date();
+      yesterday.setDate(yesterday.getDate() - 1);
+      yesterday.setHours(0, 0, 0, 0);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const [payments, totalAgg, byMethod] = await Promise.all([
+        prisma.payment.findMany({
+          where: {
+            status: 'COMPLETED',
+            createdAt: { gte: yesterday, lt: today }
+          },
+          include: {
+            invoice: { select: { number: true } },
+            client: { select: { name: true } }
+          },
+          orderBy: { createdAt: 'desc' }
+        }),
+        prisma.payment.aggregate({
+          where: {
+            status: 'COMPLETED',
+            createdAt: { gte: yesterday, lt: today }
+          },
+          _sum: { amount: true },
+          _count: true
+        }),
+        prisma.payment.groupBy({
+          by: ['method'],
+          where: {
+            status: 'COMPLETED',
+            createdAt: { gte: yesterday, lt: today }
+          },
+          _count: true,
+          _sum: { amount: true }
+        })
+      ]);
+
+      if (payments.length === 0) {
+        console.log('No payments yesterday, skipping daily report');
+        return;
+      }
+
+      const adminUsers = await prisma.user.findMany({
+        where: { role: 'ADMIN' }
+      });
+
+      if (adminUsers.length === 0) {
+        console.log('No admin users found to send daily report');
+        return;
+      }
+
+      const dateStr = yesterday.toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' });
+      const totalCop = `$${((totalAgg._sum.amount || 0) / 100).toLocaleString('es-CO')} COP`;
+      const methodSummary = byMethod.map(m =>
+        `• ${m.method}: ${m._count} pagos — $${((m._sum.amount || 0) / 100).toLocaleString('es-CO')}`
+      ).join('\n');
+
+      const paymentList = payments.map((p, i) =>
+        `${i + 1}. ${p.client?.name || '—'} — Factura ${p.invoice?.number || '—'} — $${(p.amount / 100).toLocaleString('es-CO')} — ${p.method}`
+      ).join('\n');
+
+      const body = `Resumen de pagos del ${dateStr}
+
+Total recaudado: ${totalCop}
+Cantidad de pagos: ${totalAgg._count}
+
+Desglose por método:
+${methodSummary}
+
+Detalle de pagos:
+${paymentList}`;
+
+      for (const admin of adminUsers) {
+        try {
+          await notificationService.sendEmailRaw({
+            to: admin.email,
+            subject: `📊 Reporte diario de pagos — ${dateStr}`,
+            body,
+            preset: 'general_announcement',
+            title: `Reporte Diario — ${dateStr}`
+          });
+          console.log(`✅ Daily report sent to ${admin.email}`);
+        } catch (error) {
+          console.error(`Error sending daily report to ${admin.email}:`, error);
+        }
+      }
+    } catch (error) {
+      console.error('Error sending daily consolidated report:', error);
+    }
+  }
+
   // Manual trigger methods for testing/admin purposes
   async triggerMonthlyInvoices() {
     console.log('🔧 Manually triggering monthly invoice generation...');
@@ -428,6 +527,11 @@ class BillingJob {
   async triggerMonthlyReports() {
     console.log('🔧 Manually triggering monthly reports...');
     await this.generateMonthlyReports();
+  }
+
+  async triggerDailyConsolidatedReport() {
+    console.log('🔧 Manually triggering daily consolidated report...');
+    await this.sendDailyConsolidatedReport();
   }
 
   // Status methods

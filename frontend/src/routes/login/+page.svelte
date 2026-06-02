@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { authStore } from '$lib/stores/auth.store.js';
   import { Eye, EyeOff, LogIn, Wifi } from 'lucide-svelte';
@@ -8,6 +9,22 @@
   let loading = false;
   let error = '';
   let showPassword = false;
+  let checking = true;
+
+  onMount(async () => {
+    try {
+      const res = await fetch('/api/v1/auth/me');
+      if (res.ok) {
+        const json = await res.json();
+        const u = json.data?.user ?? json.user;
+        if (u) {
+          authStore.setUser(u);
+          goto('/dashboard');
+        }
+      }
+    } catch {}
+    checking = false;
+  });
 
   async function handleLogin() {
     loading = true;
@@ -34,6 +51,14 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </svelte:head>
 
+{#if checking}
+  <div class="min-h-screen flex items-center justify-center bg-brand-600">
+    <svg class="animate-spin w-8 h-8 text-white" viewBox="0 0 24 24" fill="none">
+      <circle cx="12" cy="12" r="10" stroke="currentColor"
+              stroke-width="3" stroke-dasharray="32" stroke-dashoffset="12" />
+    </svg>
+  </div>
+{:else}
 <div class="min-h-screen flex items-center justify-center px-4 py-10 bg-brand-600"
      style="font-family: 'Inter', system-ui, sans-serif;">
 
@@ -166,3 +191,4 @@
     </p>
   </div>
 </div>
+{/if}

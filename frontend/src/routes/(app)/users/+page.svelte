@@ -182,7 +182,8 @@
       No hay usuarios registrados.
     </div>
   {:else}
-    <div class="overflow-x-auto">
+    <!-- Desktop table -->
+    <div class="hidden sm:block overflow-x-auto">
       <table class="data-table">
         <thead>
           <tr>
@@ -247,6 +248,53 @@
           {/each}
         </tbody>
       </table>
+    </div>
+    <!-- Mobile cards -->
+    <div class="sm:hidden divide-y divide-slate-100">
+      {#each users as u (u.id)}
+        <div class="px-4 py-3 class:opacity-60={!u.isActive}">
+          <div class="flex items-center gap-3 mb-2">
+            <div class="avatar">{(u.name || u.email || '?').trim().charAt(0).toUpperCase()}</div>
+            <div class="min-w-0 flex-1">
+              <div class="text-sm font-medium text-slate-900 truncate">{u.name}</div>
+              <div class="text-xs text-slate-500 truncate">{u.email}</div>
+              {#if u.id === $currentUser?.id}
+                <div class="text-[10px] text-brand-700 font-medium">Tú</div>
+              {/if}
+            </div>
+            {#if u.isActive}
+              <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100 inline-flex items-center gap-1 flex-shrink-0">
+                <CheckCircle2 size={11} /> Activo
+              </span>
+            {:else}
+              <span class="badge bg-slate-100 text-slate-600 ring-slate-200 flex-shrink-0">Inactivo</span>
+            {/if}
+          </div>
+          <div class="flex items-center justify-between gap-2">
+            <span class="badge {ROLE_BADGE[u.role]} inline-flex items-center gap-1">
+              <svelte:component this={ROLE_ICON[u.role]} size={11} />
+              {ROLE_LABEL[u.role] || u.role}
+            </span>
+            <div class="flex items-center gap-1">
+              <button class="btn-icon" title="Editar" on:click={() => openEdit(u)}>
+                <Pencil size={14} />
+              </button>
+              <button class="btn-icon" title={u.isActive ? 'Desactivar' : 'Activar'}
+                      disabled={u.id === $currentUser?.id && u.isActive}
+                      on:click={() => toggleActive(u)}>
+                {#if u.isActive}<X size={14} />{:else}<CheckCircle2 size={14} />{/if}
+              </button>
+              <button class="btn-icon hover:!text-red-600 hover:!bg-red-50"
+                      title="Eliminar"
+                      disabled={u.id === $currentUser?.id}
+                      on:click={() => removeUser(u)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+          <div class="text-[10px] text-slate-400 mt-1">Creado: {fmtDate(u.createdAt)}</div>
+        </div>
+      {/each}
     </div>
   {/if}
 </div>

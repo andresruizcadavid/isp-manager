@@ -5,4 +5,5 @@ export const paymentsApi = {
     return api.get(`/payments${q ? '?' + q : ''}`);
   },
   create:  (data) => api.post('/payments', data),
+  getStats: () => api.get('/payments/stats/overview'),
 };

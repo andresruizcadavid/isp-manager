@@ -1,4 +1,4 @@
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { mikrotikService } from '../services/mikrotik.service.js';
 

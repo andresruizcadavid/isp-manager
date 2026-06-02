@@ -13,6 +13,9 @@
     Send, Link2, Share2
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
+  import CashierWizard from '$lib/components/cashier/CashierWizard.svelte';
+  import { user } from '$lib/stores/auth.store.js';
+  import { isAdmin } from '$lib/permissions.js';
 
   let client = null;
   let pageError = '';
@@ -21,6 +24,7 @@
     const id = $page.params.id;
     try {
       client = await api.get(`/clients/${id}`);
+      resetForm();
     } catch (e) {
       pageError = e.message || 'Error al cargar el cliente';
     }
@@ -73,38 +77,31 @@
     catch { return ''; }
   }
 
-  $: if (client) {
+  /** Rebuild form state from the current `client` object. */
+  function resetForm() {
     formPersonal = {
-      // Identity / contact
-      fullName:       client.name           || '',
-      documentType:   client.documentType   || 'CC',
-      documentNumber: client.documentNumber || '',
-      email:          client.email          || '',
-      phone:          client.phone          || '',
-      address:        client.address        || '',
-      neighborhood:   client.neighborhood   || '',
-      city:           client.city           || '',
-      zoneId:         client.zoneId         || null,
-      // Plan / billing
-      planId:         client.planId         || '',
-      // monthlyFee lives in cents on the API; display whole pesos in the form.
-      monthlyFee:     client.monthlyFee
+      fullName:       client?.name           || '',
+      documentType:   client?.documentType   || 'CC',
+      documentNumber: client?.documentNumber || '',
+      email:          client?.email          || '',
+      phone:          client?.phone          || '',
+      address:        client?.address        || '',
+      neighborhood:   client?.neighborhood   || '',
+      city:           client?.city           || '',
+      zoneId:         client?.zoneId         || null,
+      planId:         client?.planId         || '',
+      monthlyFee:     client?.monthlyFee
                         ? Math.round(client.monthlyFee / 100)
                         : '',
-      // Dates
-      contractDate:     toDateInput(client.contractDate),
-      installationDate: toDateInput(client.installationDate),
-      // Free-form
-      notes:          client.notes          || '',
-      // Mikrotik subform — only the fields that make sense to tweak from
-      // this view. Username is shown read-only since changing it would
-      // recreate the PPPoE secret on the router.
+      contractDate:     toDateInput(client?.contractDate),
+      installationDate: toDateInput(client?.installationDate),
+      notes:          client?.notes          || '',
       mikrotik: {
-        password:      client.mikrotikAccount?.password      || '',
-        remoteAddress: client.mikrotikAccount?.remoteAddress || client.serviceIp      || '',
-        localAddress:  client.mikrotikAccount?.localAddress  || client.serviceLocalIp || '',
-        profileName:   client.mikrotikAccount?.profileName   || '',
-        coordinates:   client.mikrotikAccount?.coordinates   || client.coordinates    || '',
+        password:      '',
+        remoteAddress: client?.mikrotikAccount?.remoteAddress || client?.serviceIp      || '',
+        localAddress:  client?.mikrotikAccount?.localAddress  || client?.serviceLocalIp || '',
+        profileName:   client?.mikrotikAccount?.profileName   || '',
+        coordinates:   client?.mikrotikAccount?.coordinates   || client?.coordinates    || '',
       }
     };
   }
@@ -207,9 +204,6 @@
   async function savePersonal() {
     loadingAction = true;
     try {
-      // Build the payload that PUT /clients/:id accepts. Convert monthlyFee
-      // from pesos (what the form shows) back to cents (DB), and drop empty
-      // strings so the backend can distinguish "leave unchanged" from "clear".
       const payload = {
         fullName:       formPersonal.fullName,
         documentType:   formPersonal.documentType,
@@ -227,10 +221,6 @@
                           ? Math.round(Number(formPersonal.monthlyFee) * 100)
                           : 0,
         notes:          formPersonal.notes,
-        // Only include the mikrotik sub-form when at least one field changed
-        // from its loaded value. Sending all keys always is harmless (the
-        // backend treats them as "set to this") but the upsert touches the
-        // device — keep it intentional.
         mikrotik: {
           ...(formPersonal.mikrotik.password      && { password:      formPersonal.mikrotik.password }),
           ...(formPersonal.mikrotik.remoteAddress && { remoteAddress: formPersonal.mikrotik.remoteAddress }),
@@ -239,10 +229,10 @@
           ...(formPersonal.mikrotik.coordinates   && { coordinates:   formPersonal.mikrotik.coordinates }),
         }
       };
-      const updated = await api.put(`/clients/${client.id}`, payload);
-      // Server returns the full client including relations; reuse that so
-      // the read-only view below reflects the new state immediately.
-      client = updated?.data || updated || { ...client, ...payload };
+      await api.put(`/clients/${client.id}`, payload);
+      // Full reload: re-fetch everything from the API so no relation is stale
+      client = await api.get(`/clients/${client.id}`);
+      resetForm();
       editPersonal = false;
       showToast('success', 'Datos actualizados');
     } catch (e) {
@@ -397,25 +387,13 @@
     }
   }
 
-  async function submitPayment() {
-    if (!payInvoiceId) { payError = 'Selecciona una factura'; return; }
-    const amt = Number(payAmount);
-    if (!amt || amt <= 0) { payError = 'Monto inválido'; return; }
-    paySaving = true; payError = '';
+  async function onPaymentDone() {
+    showPaymentModal = false;
     try {
-      await paymentsApi.create({
-        invoiceId: payInvoiceId,
-        amount: amt,
-        paymentMethod: payMethod,
-        notes: payNotes || undefined
-      });
-      showPaymentModal = false;
       const fresh = await api.get(`/clients/${client.id}`);
       client = fresh;
-      showToast('success', 'Pago registrado correctamente');
-    } catch (e) {
-      payError = e.message || 'Error al registrar pago';
-    } finally { paySaving = false; }
+    } catch {}
+    showToast('success', 'Pago registrado correctamente');
   }
 
   // ── Evidence photos ─────────────────────────────────────────────────
@@ -522,22 +500,24 @@
   </div>
 {:else}
 
-<!-- Toasts -->
+<!-- Toasts (mobile: bottom-center, desktop: top-right) -->
 {#if error}
-  <div class="fixed top-4 right-4 z-50 bg-white rounded-xl shadow-lg border border-red-200 p-4 flex items-start gap-3 max-w-sm">
-    <AlertCircle size={18} class="text-red-500 mt-0.5" />
+  <div class="fixed bottom-4 left-4 right-4 sm:top-4 sm:left-auto sm:right-4 sm:bottom-auto z-50
+             bg-white rounded-xl shadow-lg border border-red-200 p-4 flex items-start gap-3 max-w-sm sm:max-w-sm mx-auto sm:mx-0">
+    <AlertCircle size={18} class="text-red-500 mt-0.5 flex-shrink-0" />
     <span class="text-sm text-red-700">{error}</span>
   </div>
 {/if}
 {#if success}
-  <div class="fixed top-4 right-4 z-50 bg-white rounded-xl shadow-lg border border-emerald-200 p-4 flex items-start gap-3 max-w-sm">
-    <CheckCircle2 size={18} class="text-emerald-500 mt-0.5" />
+  <div class="fixed bottom-4 left-4 right-4 sm:top-4 sm:left-auto sm:right-4 sm:bottom-auto z-50
+             bg-white rounded-xl shadow-lg border border-emerald-200 p-4 flex items-start gap-3 max-w-sm sm:max-w-sm mx-auto sm:mx-0">
+    <CheckCircle2 size={18} class="text-emerald-500 mt-0.5 flex-shrink-0" />
     <span class="text-sm text-emerald-700">{success}</span>
   </div>
 {/if}
 
-<!-- Breadcrumb + page header -->
-<div class="text-xs text-slate-500 mb-3">
+<!-- Breadcrumb -->
+<div class="text-xs sm:text-[13px] text-slate-500 mb-2 sm:mb-3 truncate">
   <a href="/" class="hover:text-slate-700">ISP Manager</a>
   <span class="mx-1">/</span>
   <a href="/clients" class="hover:text-slate-700">Clientes</a>
@@ -545,66 +525,77 @@
   <span class="text-slate-700 font-medium">{client?.name || '...'}</span>
 </div>
 
-<div class="page-header">
-  <div class="flex items-center gap-4 min-w-0">
-    <a href="/clients" class="btn-icon" title="Volver a clientes">
-      <ArrowLeft size={18} />
+<!-- Page header: mobile stacked, desktop side-by-side -->
+<div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-4 sm:mb-6">
+  <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 overflow-hidden">
+    <a href="/clients" class="btn-icon flex-shrink-0" title="Volver a clientes">
+      <ArrowLeft size={20} class="sm:w-[18px] sm:h-[18px]" />
     </a>
     {#if client}
-      <div class="w-12 h-12 rounded-full bg-gradient-to-br from-brand-800 to-brand-500 flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+      <div class="w-10 sm:w-12 h-10 sm:h-12 rounded-full bg-gradient-to-br from-brand-800 to-brand-500 flex items-center justify-center text-white font-bold text-base sm:text-lg flex-shrink-0">
         {initials}
       </div>
-      <div class="min-w-0">
-        <h1 class="page-title truncate">{client.name}</h1>
-        <div class="flex flex-wrap items-center gap-1.5 mt-1">
-          <span class="px-2 py-0.5 rounded-full text-[11px] font-medium {STATUS_CLS[client.status] || 'bg-slate-100 text-slate-600'}">
+      <div class="min-w-0 overflow-hidden">
+        <h1 class="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight break-words leading-snug"
+            title={client.name}>
+          {client.name}
+        </h1>
+        <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
+          <span class="px-2.5 py-0.5 rounded-full text-xs font-medium {STATUS_CLS[client.status] || 'bg-slate-100 text-slate-600'}">
             {STATUS_PT[client.status] || client.status}
           </span>
           {#if client.plan?.name}
-            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-100 text-blue-700">{client.plan.name}</span>
+            <span class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">{client.plan.name}</span>
           {/if}
           {#if client.zone?.name}
-            <span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">{client.zone.name}</span>
+            <span class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">{client.zone.name}</span>
           {/if}
         </div>
       </div>
     {:else}
-      <div class="w-12 h-12 rounded-full bg-slate-200 animate-pulse"></div>
+      <div class="w-10 sm:w-12 h-10 sm:h-12 rounded-full bg-slate-200 animate-pulse"></div>
       <div class="space-y-2">
         <div class="h-6 w-48 bg-slate-200 rounded animate-pulse"></div>
         <div class="h-4 w-32 bg-slate-200 rounded animate-pulse"></div>
       </div>
     {/if}
   </div>
-  <div class="flex items-center gap-2 flex-wrap">
+
+  <!-- Actions: horizontal scroll on mobile -->
+  <div class="flex items-center gap-1.5 sm:gap-2 overflow-x-auto sm:overflow-visible -mx-4 px-4 sm:mx-0 sm:px-0 pb-1 sm:pb-0 scrollbar-thin flex-shrink-0">
     {#if pendingAmount > 0}
-      <button on:click={openPayment} class="btn-primary">
-        <CreditCard size={15} /> Registrar Pago
-        <span class="bg-white/20 px-2 py-0.5 rounded-md text-xs tabular-nums">{fmtMoney(pendingAmount)}</span>
+      <button on:click={openPayment} class="btn-primary whitespace-nowrap">
+        <CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /> Cobrar
+        <span class="bg-white/20 px-1.5 py-0.5 rounded-md text-xs tabular-nums">{fmtMoney(pendingAmount)}</span>
       </button>
     {:else}
       <button on:click={openPayment}
-              class="btn-secondary"
-              title="Registrar un pago manual">
-        <CreditCard size={15} /> Registrar Pago
+              class="btn-secondary whitespace-nowrap">
+        <CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /> Cobrar
       </button>
     {/if}
-    <button class="btn-secondary" on:click={openPersonalEdit}>
-      <Edit3 size={15} /> Editar
+    <button class="btn-secondary whitespace-nowrap" on:click={openPersonalEdit}>
+      <Edit3 size={16} class="sm:w-3.5 sm:h-3.5" /> Editar
     </button>
-    <button class="btn-secondary" on:click={openUpdateSheet}
+    <button class="btn-secondary whitespace-nowrap" on:click={openUpdateSheet}
             title="Genera un link de un solo uso para que el cliente actualice sus datos">
-      <Share2 size={15} /> Solicitar actualización
+      <Share2 size={16} class="sm:w-3.5 sm:h-3.5" />
+      <span class="hidden xs:inline">Actualizar</span>
     </button>
-    <button class="btn-secondary" on:click={toggleStatus} disabled={loadingAction}>
-      {#if loadingAction}<Loader2 size={15} class="animate-spin" />
-      {:else if client?.status === 'ACTIVE'}<PauseCircle size={15} />
-      {:else}<PlayCircle size={15} />{/if}
-      {client?.status === 'ACTIVE' ? 'Suspender' : 'Activar'}
-    </button>
-    <button class="btn-danger" on:click={() => { deleteConfirmName = ''; showDeleteModal = true; }}>
-      <Trash2 size={15} /> Eliminar
-    </button>
+    {#if isAdmin($user?.role)}
+      <button class="btn-secondary whitespace-nowrap" on:click={toggleStatus} disabled={loadingAction}
+              title={client?.status === 'ACTIVE' ? 'Suspender servicio' : 'Activar servicio'}>
+        {#if loadingAction}<Loader2 size={16} class="animate-spin sm:w-3.5 sm:h-3.5" />
+        {:else if client?.status === 'ACTIVE'}<PauseCircle size={16} class="sm:w-3.5 sm:h-3.5" />
+        {:else}<PlayCircle size={16} class="sm:w-3.5 sm:h-3.5" />{/if}
+        <span class="hidden xs:inline">{client?.status === 'ACTIVE' ? 'Suspender' : 'Activar'}</span>
+      </button>
+      <button class="btn-icon hover:!text-red-600 hover:!bg-red-50 shrink-0"
+              on:click={() => { deleteConfirmName = ''; showDeleteModal = true; }}
+              title="Eliminar cliente">
+        <Trash2 size={18} class="sm:w-[15px] sm:h-[15px]" />
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -621,9 +612,9 @@
 {:else}
 
 <!-- KPI strip (design-system .kpi-tile) -->
-<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
   <div class="kpi-tile">
-    <div class="icon-square-rose"><CreditCard size={14} /></div>
+    <div class="icon-square-rose"><CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Saldo Pendiente</div>
       <div class="kpi-value {pendingAmount > 0 ? 'text-orange-600' : 'text-emerald-600'}">{fmtMoney(pendingAmount)}</div>
@@ -632,7 +623,7 @@
   </div>
   <div class="kpi-tile">
     <div class="icon-square-{isOnline ? 'green' : 'amber'}">
-      {#if isOnline}<CheckCircle2 size={14} />{:else}<PauseCircle size={14} />{/if}
+      {#if isOnline}<CheckCircle2 size={16} class="sm:w-3.5 sm:h-3.5" />{:else}<PauseCircle size={16} class="sm:w-3.5 sm:h-3.5" />{/if}
     </div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Estado servicio</div>
@@ -641,7 +632,7 @@
     </div>
   </div>
   <div class="kpi-tile">
-    <div class="icon-square-amber"><Calendar size={14} /></div>
+    <div class="icon-square-amber"><Calendar size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Próximo Vencimiento</div>
       <div class="kpi-value text-base {nextDue && isOverdueInvoice(nextDue) ? 'text-red-600' : 'text-slate-900'}">
@@ -651,7 +642,7 @@
     </div>
   </div>
   <div class="kpi-tile">
-    <div class="icon-square-blue"><FileCheck size={14} /></div>
+    <div class="icon-square-blue"><FileCheck size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Facturas pagadas</div>
       <div class="kpi-value">{paidInvoices.length}</div>
@@ -661,10 +652,10 @@
 </div>
 
 <!-- Main content: 2/3 + 1/3 -->
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 mb-4 sm:mb-6">
 
   <!-- LEFT: Datos personales + Facturas + Pagos -->
-  <div class="lg:col-span-2 space-y-4">
+  <div class="lg:col-span-2 space-y-3 sm:space-y-4">
 
     <!-- Datos Personales -->
     <div class="card">
@@ -769,11 +760,24 @@
                 Servicio PPPoE
               </div>
             </div>
-            <div>
-              <label class="label" for="ed-mk-pwd">Nueva contraseña PPPoE</label>
-              <input id="ed-mk-pwd" type="text" class="input font-mono"
-                     bind:value={formPersonal.mikrotik.password}
-                     placeholder="Dejar vacío para no cambiar" />
+            {#if client?.pppoeUsername || client?.mikrotikAccount?.username}
+              <div class="md:col-span-2">
+                <div class="label">Usuario PPPoE</div>
+                <div class="text-sm font-mono text-slate-700 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                  {client.pppoeUsername || client.mikrotikAccount?.username}
+                </div>
+              </div>
+            {/if}
+            <div class="md:col-span-2">
+              <div class="label">Contraseña PPPoE</div>
+              <div class="flex items-start gap-2">
+                <div class="flex-1 text-sm font-mono text-slate-500 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
+                  ••••••••
+                </div>
+                <span class="text-xs text-slate-400 italic leading-relaxed mt-1">
+                  Para cambiar la contraseña usa el flujo dedicado de cambio de credenciales.
+                </span>
+              </div>
             </div>
             <div>
               <label class="label" for="ed-mk-profile">Perfil PPPoE</label>
@@ -807,21 +811,21 @@
             </div>
           </div>
         {:else}
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 xs:grid-cols-2 gap-3 sm:gap-4">
             <div>
               <div class="label !mb-1">Documento</div>
-              <div class="text-sm font-medium text-slate-900">{client.documentType || ''} {client.documentNumber || '—'}</div>
+              <div class="text-sm sm:text-[13px] font-medium text-slate-900">{client.documentType || ''} {client.documentNumber || '—'}</div>
             </div>
             <div>
               <div class="label !mb-1">Zona</div>
-              <div class="text-sm font-medium text-slate-900">{client.zone?.name || '—'}</div>
+              <div class="text-sm sm:text-[13px] font-medium text-slate-900">{client.zone?.name || '—'}</div>
             </div>
 
-            <div class="col-span-2">
+            <div class="col-span-1 xs:col-span-2">
               <div class="label !mb-1">Email</div>
               {#if client.email}
-                <a href="mailto:{client.email}" class="text-sm font-medium text-brand-800 hover:underline inline-flex items-center gap-1.5">
-                  <Mail size={13} /> {client.email}
+                <a href="mailto:{client.email}" class="text-sm sm:text-[13px] font-medium text-brand-800 hover:underline inline-flex items-center gap-1.5">
+                  <Mail size={14} class="sm:w-3.5 sm:h-3.5" /> {client.email}
                 </a>
               {:else}
                 <div class="text-sm text-slate-400">—</div>
@@ -832,12 +836,12 @@
               <div class="label !mb-1">Teléfono</div>
               {#if client.phone}
                 <div class="flex items-center gap-2 flex-wrap">
-                  <a href="tel:{digitsOnly(client.phone)}" class="text-sm font-medium text-slate-900 hover:text-brand-800 inline-flex items-center gap-1.5">
-                    <Phone size={13} /> {client.phone}
+                  <a href="tel:{digitsOnly(client.phone)}" class="text-sm sm:text-[13px] font-medium text-slate-900 hover:text-brand-800 inline-flex items-center gap-1.5">
+                    <Phone size={14} class="sm:w-3.5 sm:h-3.5" /> {client.phone}
                   </a>
                   <a href="https://wa.me/{digitsOnly(client.phone)}" target="_blank" rel="noopener"
-                     class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
-                    <MessageSquare size={11} /> WhatsApp
+                     class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] sm:text-[10px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100">
+                    <MessageSquare size={12} class="sm:w-[11px] sm:h-[11px]" /> WhatsApp
                   </a>
                 </div>
               {:else}
@@ -847,15 +851,15 @@
 
             <div>
               <div class="label !mb-1">Dirección</div>
-              <div class="text-sm font-medium text-slate-900 flex items-start gap-1.5">
-                {#if client.address}<MapPin size={13} class="mt-0.5 text-slate-400 flex-shrink-0" />{/if}
+              <div class="text-sm sm:text-[13px] font-medium text-slate-900 flex items-start gap-1.5">
+                {#if client.address}<MapPin size={14} class="sm:w-3.5 sm:h-3.5 mt-0.5 text-slate-400 flex-shrink-0" />{/if}
                 <span>{client.address || '—'}{client.neighborhood ? `, ${client.neighborhood}` : ''}</span>
               </div>
             </div>
 
-            <div class="col-span-2">
+            <div class="col-span-1 xs:col-span-2">
               <div class="label !mb-1">Antigüedad</div>
-              <div class="text-sm text-slate-700" title="Fecha de creación: {fmtDate(client.installationDate || client.createdAt)}">
+              <div class="text-sm sm:text-[13px] text-slate-700" title="Fecha de creación: {fmtDate(client.installationDate || client.createdAt)}">
                 {getClientDuration()}
               </div>
             </div>
@@ -876,7 +880,8 @@
       {#if !client.invoices || client.invoices.length === 0}
         <div class="p-8 text-center text-sm text-slate-400">Sin facturas registradas</div>
       {:else}
-        <div class="overflow-x-auto">
+        <!-- Desktop: table -->
+        <div class="hidden sm:block overflow-x-auto">
           <table class="data-table">
             <thead>
               <tr>
@@ -919,6 +924,37 @@
             </tbody>
           </table>
         </div>
+        <!-- Mobile: cards -->
+        <div class="sm:hidden divide-y divide-slate-100">
+          {#each client.invoices.slice(0, 8) as inv}
+            <div class="px-4 py-3 flex items-center justify-between gap-3">
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-mono text-xs text-slate-600">#{inv.number}</span>
+                  <span class="badge {INVOICE_CLS[inv.status] || 'bg-slate-100 text-slate-600'}">
+                    {inv.status}
+                  </span>
+                </div>
+                <div class="flex items-center gap-3 text-xs text-slate-500">
+                  <span>Vence: {fmtDate(inv.dueDate)}</span>
+                  <span class="font-mono font-medium text-slate-900">{fmtMoney(inv.total)}</span>
+                </div>
+              </div>
+              <div class="flex-shrink-0">
+                {#if inv.status === 'PAID' || inv.status === 'PARTIAL'}
+                  <button class="btn-ghost text-xs" on:click={() => openPaymentDetails(inv)}>
+                    <Receipt size={12} /> Ver
+                  </button>
+                {:else if inv.status !== 'CANCELLED'}
+                  <button class="btn-ghost text-xs text-emerald-700"
+                          on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
+                    Pagar
+                  </button>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
       {/if}
     </div>
 
@@ -934,7 +970,8 @@
       {#if recentPayments.length === 0}
         <div class="p-8 text-center text-sm text-slate-400">Sin pagos registrados</div>
       {:else}
-        <div class="overflow-x-auto">
+        <!-- Desktop: table -->
+        <div class="hidden sm:block overflow-x-auto">
           <table class="data-table">
             <thead>
               <tr>
@@ -973,6 +1010,32 @@
             </tbody>
           </table>
         </div>
+        <!-- Mobile: cards -->
+        <div class="sm:hidden divide-y divide-slate-100">
+          {#each recentPayments.slice(0, 10) as pay}
+            <div class="px-4 py-3">
+              <div class="flex items-center justify-between gap-2 mb-1">
+                <span class="text-xs text-slate-500">{fmtDate(pay.createdAt)}</span>
+                <span class="font-mono font-medium text-sm text-slate-900 tabular-nums">{fmtMoney(pay.amount)}</span>
+              </div>
+              <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="badge bg-slate-100 text-slate-600 text-[10px]">{PAYMENT_METHOD_PT[pay.method] || pay.method}</span>
+                  {#if invoiceNumberFor(pay.invoiceId)}
+                    <span class="text-xs text-slate-500">Factura #{invoiceNumberFor(pay.invoiceId)}</span>
+                  {/if}
+                </div>
+                <button class="btn-ghost text-xs"
+                        on:click={() => openPaymentDetailsByInvoiceId(pay.invoiceId)}>
+                  <Receipt size={12} /> Detalle
+                </button>
+              </div>
+              {#if pay.notes}
+                <div class="text-xs text-slate-400 mt-1 truncate">{pay.notes}</div>
+              {/if}
+            </div>
+          {/each}
+        </div>
       {/if}
     </div>
   </div>
@@ -985,7 +1048,7 @@
           <Wifi size={16} class="text-slate-600" />
           <h2 class="font-semibold text-slate-900">Servicio PPPoE</h2>
           {#if client.pppoeUsername || client.mikrotikAccount}
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-medium {isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">
+            <span class="px-2.5 py-0.5 rounded-full text-xs font-medium {isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">
               {isOnline ? 'Online' : 'Offline'}
             </span>
           {/if}
@@ -1212,8 +1275,9 @@
        on:click|self={() => lightboxPhoto = null}>
     <div class="relative max-w-4xl max-h-[90vh] w-full">
       <button type="button" on:click={() => lightboxPhoto = null}
-              class="absolute -top-2 -right-2 sm:top-2 sm:right-2 p-2 rounded-full
-                     bg-white text-slate-700 hover:bg-slate-100 shadow-lg"
+              class="absolute -top-3 -right-3 sm:top-3 sm:right-3 p-2.5 rounded-full
+                     bg-white text-slate-700 hover:bg-slate-100 shadow-lg
+                     min-h-[44px] min-w-[44px] flex items-center justify-center"
               aria-label="Cerrar">
         <X size={18} />
       </button>
@@ -1381,85 +1445,9 @@
   </div>
 {/if}
 
-<!-- Modal Registrar Pago -->
+<!-- Cashier Wizard (multi-step: months → invoices → payment → evidence) -->
 {#if showPaymentModal}
-  <div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" on:click|self={() => showPaymentModal = false}>
-    <div class="bg-white rounded-2xl shadow-xl w-full max-w-md">
-      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-        <h3 class="text-lg font-semibold text-slate-900">Registrar Pago</h3>
-        <button class="text-slate-400 hover:text-slate-600" on:click={() => showPaymentModal = false}>
-          <X size={20} />
-        </button>
-      </div>
-
-      <div class="p-6 space-y-4">
-        {#if payError}
-          <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">{payError}</div>
-        {/if}
-
-        <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
-          <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Cliente</div>
-          <div class="text-sm font-medium text-slate-900">{client?.name || '—'}</div>
-          <div class="text-xs text-slate-500 mt-1">
-            Saldo total pendiente: <span class="font-semibold text-slate-900">{fmtMoney(pendingAmount)}</span>
-          </div>
-        </div>
-
-        {#if pendingInvoices.length === 0}
-          <div class="bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-3 py-2 text-sm">
-            Este cliente no tiene facturas pendientes.
-          </div>
-        {:else}
-          <div>
-            <label for="pay-invoice" class="label">Factura a pagar</label>
-            <select id="pay-invoice" class="select" value={payInvoiceId}
-                    on:change={(e) => selectPayInvoice(e.target.value)}>
-              {#each pendingInvoices as inv}
-                <option value={inv.id}>
-                  #{inv.number || inv.id.slice(-6)} —
-                  {fmtMoney(inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0))}
-                  ({inv.status}, vence {fmtDate(inv.dueDate)})
-                </option>
-              {/each}
-            </select>
-          </div>
-
-          <div>
-            <label for="pay-amount" class="label">Monto a pagar (COP)</label>
-            <input id="pay-amount" class="input" type="number" min="1" bind:value={payAmount} placeholder="0" />
-          </div>
-
-          <div>
-            <label for="pay-method" class="label">Método de pago</label>
-            <select id="pay-method" class="select" bind:value={payMethod}>
-              <option value="CASH">Efectivo</option>
-              <option value="BANK_TRANSFER">Transferencia bancaria</option>
-              <option value="WOMPI">Wompi</option>
-              <option value="CREDIT_CARD">Tarjeta de crédito</option>
-              <option value="OTHER">Otro</option>
-            </select>
-          </div>
-
-          <div>
-            <label for="pay-notes" class="label">Notas (opcional)</label>
-            <input id="pay-notes" class="input" type="text" bind:value={payNotes} placeholder="Referencia o comentario" />
-          </div>
-        {/if}
-      </div>
-
-      <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
-        <button class="btn-secondary" type="button" on:click={() => showPaymentModal = false} disabled={paySaving}>Cancelar</button>
-        <button type="button" on:click={submitPayment} class="btn-primary"
-                disabled={paySaving || pendingInvoices.length === 0}>
-          {#if paySaving}
-            <Loader2 size={15} class="animate-spin" /> Registrando...
-          {:else}
-            <CreditCard size={15} /> Registrar Pago
-          {/if}
-        </button>
-      </div>
-    </div>
-  </div>
+  <CashierWizard {client} on:done={onPaymentDone} on:close={() => showPaymentModal = false} />
 {/if}
 
 <!-- ─── Sheet: solicitar actualización pública ─────────────────────── -->
@@ -1509,11 +1497,11 @@
       <!-- Notify channels -->
       <div>
         <div class="label !mb-2">Notificarme cuando el cliente lo complete vía</div>
-        <div class="grid grid-cols-3 gap-2">
+        <div class="flex flex-wrap gap-2">
           {#each ['EMAIL', 'WHATSAPP', 'TELEGRAM'] as ch}
             <button type="button"
                     on:click={() => toggleNotifyChannel(ch)}
-                    class="text-xs py-2 rounded-lg border font-medium
+                    class="px-4 min-h-[44px] text-sm rounded-lg border font-medium
                            {updateNotifyChannels.includes(ch)
                              ? 'border-brand-600 bg-brand-50/40 text-brand-800'
                              : 'border-slate-200 text-slate-600 hover:border-slate-300'}">

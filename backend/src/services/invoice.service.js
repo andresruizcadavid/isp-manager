@@ -1,32 +1,28 @@
 import PDFDocument from 'pdfkit';
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/error.middleware.js';
-import { prisma } from '../server.js';
+import { prisma } from '../config/database.js';
 
 class InvoiceService {
   async generateInvoiceNumber() {
     try {
-      // Get the last invoice number
       const lastInvoice = await prisma.invoice.findFirst({
-        orderBy: { invoiceNumber: 'desc' },
-        select: { invoiceNumber: true }
+        orderBy: { number: 'desc' },
+        select: { number: true }
       });
 
       let nextNumber = 1;
-      
-      if (lastInvoice && lastInvoice.invoiceNumber) {
-        // Extract numeric part from invoice number (e.g., "INV-0001" -> 1)
-        const numericPart = lastInvoice.invoiceNumber.match(/\d+/);
+
+      if (lastInvoice?.number) {
+        const numericPart = lastInvoice.number.match(/\d+/);
         if (numericPart) {
-          nextNumber = parseInt(numericPart[0]) + 1;
+          nextNumber = parseInt(numericPart[0], 10) + 1;
         }
       }
 
-      // Format with leading zeros (e.g., "INV-0001")
-      return `INV-${nextNumber.toString().padStart(4, '0')}`;
+      return `INV-${String(nextNumber).padStart(4, '0')}`;
     } catch (error) {
       console.error('Error generating invoice number:', error);
-      // Fallback to timestamp-based number
       return `INV-${Date.now()}`;
     }
   }
