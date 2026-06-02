@@ -271,7 +271,7 @@ model Device {
 model Invoice {
   id         String        @id @default(cuid())
   wisphubId  String?       @unique
-  number     String        @unique
+  invoiceNumber String        @unique @map("number")
   clientId   String
   amount     Int // in cents
   tax        Int           @default(0) // in cents

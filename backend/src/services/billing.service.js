@@ -90,7 +90,7 @@ class BillingService {
         const invoiceNumber = await invoiceService.generateInvoiceNumber();
         invoice = await prisma.invoice.create({
           data: {
-            number: invoiceNumber,
+            invoiceNumber: invoiceNumber,
             clientId,
             amount: monthlyFee,
             total: monthlyFee,

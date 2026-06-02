@@ -696,7 +696,7 @@ class PaymentsController {
           createdAt: { gte: from, lte: to }
         },
         include: {
-          invoice: { select: { number: true } },
+          invoice: { select: { invoiceNumber: true } },
           client: { select: { name: true, documentNumber: true } }
         },
         orderBy: { createdAt: 'desc' }
