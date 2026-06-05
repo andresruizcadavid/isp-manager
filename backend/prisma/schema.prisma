@@ -68,6 +68,7 @@ enum NotificationChannel {
   EMAIL
   SMS
   WHATSAPP
+  TELEGRAM
 }
 
 model User {
@@ -140,10 +141,10 @@ model Client {
   contractDate     DateTime?
   cutoffDate       DateTime?
   coordinates      String?
-  pppoeUsername    String?
-  pppoePassword    String?
-  serviceIp        String?
-  serviceLocalIp   String?
+  // PPPoE / service columns were dropped in migration 20260605170000.
+  // MikrotikAccount is now the single source of truth — see the relation
+  // below. Reads that used to go through Client.pppoeUsername / serviceIp
+  // must read mikrotikAccount.username / remoteAddress / localAddress.
   vlan             String?
   wisphubRouterId  String?
   notes            String?
