@@ -6,17 +6,24 @@ import { prisma } from '../config/database.js';
 
 class WompiService {
   constructor() {
-    this.baseURL = env.WOMPI_API_URL;
-    this.publicKey = env.WOMPI_PUBLIC_KEY;
-    this.privateKey = env.WOMPI_PRIVATE_KEY;
-    this.eventsKey = env.WOMPI_EVENTS_KEY;
+    this.baseURL     = env.WOMPI_API_URL;
+    this.publicKey   = env.WOMPI_PUBLIC_KEY;
+    this.privateKey  = env.WOMPI_PRIVATE_KEY;
+    // Wompi splits its secret material into TWO distinct keys:
+    //   • integrity_secret → signs the *checkout link* (reference+amount+currency)
+    //   • events_secret    → signs *webhook events* (properties+timestamp)
+    // The official docs are at https://docs.wompi.co/docs/colombia/integridad
+    // and https://docs.wompi.co/docs/colombia/eventos. We surface clear errors
+    // when each one is missing at the moment it's actually needed, instead of
+    // failing silently with a stale undefined.
+    this.eventsKey    = env.WOMPI_EVENTS_KEY;
+    this.integrityKey = env.WOMPI_INTEGRITY_KEY || null;
   }
 
   getAuthHeaders() {
-    const authString = `${this.publicKey}:`;
     return {
       'Authorization': `Bearer ${this.privateKey}`,
-      'Content-Type': 'application/json'
+      'Content-Type':  'application/json'
     };
   }
 
@@ -52,92 +59,175 @@ class WompiService {
     }
   }
 
+  // Checkout signature: sha256(reference + amount_in_cents + currency + integrity_secret).
+  // Used to harden the redirect URL so an attacker can't tamper with the
+  // amount/reference. The integrity_secret is a different value from the
+  // events_secret — see constructor.
   generateCheckoutSignature(reference, amount, currency) {
+    if (!this.integrityKey) {
+      throw new AppError(
+        'WOMPI_INTEGRITY_KEY no está configurado. Agrega la clave de integridad de Wompi al .env.',
+        500,
+        'WOMPI_INTEGRITY_KEY_MISSING'
+      );
+    }
     const concatenatedString = `${reference}${amount}${currency}${this.integrityKey}`;
     return crypto.createHash('sha256').update(concatenatedString).digest('hex');
   }
 
-  async verifyWebhookSignature(payload, signature) {
-    const concatenatedString = JSON.stringify(payload) + this.eventsKey;
-    const expectedSignature = crypto.createHash('sha256').update(concatenatedString).digest('hex');
-    return signature === expectedSignature;
+  // Webhook signature per https://docs.wompi.co/docs/colombia/eventos:
+  //   1. The body carries `signature: { properties: [...], checksum }`
+  //      where each property is a dot-path (e.g. "transaction.id").
+  //   2. The body also carries a top-level `timestamp` (epoch seconds).
+  //   3. Verification: concat the VALUE of each path (resolved from
+  //      body.data.*), append the timestamp (as string), append the
+  //      events_secret. Sha256-hex of that must equal `signature.checksum`.
+  //
+  // This is intentionally a SYNCHRONOUS verifier — no I/O — so it can run
+  // inside the webhook route without blocking other ack handling.
+  verifyWebhookSignature(body) {
+    if (!this.eventsKey) {
+      console.error('[wompi.verifyWebhookSignature] WOMPI_EVENTS_KEY missing — rejecting');
+      return false;
+    }
+    const sig = body?.signature;
+    const props = Array.isArray(sig?.properties) ? sig.properties : null;
+    const checksum = sig?.checksum;
+    const timestamp = body?.timestamp;
+    if (!props || !checksum || timestamp == null) return false;
+
+    // Resolve a dot-path against body.data, returning the value as string.
+    // Wompi prefixes paths with "transaction." for transaction.updated events;
+    // those paths are relative to body.data.
+    const resolve = (path) => {
+      const parts = path.split('.');
+      let cur = body.data;
+      for (const p of parts) {
+        if (cur == null) return undefined;
+        cur = cur[p];
+      }
+      return cur;
+    };
+
+    let concat = '';
+    for (const p of props) {
+      const v = resolve(p);
+      if (v === undefined) return false; // missing property → reject
+      concat += String(v);
+    }
+    concat += String(timestamp);
+    concat += this.eventsKey;
+
+    const expected = crypto.createHash('sha256').update(concat).digest('hex');
+    // Constant-time compare so an attacker can't binary-search the checksum.
+    try {
+      const a = Buffer.from(expected, 'hex');
+      const b = Buffer.from(String(checksum), 'hex');
+      if (a.length !== b.length) return false;
+      return crypto.timingSafeEqual(a, b);
+    } catch {
+      return false;
+    }
   }
 
-  async handleTransactionUpdate(transactionData) {
+  // Wompi event shape (transaction.updated):
+  //   { event, data: { transaction: { id, reference, status, amount_in_cents, ... } },
+  //     signature, timestamp, ... }
+  //
+  // The controller now passes the whole body, so we reach into
+  // `body.data.transaction.*`. Older code passed only `data` — we tolerate
+  // both shapes so a future caller still works.
+  async handleTransactionUpdate(eventBody) {
     try {
-      const { reference, status, amount_in_cents, id: transactionId } = transactionData.data;
+      const tx =
+        eventBody?.data?.transaction ||
+        eventBody?.transaction        ||
+        eventBody?.data               ||
+        eventBody;
+      const reference     = tx?.reference;
+      const status        = tx?.status;
+      const amountInCents = tx?.amount_in_cents;
+      const transactionId = tx?.id;
 
-      // Find invoice by reference (invoiceNumber)
-      const invoice = await prisma.invoice.findUnique({
-        where: { invoiceNumber: reference },
-        include: {
-          client: true,
-          payments: true
-        }
-      });
-
-      if (!invoice) {
-        console.error(`Invoice not found for reference: ${reference}`);
+      if (!reference || !status || !transactionId) {
+        console.warn('[wompi] transaction.updated missing fields', {
+          reference, status, transactionId
+        });
         return;
       }
 
-      // Check if payment already exists
-      const existingPayment = await prisma.payment.findFirst({
+      // Find invoice by reference (= invoiceNumber).
+      const invoice = await prisma.invoice.findUnique({
+        where:   { invoiceNumber: reference },
+        include: { client: true, payments: true }
+      });
+      if (!invoice) {
+        console.error(`[wompi] invoice not found for reference: ${reference}`);
+        return;
+      }
+
+      // Idempotency: a Wompi event for the same transaction may arrive
+      // multiple times. Look up by transactionId (UNIQUE in schema).
+      const existingPayment = await prisma.payment.findUnique({
         where: { transactionId }
       });
 
       if (existingPayment) {
-        // Update existing payment status
+        // Update existing payment. The Payment model has no `paidAt` —
+        // status='COMPLETED' is the paid signal; createdAt is when the
+        // record was inserted.
         await prisma.payment.update({
           where: { id: existingPayment.id },
+          data:  { status: this.mapWompiStatus(status) }
+        });
+        if (status === 'APPROVED') {
+          await this.updateInvoiceStatus(invoice);
+        }
+      } else if (status === 'APPROVED') {
+        // First-time approval — create the Payment row. Use the canonical
+        // Prisma field names: `method` (PaymentMethod enum), NOT
+        // paymentMethod. The schema's UNIQUE(transactionId) makes a
+        // concurrent duplicate insert a clean 409 instead of a soft dup.
+        await prisma.payment.create({
           data: {
-            status: this.mapWompiStatus(status),
-            paidAt: status === 'APPROVED' ? new Date() : null
+            invoiceId:     invoice.id,
+            clientId:      invoice.clientId,
+            amount:        amountInCents,
+            method:        'WOMPI',
+            status:        'COMPLETED',
+            transactionId,
+            notes:         `Wompi tx ${transactionId}`
           }
         });
-
-        // Update invoice status if payment is approved
-        if (status === 'APPROVED') {
-          await this.updateInvoiceStatus(invoice);
-        }
-      } else {
-        // Create new payment record
-        if (status === 'APPROVED') {
-          await prisma.payment.create({
-            data: {
-              invoiceId: invoice.id,
-              amount: amount_in_cents,
-              paymentMethod: 'WOMPI',
-              status: 'COMPLETED',
-              transactionId,
-              paidAt: new Date()
-            }
-          });
-
-          await this.updateInvoiceStatus(invoice);
-        } else if (status === 'DECLINED' || status === 'ERROR') {
-          await prisma.payment.create({
-            data: {
-              invoiceId: invoice.id,
-              amount: amount_in_cents,
-              paymentMethod: 'WOMPI',
-              status: 'FAILED',
-              transactionId
-            }
-          });
-        }
+        await this.updateInvoiceStatus(invoice);
+      } else if (status === 'DECLINED' || status === 'ERROR') {
+        await prisma.payment.create({
+          data: {
+            invoiceId:     invoice.id,
+            clientId:      invoice.clientId,
+            amount:        amountInCents || 0,
+            method:        'WOMPI',
+            status:        'FAILED',
+            transactionId,
+            notes:         `Wompi tx ${transactionId} — ${status}`
+          }
+        });
       }
 
-      // Send notification based on status
-      if (status === 'APPROVED') {
-        await this.sendPaymentConfirmation(invoice, transactionId);
-      } else if (status === 'DECLINED') {
-        await this.sendPaymentFailure(invoice, transactionId);
+      // Side-effects — notification. Best-effort; never let it abort the
+      // webhook ack.
+      try {
+        if (status === 'APPROVED') {
+          await this.sendPaymentConfirmation(invoice, transactionId);
+        } else if (status === 'DECLINED') {
+          await this.sendPaymentFailure(invoice, transactionId);
+        }
+      } catch (notifErr) {
+        console.warn('[wompi] notification failed:', notifErr.message);
       }
-
     } catch (error) {
-      console.error('Error handling Wompi transaction update:', error);
-      throw error;
+      console.error('[wompi] handleTransactionUpdate failed:', error);
+      throw error; // controller's outer try-catch will still ack 200
     }
   }
 
@@ -152,23 +242,35 @@ class WompiService {
     return statusMap[wompiStatus] || 'PENDING';
   }
 
+  // Recompute Invoice.status / balanceDue / paidDate after a payment change.
+  // Compares against `total` (amount + tax − discount), NOT `amount`, so the
+  // partial-payment math is correct even on invoices with IVA or descuento.
   async updateInvoiceStatus(invoice) {
-    // Get all completed payments for this invoice
-    const completedPayments = await prisma.payment.aggregate({
-      where: {
-        invoiceId: invoice.id,
-        status: 'COMPLETED'
-      },
-      _sum: { amount: true }
+    const agg = await prisma.payment.aggregate({
+      where: { invoiceId: invoice.id, status: 'COMPLETED' },
+      _sum:  { amount: true }
     });
+    const paid       = agg._sum.amount || 0;
+    const total      = invoice.total || invoice.amount;
+    const balanceDue = Math.max(0, total - paid);
 
-    // Check if invoice is fully paid
-    if (completedPayments._sum.amount >= invoice.amount) {
-      await prisma.invoice.update({
-        where: { id: invoice.id },
-        data: { status: 'PAID' }
-      });
+    let status, paidDate;
+    if (paid >= total) {
+      status   = 'PAID';
+      paidDate = invoice.paidDate || new Date();
+    } else if (paid > 0) {
+      status   = 'PARTIAL';
+      paidDate = null;
+    } else {
+      // Preserve OVERDUE if the cron already marked it; otherwise PENDING.
+      status   = invoice.status === 'OVERDUE' ? 'OVERDUE' : 'PENDING';
+      paidDate = null;
     }
+
+    await prisma.invoice.update({
+      where: { id: invoice.id },
+      data:  { status, balanceDue, paidDate }
+    });
   }
 
   async getTransaction(transactionId) {

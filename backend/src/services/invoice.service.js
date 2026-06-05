@@ -116,127 +116,134 @@ class InvoiceService {
     doc.text(`Generada el: ${new Date().toLocaleString()}`, { align: 'center' });
   }
 
-  async calculateInvoiceAmount(clientId, planId, periodStart, periodEnd) {
-    try {
-      // Get plan details
-      const plan = await prisma.plan.findUnique({
-        where: { id: planId }
-      });
+  // REMOVED: calculateInvoiceAmount, generateProRatedInvoice,
+  // duplicateInvoiceForPeriod, getSystemUserId.
+  //
+  // All four were broken against the current schema:
+  //   • calculateInvoiceAmount divided plan.price by plan.duration (Plan
+  //     has no `duration` field — returned NaN).
+  //   • generateProRatedInvoice / duplicateInvoiceForPeriod wrote
+  //     Invoice.planId / periodStart / periodEnd / createdBy / creator —
+  //     none of those exist on the Invoice model (canonical billing
+  //     period is periodYear + periodMonth).
+  //   • getSystemUserId created a User with a hardcoded string in the
+  //     password column ('system_password_hash', NOT a bcrypt hash) and
+  //     ADMIN role — a latent privilege-escalation footgun.
+  //
+  // None of them had any external caller (only invoked each other), so
+  // deletion is safe. If pro-rated billing is needed again, write a fresh
+  // implementation against periodYear/periodMonth and InvoiceItem rows.
 
-      if (!plan) {
-        throw new AppError('Plan no encontrado', 404, 'PLAN_NOT_FOUND');
-      }
-
-      // Calculate days in period
-      const daysInPeriod = Math.ceil((periodEnd - periodStart) / (1000 * 60 * 60 * 24));
-      
-      // Calculate daily rate
-      const dailyRate = plan.price / plan.duration;
-      
-      // Calculate total amount
-      const totalAmount = Math.round(dailyRate * daysInPeriod);
-
-      return totalAmount;
-    } catch (error) {
-      console.error('Error calculating invoice amount:', error);
-      throw error;
-    }
-  }
-
+  // Generate one Invoice row per active client for the month of `targetDate`.
+  //
+  // Schema alignment (kept in sync with prisma/schema.prisma):
+  //   • Invoice has NO planId / periodStart / periodEnd / createdBy. The
+  //     billing period is identified by `(periodYear, periodMonth)` with a
+  //     composite UNIQUE constraint → idempotency is enforced at the DB
+  //     level via `upsert`, so re-running the job is a no-op.
+  //   • The amount comes from (in order of precedence):
+  //       1. client.monthlyFee  — per-client override (cents)
+  //       2. plan.monthlyPrice  — frontend-facing price (cents)
+  //       3. plan.price         — legacy single field (cents)
+  //
+  // Clients with NULL installationDate are eligible (legacy / imported
+  // rows). Only `installationDate > lastDay` is excluded (future contracts).
+  //
+  // Note: `tax` and `discount` are zero today. When IVA is enabled we can
+  // extend this to compute them from the plan/client. `total` is always
+  // `amount + tax - discount` so the dashboards stay consistent.
   async generateMonthlyInvoices(targetDate = new Date()) {
     try {
-      // Get the first day of the month
-      const firstDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1);
-      
-      // Get the last day of the month
-      const lastDay = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0);
+      const year  = targetDate.getFullYear();
+      const month = targetDate.getMonth() + 1; // 1-12
+      const firstDay = new Date(year, month - 1, 1);
+      const lastDay  = new Date(year, month, 0, 23, 59, 59, 999);
 
-      // Get all active clients
       const activeClients = await prisma.client.findMany({
-        where: { 
+        where: {
           status: 'ACTIVE',
-          installationDate: { 
-            lte: lastDay 
-          }
+          // Eligible: never-set installationDate OR installed on/before lastDay.
+          OR: [
+            { installationDate: null },
+            { installationDate: { lte: lastDay } }
+          ]
         },
-        include: { 
-          plan: true 
-        }
+        include: { plan: true }
       });
 
-      const results = {
-        successful: [],
-        failed: [],
-        total: activeClients.length
-      };
-
-      const creatorId = await this.getSystemUserId();
+      const results = { successful: [], failed: [], total: activeClients.length };
 
       for (const client of activeClients) {
         try {
-          // Check if invoice already exists for this period
-          const existingInvoice = await prisma.invoice.findFirst({
+          if (!client.planId || !client.plan) {
+            results.failed.push({ clientId: client.id, reason: 'Client has no plan assigned' });
+            continue;
+          }
+
+          const amount = client.monthlyFee && client.monthlyFee > 0
+            ? client.monthlyFee
+            : (client.plan.monthlyPrice || client.plan.price || 0);
+          if (!amount || amount < 0) {
+            results.failed.push({ clientId: client.id, reason: 'Computed amount is zero/negative' });
+            continue;
+          }
+          const total = amount; // tax=0, discount=0 (see comment above)
+
+          // Idempotency: UNIQUE(clientId, periodYear, periodMonth) means
+          // re-running the same month upserts the existing row instead of
+          // duplicating. We use a constant `where` to leverage the index.
+          const existing = await prisma.invoice.findUnique({
             where: {
-              clientId: client.id,
-              periodStart: firstDay,
-              periodEnd: lastDay
+              clientId_periodYear_periodMonth: {
+                clientId: client.id, periodYear: year, periodMonth: month
+              }
             }
           });
-
-          if (existingInvoice) {
+          if (existing) {
             results.failed.push({
               clientId: client.id,
               reason: 'Invoice already exists for this period',
-              invoiceId: existingInvoice.id
+              invoiceId: existing.id
             });
             continue;
           }
 
-          // Calculate invoice amount
-          const amount = await this.calculateInvoiceAmount(
-            client.id,
-            client.planId,
-            firstDay,
-            lastDay
-          );
-
-          // Generate invoice number
           const invoiceNumber = await this.generateInvoiceNumber();
+          // Due date: 15 days after the period ends (configurable later).
+          const dueDate = new Date(lastDay.getTime() + 15 * 24 * 60 * 60 * 1000);
 
-          // Create invoice
           const invoice = await prisma.invoice.create({
             data: {
               invoiceNumber,
-              clientId: client.id,
-              planId: client.planId,
-              amount,
-              dueDate: new Date(lastDay.getTime() + 15 * 24 * 60 * 60 * 1000), // 15 days after period end
-              periodStart: firstDay,
-              periodEnd: lastDay,
-              createdBy: creatorId
-            },
-            include: {
-              client: true,
-              plan: true,
-              creator: {
-                select: { name: true }
+              clientId:    client.id,
+              amount, tax: 0, discount: 0, total,
+              balanceDue:  total,
+              status:      'PENDING',
+              issueDate:   firstDay,
+              dueDate,
+              periodYear:  year,
+              periodMonth: month,
+              items: {
+                create: [{
+                  description: `${client.plan.name} — ${this._monthLabel(month)} ${year}`,
+                  quantity:    1,
+                  // InvoiceItem schema uses `price` (per-unit). Total is the
+                  // line total = price * quantity for this simple item.
+                  price:       amount,
+                  total:       amount
+                }]
               }
-            }
+            },
+            include: { client: true, items: true }
           });
 
           results.successful.push({
-            clientId: client.id,
-            invoiceId: invoice.id,
-            invoiceNumber: invoice.invoiceNumber,
-            amount
+            clientId: client.id, invoiceId: invoice.id,
+            invoiceNumber: invoice.invoiceNumber, amount
           });
-
         } catch (error) {
           console.error(`Error generating invoice for client ${client.id}:`, error);
-          results.failed.push({
-            clientId: client.id,
-            reason: error.message
-          });
+          results.failed.push({ clientId: client.id, reason: error.message });
         }
       }
 
@@ -247,91 +254,9 @@ class InvoiceService {
     }
   }
 
-  async generateProRatedInvoice(clientId, planId, startDate, endDate) {
-    try {
-      // Validate dates
-      if (startDate >= endDate) {
-        throw new AppError('La fecha de inicio debe ser anterior a la fecha de fin', 400, 'INVALID_DATE_RANGE');
-      }
-
-      // Get client and plan
-      const [client, plan] = await Promise.all([
-        prisma.client.findUnique({ where: { id: clientId } }),
-        prisma.plan.findUnique({ where: { id: planId } })
-      ]);
-
-      if (!client) {
-        throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
-      }
-
-      if (!plan) {
-        throw new AppError('Plan no encontrado', 404, 'PLAN_NOT_FOUND');
-      }
-
-      // Calculate amount
-      const amount = await this.calculateInvoiceAmount(clientId, planId, startDate, endDate);
-
-      // Generate invoice number
-      const invoiceNumber = await this.generateInvoiceNumber();
-
-      // Get creator ID
-      const creatorId = await this.getSystemUserId();
-
-      // Create invoice
-      const invoice = await prisma.invoice.create({
-        data: {
-          invoiceNumber,
-          clientId,
-          planId,
-          amount,
-          dueDate: new Date(endDate.getTime() + 15 * 24 * 60 * 60 * 1000), // 15 days after period end
-          periodStart: startDate,
-          periodEnd: endDate,
-          createdBy: creatorId
-        },
-        include: {
-          client: true,
-          plan: true,
-          creator: {
-            select: { name: true }
-          }
-        }
-      });
-
-      return invoice;
-    } catch (error) {
-      console.error('Error generating pro-rated invoice:', error);
-      throw error;
-    }
-  }
-
-  async getSystemUserId() {
-    try {
-      // Try to find a system user or create one
-      let systemUser = await prisma.user.findFirst({
-        where: { email: 'system@miisp.com' }
-      });
-
-      if (!systemUser) {
-        systemUser = await prisma.user.create({
-          data: {
-            email: 'system@miisp.com',
-            name: 'System',
-            password: 'system_password_hash', // This should be properly hashed
-            role: 'ADMIN'
-          }
-        });
-      }
-
-      return systemUser.id;
-    } catch (error) {
-      console.error('Error getting system user ID:', error);
-      // Fallback to first admin user
-      const adminUser = await prisma.user.findFirst({
-        where: { role: 'ADMIN' }
-      });
-      return adminUser?.id || null;
-    }
+  _monthLabel(month) {
+    return ['Enero','Febrero','Marzo','Abril','Mayo','Junio',
+            'Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'][month - 1] || '';
   }
 
   async updateInvoiceStatus(invoiceId, status) {
@@ -360,32 +285,26 @@ class InvoiceService {
     }
   }
 
+  // Invoice has no direct `plan` relation in the schema — the plan lives on
+  // the Client. We include `client.plan` so downstream notifications can
+  // still show plan info without an extra round-trip.
   async getOverdueInvoices() {
     try {
       const overdueInvoices = await prisma.invoice.findMany({
         where: {
-          status: { in: ['PENDING', 'OVERDUE'] },
+          status:  { in: ['PENDING', 'OVERDUE'] },
           dueDate: { lt: new Date() }
         },
         include: {
           client: {
             select: {
-              id: true,
-              name: true,
-              email: true,
-              phone: true
-            }
-          },
-          plan: {
-            select: {
-              name: true,
-              price: true
+              id: true, name: true, email: true, phone: true,
+              plan: { select: { name: true, price: true, monthlyPrice: true } }
             }
           }
         },
         orderBy: { dueDate: 'asc' }
       });
-
       return overdueInvoices;
     } catch (error) {
       console.error('Error getting overdue invoices:', error);
@@ -546,80 +465,10 @@ class InvoiceService {
     return errors;
   }
 
-  async duplicateInvoice(invoiceId, newPeriodStart, newPeriodEnd) {
-    try {
-      // Get original invoice
-      const originalInvoice = await prisma.invoice.findUnique({
-        where: { id: invoiceId },
-        include: {
-          client: true,
-          plan: true
-        }
-      });
+  // REMOVED: duplicateInvoice — relied on calculateInvoiceAmount and
+  // getSystemUserId and wrote planId/periodStart/periodEnd/createdBy/creator
+  // (none of which exist on the Invoice model). Had no external callers.
 
-      if (!originalInvoice) {
-        throw new AppError('Factura original no encontrada', 404, 'INVOICE_NOT_FOUND');
-      }
-
-      // Validate new period
-      if (newPeriodStart >= newPeriodEnd) {
-        throw new AppError('El período de facturación es inválido', 400, 'INVALID_PERIOD');
-      }
-
-      // Check if invoice already exists for new period
-      const existingInvoice = await prisma.invoice.findFirst({
-        where: {
-          clientId: originalInvoice.clientId,
-          periodStart: newPeriodStart,
-          periodEnd: newPeriodEnd
-        }
-      });
-
-      if (existingInvoice) {
-        throw new AppError('Ya existe una factura para este período', 409, 'INVOICE_EXISTS_FOR_PERIOD');
-      }
-
-      // Calculate new amount
-      const newAmount = await this.calculateInvoiceAmount(
-        originalInvoice.clientId,
-        originalInvoice.planId,
-        newPeriodStart,
-        newPeriodEnd
-      );
-
-      // Generate new invoice number
-      const newInvoiceNumber = await this.generateInvoiceNumber();
-
-      // Get creator ID
-      const creatorId = await this.getSystemUserId();
-
-      // Create duplicate invoice
-      const newInvoice = await prisma.invoice.create({
-        data: {
-          invoiceNumber: newInvoiceNumber,
-          clientId: originalInvoice.clientId,
-          planId: originalInvoice.planId,
-          amount: newAmount,
-          dueDate: new Date(newPeriodEnd.getTime() + 15 * 24 * 60 * 60 * 1000),
-          periodStart: newPeriodStart,
-          periodEnd: newPeriodEnd,
-          createdBy: creatorId
-        },
-        include: {
-          client: true,
-          plan: true,
-          creator: {
-            select: { name: true }
-          }
-        }
-      });
-
-      return newInvoice;
-    } catch (error) {
-      console.error('Error duplicating invoice:', error);
-      throw error;
-    }
-  }
 
   async getInvoiceTimeline(invoiceId) {
     try {

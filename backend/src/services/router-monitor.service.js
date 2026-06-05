@@ -25,6 +25,12 @@ import ping from 'ping';
 import { prisma } from '../config/database.js';
 import { emit } from './socket.service.js';
 import { sendMessage } from './telegram.service.js';
+import { withLock } from './redis-lock.service.js';
+
+// Distributed lock so only one replica runs the router sweep per tick.
+// See network-monitor.service.js for the rationale.
+const LOCK_KEY   = 'lock:router-monitor:tick';
+const LOCK_TTL_S = 60;
 
 const DEFAULT_INTERVAL_SEC = 30;
 const DEFAULT_TIMEOUT_SEC  = 5;
@@ -241,7 +247,8 @@ async function tick() {
   try {
     const { probeIntervalSec } = await loadSettings();
     nextDelayMs = Math.max(1, probeIntervalSec) * 1000;
-    await runRouterSweep();
+    const ran = await withLock(LOCK_KEY, LOCK_TTL_S, runRouterSweep);
+    if (!ran) console.log('[router-monitor] tick skipped — another replica owns the lock');
   } catch (e) {
     console.error('[router-monitor] sweep failed:', e.message);
   } finally {

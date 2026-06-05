@@ -249,69 +249,15 @@ class MikrotikController {
     });
   });
 
-  suspendClientInMikrotik = asyncHandler(async (req, res) => {
-    const { clientId } = req.params;
-
-    const client = await prisma.client.findUnique({
-      where: { id: clientId }
-    });
-
-    if (!client) {
-      throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
-    }
-
-    if (!client.mikrotikId) {
-      throw new AppError('El cliente no tiene ID de Mikrotik', 400, 'NO_MIKROTIK_ID');
-    }
-
-    // Suspend in Mikrotik
-    await mikrotikService.suspendClient(client.mikrotikId);
-
-    // Update client status
-    const updatedClient = await prisma.client.update({
-      where: { id: clientId },
-      data: { status: 'SUSPENDED' },
-      include: { plan: true }
-    });
-
-    res.json({
-      success: true,
-      data: updatedClient,
-      message: 'Cliente suspendido en Mikrotik exitosamente'
-    });
-  });
-
-  activateClientInMikrotik = asyncHandler(async (req, res) => {
-    const { clientId } = req.params;
-
-    const client = await prisma.client.findUnique({
-      where: { id: clientId }
-    });
-
-    if (!client) {
-      throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
-    }
-
-    if (!client.mikrotikId) {
-      throw new AppError('El cliente no tiene ID de Mikrotik', 400, 'NO_MIKROTIK_ID');
-    }
-
-    // Activate in Mikrotik
-    await mikrotikService.activateClient(client.mikrotikId);
-
-    // Update client status
-    const updatedClient = await prisma.client.update({
-      where: { id: clientId },
-      data: { status: 'ACTIVE' },
-      include: { plan: true }
-    });
-
-    res.json({
-      success: true,
-      data: updatedClient,
-      message: 'Cliente activado en Mikrotik exitosamente'
-    });
-  });
+  // REMOVED: suspendClientInMikrotik / activateClientInMikrotik.
+  //
+  // These were duplicates of clientController.suspendService /
+  // .activateService (mounted at POST /clients/:id/suspend|activate)
+  // but with worse code: they called the deprecated `mikrotikService`
+  // proxy (which throws "deprecado") and depended on the legacy
+  // `client.mikrotikId` column (the canonical link is now MikrotikAccount).
+  // The frontend never called them. The clientController versions are
+  // the only suspension path.
 
   getQueues = asyncHandler(async (req, res) => {
     const queues = await mikrotikService.getQueues();

@@ -73,6 +73,21 @@ const toCents = (v) => {
   return Math.round(n * 100);
 };
 
+// "100Mbps" / "100" / 100 → 100000 (kbps). The Plan schema stores speed
+// in kbps as Int, so we normalize Mbps → kbps. If the input is already
+// a kbps figure (>= 1024), we pass it through.
+const toKbps = (v) => {
+  if (v == null || v === '') return 0;
+  let s = String(v).trim();
+  let mult = 1;
+  if (/mb(\/s|ps)?$/i.test(s)) { mult = 1000; s = s.replace(/mb.*$/i, ''); }
+  else if (/gb/i.test(s))      { mult = 1000_000; s = s.replace(/gb.*$/i, ''); }
+  else if (/kb/i.test(s))      { mult = 1; s = s.replace(/kb.*$/i, ''); }
+  const n = parseFloat(s);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * mult);
+};
+
 // "30/04/2026 11:07:00" or "30/04/2026" or "2026-04-25" → Date | null
 const parseDate = (s) => {
   if (!s) return null;
@@ -167,26 +182,47 @@ async function importPlans() {
   const plans = await fetchAll('/plan-internet/');
   log(`   got ${plans.length} plans`);
   for (const p of plans) {
+    // WispHub's plan-internet schema varies a bit by tenant. We try a few
+    // known aliases for each field so the import doesn't silently produce
+    // zero prices/speeds (the bug that broke billing on first import).
+    const priceCents     = toCents(p.precio ?? p.precio_total ?? p.precio_plan ?? 0);
+    const downloadKbps   = toKbps(p.velocidad_bajada ?? p.bajada ?? p.download ?? 0);
+    const uploadKbps     = toKbps(p.velocidad_subida ?? p.subida ?? p.upload   ?? 0);
+    const mikrotikProfile = p.mikrotik_profile || p.perfil_mikrotik || p.perfil || null;
     const data = {
-      wisphubId:     String(p.id),
-      name:          p.nombre,
-      type:          p.tipo || null,
-      price:         0,
-      monthlyPrice:  0,
-      downloadSpeed: 0,
-      uploadSpeed:   0,
-      isActive:      true,
+      wisphubId:       String(p.id),
+      name:            p.nombre,
+      type:            p.tipo || null,
+      price:           priceCents,
+      monthlyPrice:    priceCents,
+      downloadSpeed:   downloadKbps,
+      uploadSpeed:     uploadKbps,
+      mikrotikProfile: mikrotikProfile,
+      isActive:        true,
     };
-    if (DRY_RUN) { log(`   would upsert plan: ${p.nombre}`); continue; }
+    if (DRY_RUN) { log(`   would upsert plan: ${p.nombre} | price=${priceCents}c profile=${mikrotikProfile} ${downloadKbps}/${uploadKbps}kbps`); continue; }
     await prisma.plan.upsert({
       where:  { wisphubId: data.wisphubId },
-      update: { name: data.name, type: data.type },
+      // On re-run, refresh price/speed/profile too — these are the fields
+      // that the original importer mishandled and they need backfilling.
+      update: {
+        name: data.name, type: data.type,
+        price: data.price, monthlyPrice: data.monthlyPrice,
+        downloadSpeed: data.downloadSpeed, uploadSpeed: data.uploadSpeed,
+        mikrotikProfile: data.mikrotikProfile
+      },
       create: data,
     }).catch(async (e) => {
       if (String(e.message).includes('name')) {
         const existing = await prisma.plan.findFirst({ where: { name: p.nombre } });
         if (existing) {
-          return prisma.plan.update({ where: { id: existing.id }, data: { wisphubId: data.wisphubId, type: data.type } });
+          return prisma.plan.update({
+            where: { id: existing.id },
+            data: { wisphubId: data.wisphubId, type: data.type,
+                    price: data.price, monthlyPrice: data.monthlyPrice,
+                    downloadSpeed: data.downloadSpeed, uploadSpeed: data.uploadSpeed,
+                    mikrotikProfile: data.mikrotikProfile }
+          });
         }
       }
       throw e;
@@ -199,9 +235,16 @@ async function importPlans() {
 async function importClients() {
   const userToWisphubId = new Map();
   if (!wants('clients')) {
-    // Even if skipping, we still need the lookup map for invoices
-    const all = await prisma.client.findMany({ where: { wisphubId: { not: null } }, select: { wisphubId: true, pppoeUsername: true } });
-    for (const c of all) { if (c.pppoeUsername) userToWisphubId.set(c.pppoeUsername, c.wisphubId); }
+    // Even if skipping, we still need the lookup map for invoices. After
+    // FASE 5 dedup the canonical username lives on MikrotikAccount.
+    const all = await prisma.client.findMany({
+      where:  { wisphubId: { not: null } },
+      select: { wisphubId: true, mikrotikAccount: { select: { username: true } } }
+    });
+    for (const c of all) {
+      const u = c.mikrotikAccount?.username;
+      if (u) userToWisphubId.set(u, c.wisphubId);
+    }
     return userToWisphubId;
   }
 
@@ -209,11 +252,17 @@ async function importClients() {
   const clients = await fetchAll('/clientes/');
   log(`   got ${clients.length} clients`);
 
-  // Pre-load FK lookups
+  // Pre-load FK lookups. The zone lookup also carries routerId so we can
+  // resolve the MikrotikAccount's router without a second round-trip per
+  // client.
   const planLookup = new Map((await prisma.plan.findMany({ where: { wisphubId: { not: null } }, select: { id: true, wisphubId: true } }))
     .map(p => [p.wisphubId, p.id]));
-  const zoneLookup = new Map((await prisma.zone.findMany({ where: { wisphubId: { not: null } }, select: { id: true, wisphubId: true } }))
-    .map(z => [z.wisphubId, z.id]));
+  const zoneRows = await prisma.zone.findMany({
+    where: { wisphubId: { not: null } },
+    select: { id: true, wisphubId: true, routerId: true }
+  });
+  const zoneLookup           = new Map(zoneRows.map(z => [z.wisphubId, z.id]));
+  const zoneToRouterByLocalId = new Map(zoneRows.map(z => [z.id, z.routerId]));
 
   for (const c of clients) {
     const wisphubId = String(c.id_servicio);
@@ -240,13 +289,18 @@ async function importClients() {
       installationDate: parseDate(c.fecha_instalacion),
       cutoffDate:      parseDate(c.fecha_corte),
       coordinates:     c.coordenadas || null,
-      pppoeUsername:   usuario,
-      pppoePassword:   c.password_servicio || null,
-      serviceIp:       c.ip || null,
-      serviceLocalIp:  c.ip_local || null,
+      // PPPoE / service data now lives on MikrotikAccount (see FASE 5 dedup
+      // migration). We collect the values here so they can be upserted
+      // against the related MikrotikAccount row after the Client upsert.
       vlan:            c.interfaz_lan || null,
       wisphubRouterId: c.router?.id ? String(c.router.id) : null,
       notes:           c.comentarios || null,
+    };
+    const mikrotikData = {
+      username:      usuario,
+      password:      c.password_servicio || null,
+      remoteAddress: c.ip || null,
+      localAddress:  c.ip_local || null
     };
 
     if (DRY_RUN) { log(`   would upsert client[${wisphubId}]: ${data.name} | plan=${planId} zone=${zoneId} status=${data.status}`); continue; }
@@ -265,6 +319,26 @@ async function importClients() {
       throw e;
     });
     stats.clients++;
+
+    // MikrotikAccount upsert — only when we have a username AND we can
+    // resolve the router from the zone. Without a router the row would
+    // be useless (the FK is required and downstream code looks it up).
+    if (mikrotikData.username && zoneId) {
+      const routerId = zoneToRouterByLocalId.get(zoneId);
+      if (routerId) {
+        try {
+          await prisma.mikrotikAccount.upsert({
+            where:  { clientId: upserted.id },
+            update: mikrotikData,
+            create: { ...mikrotikData, clientId: upserted.id, routerId, status: 'ACTIVE' }
+          });
+        } catch (e) {
+          stats.errors.push(`mikrotik[${wisphubId}]: ${e.message}`);
+        }
+      } else {
+        stats.errors.push(`mikrotik[${wisphubId}]: zone has no routerId — skipped`);
+      }
+    }
 
     // Devices (CPE + WiFi router) — only create if there's any non-empty data
     const cpeData = {

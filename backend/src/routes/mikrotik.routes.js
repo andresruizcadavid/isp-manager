@@ -58,8 +58,9 @@ router.post('/clients/sync', requireOperatorOrAdmin, mikrotikController.syncClie
 router.post('/clients/:clientId/add', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(clientConfigSchema), mikrotikController.addClientToMikrotik);
 router.delete('/clients/:clientId/remove', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), mikrotikController.removeClientFromMikrotik);
 router.put('/clients/:clientId/update', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(clientConfigSchema.partial()), mikrotikController.updateClientInMikrotik);
-router.post('/clients/:clientId/suspend', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), mikrotikController.suspendClientInMikrotik);
-router.post('/clients/:clientId/activate', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), mikrotikController.activateClientInMikrotik);
+// REMOVED: /clients/:clientId/suspend and /activate. They were duplicates
+// of /clients/:id/suspend|activate (clients.routes.js), but called the
+// deprecated mikrotikService proxy. Use the clients.routes versions.
 
 // Queue management
 router.get('/queues', mikrotikController.getQueues);

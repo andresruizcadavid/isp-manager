@@ -23,6 +23,14 @@ import ping from 'ping';
 import { prisma } from '../config/database.js';
 import { emit } from './socket.service.js';
 import { alertDown, alertRecovery } from './telegram.service.js';
+import { withLock } from './redis-lock.service.js';
+
+// Distributed lock key. If multiple backend replicas run, only the one
+// that wins this lock per tick executes the sweep. TTL must comfortably
+// cover one full sweep — even with 200 devices @ BATCH=8 we finish in
+// ~10s, so 60s is generous.
+const LOCK_KEY   = 'lock:network-monitor:tick';
+const LOCK_TTL_S = 60;
 
 // Fallback values used when no TelegramConfig row exists yet.
 const DEFAULT_INTERVAL_SEC   = 30;
@@ -211,7 +219,12 @@ async function tick() {
   try {
     const { probeIntervalSec } = await loadSettings();
     nextDelayMs = Math.max(1, probeIntervalSec) * 1000;
-    await runSweep();
+    // Only one replica should run the sweep per tick. withLock returns
+    // false when another replica is already running — silent skip is
+    // intentional; the other replica will emit the device updates we
+    // would have emitted.
+    const ran = await withLock(LOCK_KEY, LOCK_TTL_S, runSweep);
+    if (!ran) console.log('[monitor] tick skipped — another replica owns the lock');
   } catch (e) {
     console.error('[monitor] sweep failed:', e.message);
   } finally {

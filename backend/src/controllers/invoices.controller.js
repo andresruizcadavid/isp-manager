@@ -9,8 +9,8 @@ class InvoicesController {
       page = 1,
       limit = 10,
       search,
-      sortBy = 'createdAt',
-      sortOrder = 'desc',
+      sortBy: rawSortBy = 'createdAt',
+      sortOrder: rawSortOrder = 'desc',
       status,
       clientId,
       dueDateFrom,
@@ -19,6 +19,12 @@ class InvoicesController {
       amountMax
     } = req.query;
     const skip = (page - 1) * limit;
+
+    // Whitelist sortBy/sortOrder so the caller can't inject arbitrary
+    // Prisma field names (which would either 500 or leak existence info).
+    const ALLOWED_SORT = new Set(['createdAt', 'dueDate', 'issueDate', 'total', 'amount', 'invoiceNumber', 'status']);
+    const sortBy    = ALLOWED_SORT.has(rawSortBy) ? rawSortBy : 'createdAt';
+    const sortOrder = rawSortOrder === 'asc' ? 'asc' : 'desc';
 
     const where = {
       ...(status && { status }),
@@ -37,7 +43,7 @@ class InvoicesController {
       }),
       ...(search && {
         OR: [
-          { number: { contains: search, mode: 'insensitive' } },
+          { invoiceNumber: { contains: search, mode: 'insensitive' } },
           { client: { name: { contains: search, mode: 'insensitive' } } },
           { client: { documentNumber: { contains: search, mode: 'insensitive' } } }
         ]
@@ -93,10 +99,23 @@ class InvoicesController {
     const invoice = await prisma.invoice.findUnique({
       where: { id },
       include: {
-        client: true,
+        client: { include: { plan: true, zone: { select: { id: true, name: true } } } },
         items: true,
         payments: {
-          orderBy: { createdAt: 'desc' }
+          orderBy: { createdAt: 'desc' },
+          include: {
+            evidencePhotos: {
+              select: {
+                id: true,
+                fileUrl: true,
+                fileName: true,
+                mimeType: true,
+                sizeBytes: true,
+                createdAt: true
+              }
+            },
+            createdBy: { select: { id: true, name: true, email: true } }
+          }
         }
       }
     });

@@ -1,7 +1,12 @@
 import cron from 'node-cron';
 import { notificationService } from '../services/notification.service.js';
-import { mikrotikService } from '../services/mikrotik.service.js';
+// IMPORTANT: do NOT import the legacy `mikrotikService` proxy — it throws
+// at first use ("deprecado"). Use the per-router factory instead so the
+// suspension goes to the router actually assigned to the client's zone.
+import { getMikrotikServiceForClient } from '../services/mikrotik.service.js';
 import { prisma } from '../config/database.js';
+// Removed SystemConfig imports — the auto-suspend keys they served were
+// deleted along with the bulk suspension code (manual suspension only).
 
 class OverdueJob {
   constructor() {
@@ -10,13 +15,17 @@ class OverdueJob {
   }
 
   setupSchedules() {
-    // Suspension check disabled per requirement — suspension is manual only.
-    // cron.schedule('0 8 * * *', async () => {
-    //   console.log('🔄 Starting suspension check job...');
-    //   await this.checkSuspensions();
-    // });
+    // POLICY: NO AUTO-SUSPENSIONS. Per the operator's standing directive,
+    // suspending a client's service is a MANUAL action only — never on a
+    // schedule, never gated by a flag that could be flipped by accident.
+    // We deliberately do NOT register an auto-suspend cron here. The
+    // `suspendClient` method below still exists because it's invoked from
+    // the UI ("Suspender" button on /clients/[id]); it must never be
+    // wired to a cron in this file.
 
-    // Check for reactivations - Run daily at 10:00 AM
+    // Auto-reactivation IS allowed: when a customer pays, restoring service
+    // promptly is desirable and reversible. The scheduled check looks for
+    // SUSPENDED clients whose invoices are now all paid and reactivates them.
     cron.schedule('0 10 * * *', async () => {
       console.log('🔄 Starting reactivation check job...');
       await this.checkReactivations();
@@ -37,62 +46,11 @@ class OverdueJob {
     console.log('📅 Overdue jobs scheduled successfully');
   }
 
-  async checkSuspensions() {
-    if (this.isRunning) {
-      console.log('⚠️ Suspension check already running, skipping...');
-      return;
-    }
-
-    this.isRunning = true;
-    const startTime = Date.now();
-
-    try {
-      // Get clients with overdue invoices older than 30 days
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-      const overdueClients = await prisma.invoice.groupBy({
-        by: ['clientId'],
-        where: {
-          status: { in: ['PENDING', 'OVERDUE'] },
-          dueDate: { lt: thirtyDaysAgo }
-        }
-      });
-
-      let suspendedCount = 0;
-      let failedCount = 0;
-
-      for (const clientGroup of overdueClients) {
-        try {
-          const client = await prisma.client.findUnique({
-            where: { id: clientGroup.clientId },
-            include: { plan: true }
-          });
-
-          if (client && client.status === 'ACTIVE') {
-            // Suspend client service
-            await this.suspendClient(client);
-            suspendedCount++;
-          }
-        } catch (error) {
-          console.error(`Error suspending client ${clientGroup.clientId}:`, error);
-          failedCount++;
-        }
-      }
-
-      console.log(`✅ Suspension check completed:`, {
-        suspended: suspendedCount,
-        failed: failedCount,
-        total: overdueClients.length,
-        duration: `${Date.now() - startTime}ms`
-      });
-
-    } catch (error) {
-      console.error('❌ Error in suspension check:', error);
-    } finally {
-      this.isRunning = false;
-    }
-  }
+  // NOTE: a previous version had `checkSuspensions()` and `suspendClient()`
+  // that bulk-suspended overdue clients on a schedule. They were removed
+  // per operator policy: suspension is a manual action only and lives in
+  // `clientController.suspendService` (POST /clients/:id/suspend). Do NOT
+  // restore them without an explicit policy change.
 
   async checkReactivations() {
     if (this.isRunning) {
@@ -212,66 +170,43 @@ class OverdueJob {
     }
   }
 
-  async suspendClient(client) {
-    try {
-      // Update client status in database
-      await prisma.client.update({
-        where: { id: client.id },
-        data: { status: 'SUSPENDED' }
-      });
-
-      // Suspend in Mikrotik if configured
-      if (client.mikrotikId) {
-        try {
-          await mikrotikService.suspendClient(client.mikrotikId);
-        } catch (mikrotikError) {
-          console.error(`Failed to suspend client ${client.id} in Mikrotik:`, mikrotikError);
-        }
-      }
-
-      // Send suspension notification
-      await notificationService.sendServiceSuspension(client);
-
-      // Log the suspension
-      await this.logSuspension(client.id, 'AUTOMATIC', 'Over 30 days overdue');
-
-      console.log(`🔒 Client ${client.name} (ID: ${client.id}) suspended automatically`);
-
-    } catch (error) {
-      console.error(`Error suspending client ${client.id}:`, error);
-      throw error;
-    }
-  }
-
+  // Auto-reactivation: when a suspended client's invoices are all paid,
+  // we flip Client.status back to ACTIVE and re-enable the PPPoE secret on
+  // the router. The PPPoE username and router are read from MikrotikAccount;
+  // the `getMikrotikServiceForClient` factory returns `{ service, account }`
+  // — destructure correctly.
+  //
+  // MikroTik failure is non-fatal for the DB transition: we still flip
+  // Client.status so the UI is consistent, and we log the MikroTik error
+  // to the NotificationLog so the operator can retry from the UI.
   async reactivateClient(client) {
-    try {
-      // Update client status in database
-      await prisma.client.update({
-        where: { id: client.id },
-        data: { status: 'ACTIVE' }
-      });
+    await prisma.client.update({
+      where: { id: client.id },
+      data:  { status: 'ACTIVE' }
+    });
 
-      // Reactivate in Mikrotik if configured
-      if (client.mikrotikId) {
-        try {
-          await mikrotikService.activateClient(client.mikrotikId);
-        } catch (mikrotikError) {
-          console.error(`Failed to reactivate client ${client.id} in Mikrotik:`, mikrotikError);
-        }
+    const mkAccount = await prisma.mikrotikAccount.findUnique({
+      where:  { clientId: client.id },
+      select: { username: true }
+    });
+
+    if (mkAccount?.username) {
+      try {
+        const { service } = await getMikrotikServiceForClient(client.id);
+        await service.reactivatePPPoE(mkAccount.username);
+        console.log(`✅ Reactivated PPPoE secret "${mkAccount.username}" on router for client ${client.name}`);
+      } catch (mikrotikError) {
+        console.error(`[overdue] MikroTik reactivate failed for ${client.id}:`, mikrotikError.message);
+        await this.logReactivation(client.id, 'AUTOMATIC',
+          `DB reactivated OK; MikroTik error: ${mikrotikError.message}`);
       }
-
-      // Send reactivation notification
-      await notificationService.sendServiceActivation(client);
-
-      // Log the reactivation
-      await this.logReactivation(client.id, 'AUTOMATIC', 'All invoices paid');
-
-      console.log(`✅ Client ${client.name} (ID: ${client.id}) reactivated automatically`);
-
-    } catch (error) {
-      console.error(`Error reactivating client ${client.id}:`, error);
-      throw error;
     }
+
+    try { await notificationService.sendServiceActivation(client); }
+    catch (e) { console.error('Reactivation notification failed:', e.message); }
+
+    await this.logReactivation(client.id, 'AUTOMATIC', 'All invoices paid');
+    console.log(`✅ Client ${client.name} (ID: ${client.id}) reactivated automatically`);
   }
 
   async sendFinalWarning(invoice) {
@@ -409,12 +344,10 @@ Estimado/a ${invoice.client.name},
     }
   }
 
-  // Manual trigger methods for testing/admin purposes
-  async triggerSuspensionCheck() {
-    console.log('🔧 Manually triggering suspension check...');
-    await this.checkSuspensions();
-  }
-
+  // Manual trigger methods for testing/admin purposes. NOTE:
+  // `triggerSuspensionCheck` was removed alongside `checkSuspensions` —
+  // bulk suspension is forbidden by policy. Per-client suspension is
+  // exposed via POST /clients/:id/suspend.
   async triggerReactivationCheck() {
     console.log('🔧 Manually triggering reactivation check...');
     await this.checkReactivations();

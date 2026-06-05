@@ -468,41 +468,43 @@ class PaymentsController {
   });
 
   wompiWebhook = asyncHandler(async (req, res) => {
-    const signature = req.headers['x-wompi-signature'];
-    
-    if (!signature) {
-      return res.status(401).json({
-        success: false,
-        error: {
-          code: 'MISSING_SIGNATURE',
-          message: 'Firma requerida'
-        }
-      });
-    }
+    // Wompi sends the signature INSIDE the body (`signature.checksum`),
+    // not as an HTTP header. See wompi.service.verifyWebhookSignature for
+    // the full spec. The verifier is synchronous and pulls everything it
+    // needs from req.body.
+    const isValid = wompiService.verifyWebhookSignature(req.body);
 
-    // Verify webhook signature
-    const isValid = await wompiService.verifyWebhookSignature(req.body, signature);
-    
     if (!isValid) {
+      // Don't leak which validation step failed — generic 401 is safer.
+      console.warn('[wompi] webhook rejected: invalid signature', {
+        event: req.body?.event,
+        ref:   req.body?.data?.transaction?.reference
+      });
       return res.status(401).json({
         success: false,
-        error: {
-          code: 'INVALID_SIGNATURE',
-          message: 'Firma inválida'
-        }
+        error: { code: 'INVALID_SIGNATURE', message: 'Firma inválida' }
       });
     }
 
-    const { event, data } = req.body;
+    const { event } = req.body;
 
-    if (event === 'transaction.updated') {
-      await wompiService.handleTransactionUpdate(data);
+    try {
+      if (event === 'transaction.updated') {
+        // Pass the WHOLE body — the handler reads data.transaction.* and
+        // is forgiving if Wompi adds new fields later.
+        await wompiService.handleTransactionUpdate(req.body);
+      } else if (event) {
+        // Forward unknown events to the dispatcher so we don't lose them
+        // silently in the logs; the handler is a switch with a default.
+        await wompiService.handleWebhookEvent(event, req.body.data);
+      }
+    } catch (e) {
+      console.error('[wompi] webhook handler failed:', e.message);
+      // ACK 200 anyway: Wompi retries on non-2xx and the signature is OK.
+      // The error is on our side and we don't want a retry storm.
     }
 
-    res.json({
-      success: true,
-      message: 'Webhook procesado'
-    });
+    res.json({ success: true, message: 'Webhook procesado' });
   });
 
   getWompiCheckout = asyncHandler(async (req, res) => {

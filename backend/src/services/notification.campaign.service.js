@@ -30,7 +30,7 @@ function clientVars(client) {
     phone:    client.phone || '',
     plan:     client.plan?.name || '',
     zone:     client.zone?.name || '',
-    ip:       client.serviceIp || client.mikrotikAccount?.remoteAddress || '',
+    ip:       client.mikrotikAccount?.remoteAddress || '',
     balance:  fmtMoney(client.balance),
     dueDate:  oldest ? fmtDate(oldest.dueDate) : '',
     amount:   oldest ? fmtMoney(oldest.balanceDue || oldest.total || oldest.amount) : ''

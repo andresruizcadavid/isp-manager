@@ -12,13 +12,9 @@ import { z } from 'zod';
 
 const router = Router();
 
-// Most payment routes require authentication, but webhooks are public
-router.use('/webhooks', (req, res, next) => {
-  // Webhook routes don't require authentication
-  next();
-});
-
-router.use(authMiddleware);
+// Public webhook router — mounted by app.js BEFORE authMiddleware so external
+// providers (Wompi) can POST without a JWT. Do NOT add internal endpoints here.
+export const webhookRouter = Router();
 
 // Validation schemas
 const createPaymentSchema = z.object({
@@ -91,9 +87,16 @@ const bulkPaymentSchema = z.object({
 router.post('/bulk-payment', requireOperational, validateBody(bulkPaymentSchema), billingController.registerPayment);
 router.post('/:id/evidence', requireOperational, uploadEvidence.single('file'), billingController.uploadPaymentEvidence);
 
-// Wompi integration (public webhooks)
-router.post('/webhooks/wompi', paymentController.wompiWebhook);
+// Wompi integration — the WEBHOOK lives on the public webhookRouter exported
+// above (mounted in app.js before authMiddleware). The checkout-link generator
+// stays authenticated because it's invoked from the operator UI.
 router.get('/wompi/checkout/:invoiceId', paymentController.getWompiCheckout);
+
+// Public Wompi webhook. MUST NOT use authMiddleware — Wompi has no JWT.
+// Express needs the raw JSON body for signature verification, so we keep the
+// global express.json() (it parses + leaves req.body); the service rebuilds
+// the canonical string from the parsed object using the official spec.
+webhookRouter.post('/wompi', paymentController.wompiWebhook);
 
 // Data repair — create Payment records for PAID invoices that lack them
 router.post('/backfill', requireOperatorOrAdmin, paymentController.backfillMissingPayments);

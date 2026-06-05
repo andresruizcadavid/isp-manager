@@ -14,7 +14,7 @@ import zoneRoutes     from './routes/zones.routes.js';
 import planRoutes     from './routes/plans.routes.js';
 import routerRoutes   from './routes/routers.routes.js';
 import invoiceRoutes  from './routes/invoices.routes.js';
-import paymentRoutes  from './routes/payments.routes.js';
+import paymentRoutes, { webhookRouter as paymentWebhookRouter } from './routes/payments.routes.js';
 import reportRoutes   from './routes/reports.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
 import accountsRoutes from './routes/accounts.routes.js';
@@ -26,6 +26,7 @@ import networkRoutes from './routes/network.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
 import whatsappRoutes, { webhookRouter as whatsappWebhookRouter } from './routes/whatsapp.routes.js';
 import publicClientUpdatesRoutes from './routes/public.client-updates.routes.js';
+import { makeOriginGuard } from './middleware/origin-guard.middleware.js';
 
 const app = express();
 
@@ -70,6 +71,15 @@ app.use('/api/v1/auth',              authRoutes);
 // PUBLIC — customer self-service update flow. No auth: the random token in
 // the URL is the credential. Has its own per-token rate limiter.
 app.use('/api/v1/public/client-updates', publicClientUpdatesRoutes);
+
+// PUBLIC — payment provider webhooks. Wompi and any future PSP. Auth is
+// signature-based inside the controller; MUST NOT sit behind authMiddleware.
+app.use('/api/v1/payments/webhooks', paymentWebhookRouter);
+
+// CSRF defense-in-depth: reject mutating cookie-auth requests whose Origin
+// doesn't match the allowlist. Bearer-token requests pass through. See the
+// middleware file for the threat model.
+app.use('/api/', makeOriginGuard(corsAllowlist));
 
 // Global rate limiter for all remaining API routes
 app.use('/api/', globalRateLimiter);

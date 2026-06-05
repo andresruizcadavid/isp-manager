@@ -18,6 +18,11 @@ const envSchema = z.object({
   WOMPI_PUBLIC_KEY: z.string().min(1),
   WOMPI_PRIVATE_KEY: z.string().min(1),
   WOMPI_EVENTS_KEY: z.string().min(1),
+  // Integrity secret is a SEPARATE key from events_key. It signs the
+  // checkout link (reference+amount+currency+integrity). Optional at boot
+  // because dev installs that don't use the checkout flow shouldn't fail
+  // to start; the service throws a clear error when actually invoked.
+  WOMPI_INTEGRITY_KEY: z.string().optional(),
   WOMPI_API_URL: z.string().url().default('https://api.wompi.co/v1'),
   
   // Email

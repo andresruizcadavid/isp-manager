@@ -435,16 +435,12 @@ class ClientsController {
       client = await prisma.client.create({
         data: {
           ...mappedData,
-          // Mirror the PPPoE / service fields on the Client row. These
-          // columns are duplicated with MikrotikAccount in the current
-          // schema (see README "Issues conocidos"); until the duplicates
-          // are dropped, keeping both sides in sync prevents reports and
-          // legacy queries that read Client.* from going blind on new rows.
-          pppoeUsername:  pppoeUsername,
-          pppoePassword:  mk.password,
-          serviceIp:      remoteAddress,
-          serviceLocalIp: mk.localAddress || null,
-          coordinates:    mk.coordinates  || null,
+          // MikrotikAccount is now the canonical source for PPPoE/service
+          // data. The Client.pppoe*/serviceIp/serviceLocalIp columns are
+          // dropped in migration 20260605170000. `coordinates` remains on
+          // Client as a customer-level field (home GPS), independent of
+          // the device data on MikrotikAccount.
+          coordinates: mk.coordinates || null,
           mikrotikAccount: {
             create: {
               routerId:      resolvedRouterId,
@@ -646,15 +642,10 @@ class ClientsController {
           ? Math.round(Number(updateData.monthlyFee))
           : 0
       }),
-      // Mirror mikrotik sub-form fields onto the Client row's duplicated
-      // columns so both sides stay in sync. The MikrotikAccount upsert
-      // below still handles the canonical write; this only keeps the
-      // legacy Client.* columns from going stale.
-      ...(m?.username      !== undefined && { pppoeUsername:  m.username || null }),
-      ...(m?.password      !== undefined && m.password && { pppoePassword: m.password }),
-      ...(m?.remoteAddress !== undefined && { serviceIp:      (m.remoteAddress || '').split('/')[0] || null }),
-      ...(m?.localAddress  !== undefined && { serviceLocalIp: m.localAddress  || null }),
-      ...(m?.coordinates   !== undefined && { coordinates:    m.coordinates   || null }),
+      // MikrotikAccount holds the canonical PPPoE/service data — the
+      // upsert below is the only place those fields are written. Client
+      // keeps `coordinates` as a customer-level home GPS pin.
+      ...(m?.coordinates !== undefined && { coordinates: m.coordinates || null }),
     };
 
     const ops = [
@@ -943,7 +934,7 @@ class ClientsController {
       try {
         const { service } = await getMikrotikServiceForClient(client.id);
         const username = client.mikrotikAccount.username;
-        const remoteAddress = (client.mikrotikAccount.remoteAddress || client.serviceIp || '').split('/')[0];
+        const remoteAddress = (client.mikrotikAccount?.remoteAddress || '').split('/')[0];
 
         // 1) Disable PPPoE secret + kick active session
         try {
@@ -1026,7 +1017,7 @@ class ClientsController {
       try {
         const { service } = await getMikrotikServiceForClient(client.id);
         const username = client.mikrotikAccount.username;
-        const remoteAddress = (client.mikrotikAccount.remoteAddress || client.serviceIp || '').split('/')[0];
+        const remoteAddress = (client.mikrotikAccount?.remoteAddress || '').split('/')[0];
 
         try {
           mikrotikResult.secret = await service.enablePPPoESecret(username);
@@ -1238,29 +1229,18 @@ class ClientsController {
   });
 
   // Computes the next sequential numeric prefix used in PPPoE usernames.
-  // Looks at Client.pppoeUsername and MikrotikAccount.username; takes the
-  // max leading-digit run found, returns max + 1 zero-padded to 4 chars
-  // (or wider if the existing max is already wider).
+  // After the FASE 5 dedup, the canonical source is MikrotikAccount.username;
+  // Client.pppoeUsername has been dropped from the schema.
   getNextPppoeNumber = asyncHandler(async (req, res) => {
-    const [clients, accounts] = await Promise.all([
-      prisma.client.findMany({
-        where: { pppoeUsername: { not: null } },
-        select: { pppoeUsername: true }
-      }),
-      prisma.mikrotikAccount.findMany({
-        select: { username: true }
-      })
-    ]);
+    const accounts = await prisma.mikrotikAccount.findMany({
+      select: { username: true }
+    });
 
     let max = 0;
     let maxWidth = 4;
-    const usernames = [
-      ...clients.map(c => c.pppoeUsername),
-      ...accounts.map(a => a.username)
-    ];
-    for (const name of usernames) {
-      if (!name) continue;
-      const m = String(name).match(/^(\d+)/);
+    for (const { username } of accounts) {
+      if (!username) continue;
+      const m = String(username).match(/^(\d+)/);
       if (!m) continue;
       const n = Number(m[1]);
       if (Number.isFinite(n) && n > max) max = n;
