@@ -98,8 +98,8 @@
       notes:          client?.notes          || '',
       mikrotik: {
         password:      '',
-        remoteAddress: client?.mikrotikAccount?.remoteAddress || client?.serviceIp      || '',
-        localAddress:  client?.mikrotikAccount?.localAddress  || client?.serviceLocalIp || '',
+        remoteAddress: client?.mikrotikAccount?.remoteAddress || '',
+        localAddress:  client?.mikrotikAccount?.localAddress  || '',
         profileName:   client?.mikrotikAccount?.profileName   || '',
         coordinates:   client?.mikrotikAccount?.coordinates   || client?.coordinates    || '',
       }
@@ -628,7 +628,7 @@
     <div class="kpi-tile-text">
       <div class="kpi-label">Estado servicio</div>
       <div class="kpi-value text-base {isOnline ? 'text-emerald-600' : 'text-amber-600'}">{isOnline ? 'En línea' : 'Suspendido'}</div>
-      <div class="kpi-sub">{client.pppoeUsername || client.mikrotikAccount?.username || 'Sin PPPoE'}</div>
+      <div class="kpi-sub">{client.mikrotikAccount?.username || 'Sin PPPoE'}</div>
     </div>
   </div>
   <div class="kpi-tile">
@@ -760,11 +760,11 @@
                 Servicio PPPoE
               </div>
             </div>
-            {#if client?.pppoeUsername || client?.mikrotikAccount?.username}
+            {#if client?.mikrotikAccount?.username}
               <div class="md:col-span-2">
                 <div class="label">Usuario PPPoE</div>
                 <div class="text-sm font-mono text-slate-700 bg-slate-50 rounded-lg px-3 py-2 border border-slate-200">
-                  {client.pppoeUsername || client.mikrotikAccount?.username}
+                  {client.mikrotikAccount?.username}
                 </div>
               </div>
             {/if}
@@ -1047,7 +1047,7 @@
         <div class="flex items-center gap-2 min-w-0">
           <Wifi size={16} class="text-slate-600" />
           <h2 class="font-semibold text-slate-900">Servicio PPPoE</h2>
-          {#if client.pppoeUsername || client.mikrotikAccount}
+          {#if client.mikrotikAccount}
             <span class="px-2.5 py-0.5 rounded-full text-xs font-medium {isOnline ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}">
               {isOnline ? 'Online' : 'Offline'}
             </span>
@@ -1055,16 +1055,16 @@
         </div>
       </div>
       <div class="card-body">
-        {#if client.pppoeUsername || client.mikrotikAccount}
+        {#if client.mikrotikAccount}
           <div class="space-y-3">
             <div>
               <div class="label !mb-1">Usuario</div>
               <div class="flex items-center gap-2">
                 <div class="text-xs font-mono text-slate-900 bg-slate-50 px-2 py-1.5 rounded flex-1 truncate">
-                  {client.pppoeUsername || client.mikrotikAccount?.username || '—'}
+                  {client.mikrotikAccount?.username || '—'}
                 </div>
                 <button class="btn-icon" title="Copiar usuario"
-                        on:click={() => copyText(client.pppoeUsername || client.mikrotikAccount?.username || '', 'user')}>
+                        on:click={() => copyText(client.mikrotikAccount?.username || '', 'user')}>
                   {#if copied === 'user'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
                 </button>
               </div>
@@ -1074,13 +1074,13 @@
               <div class="label !mb-1">Contraseña</div>
               <div class="flex items-center gap-2">
                 <div class="text-xs font-mono text-slate-900 bg-slate-50 px-2 py-1.5 rounded flex-1 truncate">
-                  {showPassword ? (client.pppoePassword || client.mikrotikAccount?.password || '••••••••') : '••••••••'}
+                  {showPassword ? (client.mikrotikAccount?.password || '••••••••') : '••••••••'}
                 </div>
                 <button class="btn-icon" title={showPassword ? 'Ocultar' : 'Mostrar'} on:click={() => showPassword = !showPassword}>
                   {#if showPassword}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
                 </button>
                 <button class="btn-icon" title="Copiar contraseña"
-                        on:click={() => copyText(client.pppoePassword || client.mikrotikAccount?.password || '', 'pwd')}>
+                        on:click={() => copyText(client.mikrotikAccount?.password || '', 'pwd')}>
                   {#if copied === 'pwd'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
                 </button>
               </div>
@@ -1090,11 +1090,11 @@
               <div class="label !mb-1">IP Asignada</div>
               <div class="flex items-center gap-2">
                 <div class="text-xs font-mono text-slate-900 bg-slate-50 px-2 py-1.5 rounded flex-1 truncate">
-                  {client.serviceIp || client.mikrotikAccount?.remoteAddress || '—'}
+                  {client.mikrotikAccount?.remoteAddress || '—'}
                 </div>
-                {#if client.serviceIp || client.mikrotikAccount?.remoteAddress}
+                {#if client.mikrotikAccount?.remoteAddress}
                   <button class="btn-icon" title="Copiar IP"
-                          on:click={() => copyText(client.serviceIp || client.mikrotikAccount?.remoteAddress || '', 'ip')}>
+                          on:click={() => copyText(client.mikrotikAccount.remoteAddress, 'ip')}>
                     {#if copied === 'ip'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
                   </button>
                 {/if}
@@ -1103,7 +1103,7 @@
 
             <div>
               <div class="label !mb-1">IP Local</div>
-              <div class="text-xs font-mono text-slate-700">{client.serviceLocalIp || '—'}</div>
+              <div class="text-xs font-mono text-slate-700">{client.mikrotikAccount?.localAddress || '—'}</div>
             </div>
 
             <div>

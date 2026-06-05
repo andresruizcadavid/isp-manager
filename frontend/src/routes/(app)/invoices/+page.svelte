@@ -172,7 +172,7 @@
         {:else}
           {#each invoices as inv}
             <tr>
-              <td class="font-mono text-xs text-slate-700">{inv.number}</td>
+              <td class="font-mono text-xs text-slate-700">{inv.invoiceNumber ?? '—'}</td>
               <td>
                 <a href="/clients/{inv.client?.id}" class="font-medium text-slate-900 hover:text-brand-800 transition-colors">
                   {inv.client?.name ?? '—'}

@@ -388,10 +388,10 @@
           // still load. Never seed profileName from c.plan?.name — that's
           // the commercial plan name, not the technical PPPoE profile, and
           // putting it there caused the form to overwrite the real profile.
-          username:      c.mikrotikAccount?.username      || c.pppoeUsername  || '',
-          password:      c.mikrotikAccount?.password      || c.pppoePassword  || '',
-          remoteAddress: c.mikrotikAccount?.remoteAddress || c.serviceIp      || '',
-          localAddress:  c.mikrotikAccount?.localAddress  || c.serviceLocalIp || '',
+          username:      c.mikrotikAccount?.username      || '',
+          password:      c.mikrotikAccount?.password      || '',
+          remoteAddress: c.mikrotikAccount?.remoteAddress || '',
+          localAddress:  c.mikrotikAccount?.localAddress  || '',
           profileName:   c.mikrotikAccount?.profileName   || '',
           coordinates:   c.mikrotikAccount?.coordinates   || c.coordinates    || '',
           status:        c.mikrotikAccount?.status        || c.status         || 'ACTIVE',
@@ -775,10 +775,10 @@
                 </a>
               </td>
               <td class="font-mono text-xs text-slate-600">
-                {client.pppoeUsername || client.mikrotikAccount?.username || '—'}
+                {client.mikrotikAccount?.username || '—'}
               </td>
               <td class="font-mono text-xs text-slate-700">
-                {client.serviceIp || client.mikrotikAccount?.remoteAddress || '—'}
+                {client.mikrotikAccount?.remoteAddress || '—'}
               </td>
               <td class="text-slate-600 whitespace-nowrap">{client.plan?.name || '—'}</td>
               <td class="text-slate-600 text-xs whitespace-nowrap max-w-[140px] truncate"
@@ -867,9 +867,9 @@
               {client.plan?.name || 'Sin plan'}{#if client.zone} · {client.zone.name}{/if}
             </div>
             <div class="text-xs font-mono text-slate-400 truncate leading-normal mt-0.5">
-              {client.pppoeUsername || client.mikrotikAccount?.username || '—'}
-              {#if client.serviceIp || client.mikrotikAccount?.remoteAddress}
-                · {client.serviceIp || client.mikrotikAccount?.remoteAddress}
+              {client.mikrotikAccount?.username || '—'}
+              {#if client.mikrotikAccount?.remoteAddress}
+                · {client.mikrotikAccount.remoteAddress}
               {/if}
             </div>
           </a>
