@@ -90,7 +90,7 @@ class BillingController {
         clientId: payment.clientId,
         paymentId: payment.id,
         type: 'payment',
-        description: req.body.description || `Comprobante de pago - Factura ${payment.invoice.number}`,
+        description: req.body.description || `Comprobante de pago - Factura ${payment.invoice.invoiceNumber}`,
         fileUrl: `/uploads/evidence/${req.file.filename}`,
         fileName: req.file.originalname,
         mimeType: req.file.mimetype,

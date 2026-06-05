@@ -6,15 +6,17 @@ import { prisma } from '../config/database.js';
 class InvoiceService {
   async generateInvoiceNumber() {
     try {
+      // Field is `invoiceNumber` after the rename; `@map("number")` keeps
+      // the DB column the same so this is purely a Prisma-side change.
       const lastInvoice = await prisma.invoice.findFirst({
-        orderBy: { number: 'desc' },
-        select: { number: true }
+        orderBy: { invoiceNumber: 'desc' },
+        select: { invoiceNumber: true }
       });
 
       let nextNumber = 1;
 
-      if (lastInvoice?.number) {
-        const numericPart = lastInvoice.number.match(/\d+/);
+      if (lastInvoice?.invoiceNumber) {
+        const numericPart = lastInvoice.invoiceNumber.match(/\d+/);
         if (numericPart) {
           nextNumber = parseInt(numericPart[0], 10) + 1;
         }

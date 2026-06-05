@@ -430,7 +430,7 @@ class BillingJob {
             createdAt: { gte: yesterday, lt: today }
           },
           include: {
-            invoice: { select: { number: true } },
+            invoice: { select: { invoiceNumber: true } },
             client: { select: { name: true } }
           },
           orderBy: { createdAt: 'desc' }
@@ -475,7 +475,7 @@ class BillingJob {
       ).join('\n');
 
       const paymentList = payments.map((p, i) =>
-        `${i + 1}. ${p.client?.name || '—'} — Factura ${p.invoice?.number || '—'} — $${(p.amount / 100).toLocaleString('es-CO')} — ${p.method}`
+        `${i + 1}. ${p.client?.name || '—'} — Factura ${p.invoice?.invoiceNumber || '—'} — $${(p.amount / 100).toLocaleString('es-CO')} — ${p.method}`
       ).join('\n');
 
       const body = `Resumen de pagos del ${dateStr}

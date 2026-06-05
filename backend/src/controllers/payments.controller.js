@@ -765,7 +765,7 @@ class PaymentsController {
     if (format === 'csv') {
       const header = 'ID,Factura,Cliente,Documento,Monto,Metodo,Estado,Fecha,Creado por\n';
       const rows = payments.map(p =>
-        `"${p.id.slice(-8)}","${p.invoice?.number || ''}","${p.client?.name || ''}","${p.client?.documentNumber || ''}",${(p.amount / 100).toFixed(2)},${p.method},${p.status},${p.createdAt?.toISOString().split('T')[0] || ''},"${p.createdByUserName || ''}"`
+        `"${p.id.slice(-8)}","${p.invoice?.invoiceNumber || ''}","${p.client?.name || ''}","${p.client?.documentNumber || ''}",${(p.amount / 100).toFixed(2)},${p.method},${p.status},${p.createdAt?.toISOString().split('T')[0] || ''},"${p.createdByUserName || ''}"`
       ).join('\n');
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
