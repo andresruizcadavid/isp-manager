@@ -38,7 +38,23 @@
   let sortBy  = 'createdAt';
   let sortDir = 'desc';
   let page    = 1;
-  const pageSize = 20;
+  // Allowed page-size options. Backend hard-caps at 500 in
+  // middleware/validate.middleware.js; this list is the public UI surface.
+  const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100];
+  // Persisted in localStorage so the operator's preference survives reloads.
+  let pageSize = (typeof window !== 'undefined' &&
+                  Number(window.localStorage?.getItem('isp:clientsPageSize'))) || 20;
+  if (!PAGE_SIZE_OPTIONS.includes(pageSize)) pageSize = 20;
+  function onPageSizeChange(e) {
+    const next = Number(e.target?.value ?? e);
+    if (!PAGE_SIZE_OPTIONS.includes(next)) return;
+    pageSize = next;
+    if (typeof window !== 'undefined') {
+      try { window.localStorage.setItem('isp:clientsPageSize', String(next)); } catch {}
+    }
+    page = 1;            // reset to first page so the operator sees fresh rows
+    load();
+  }
   let searchTimer;
 
   // ── Action menu state ───────────────────────────────
@@ -1056,11 +1072,25 @@
     </ResponsiveTable>
     {/if}
 
-    <!-- Footer -->
-    <div class="px-3 py-1.5 border-t border-slate-100 flex items-center justify-between bg-slate-50/40 flex-shrink-0">
-      <span class="text-xs text-slate-500">
-        Mostrando {clients.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} de {total}
-      </span>
+    <!-- Footer: per-page selector + summary + pager -->
+    <div class="px-3 py-1.5 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/40 flex-shrink-0 flex-wrap">
+      <div class="flex items-center gap-2 flex-wrap">
+        <label for="page-size" class="text-xs text-slate-500 flex items-center gap-1.5">
+          <span class="hidden sm:inline">Filas:</span>
+          <select id="page-size"
+                  value={pageSize}
+                  on:change={onPageSizeChange}
+                  aria-label="Filas por página"
+                  class="text-xs rounded-md border border-slate-200 bg-white py-1 pl-2 pr-7 focus:outline-none focus:border-brand-600 focus:ring-2 focus:ring-brand-600/20">
+            {#each PAGE_SIZE_OPTIONS as opt}
+              <option value={opt}>{opt}</option>
+            {/each}
+          </select>
+        </label>
+        <span class="text-xs text-slate-500">
+          Mostrando {clients.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} de {total}
+        </span>
+      </div>
       <div class="flex items-center gap-1">
         <button class="btn-ghost text-xs min-h-[44px] sm:min-h-0 sm:py-1" disabled={page <= 1} on:click={() => setPage(page - 1)}>← Anterior</button>
         <span class="px-3 min-h-[44px] sm:py-1 inline-flex items-center bg-brand-800 text-white text-xs rounded-md font-medium">{page} / {totalPages}</span>

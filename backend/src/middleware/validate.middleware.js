@@ -48,10 +48,19 @@ export const validateParams = (schema) => {
 
 // Common validation schemas
 export const commonSchemas = {
-  // Pagination
+  // Pagination — `coerce` parses string querystring values into numbers
+  // and rejects NaN, vs the older `string.transform(Number)` which would
+  // happily produce NaN on "abc". Bounds are HARD CAPS:
+  //   • limit ∈ [1, 500] — the UI selector exposes 10/20/30/50/100 but
+  //     internal "select all filtered" flows (bulk plan change, bulk
+  //     modal preview) need up to 500 in one call. 500 matches the
+  //     `clientIds.max(500)` cap used by bulk-change-plan so the two
+  //     limits stay in lockstep. The cap protects the server from
+  //     "?limit=1000000" memory exhaustion attacks.
+  //   • page ≥ 1
   pagination: z.object({
-    page: z.string().transform(Number).default('1'),
-    limit: z.string().transform(Number).default('10'),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(500).default(10),
     search: z.string().optional(),
     sortBy: z.string().optional(),
     sortOrder: z.enum(['asc', 'desc']).default('desc')
