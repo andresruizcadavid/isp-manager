@@ -79,6 +79,11 @@ export const NAV_ITEMS = [
     href: '/zones', roles: OPERATIONAL_TIER,
     match: ['/zones', under('/zones')] },
 
+  { id: 'clients-bulk-history', type: 'item', parentId: 'group-clients',
+    label: 'Historial masivo', title: 'Historial de cambios masivos',
+    href: '/clients/bulk-history', roles: ADMIN_TIER,
+    match: ['/clients/bulk-history'] },
+
   // ── Finanzas ─────────────────────────────────────────────────────
   { id: 'group-finance', type: 'group',
     label: 'Finanzas', icon: CreditCard, roles: ADMIN_TIER },

@@ -1368,6 +1368,34 @@ class ClientsController {
     res.json({ success: true, data: result });
   });
 
+  // ── Bulk operation history ──────────────────────────────────────────
+  // Returns the most recent BulkOperationLog rows, optionally filtered by
+  // type. Includes the operator's name + email so the audit table reads
+  // naturally without a second query. Caps at 100 rows; the operator can
+  // paginate via ?cursor=<id> (cursor = last row's id).
+  getBulkHistory = asyncHandler(async (req, res) => {
+    const type     = typeof req.query.type === 'string' ? req.query.type : 'BULK_PLAN_CHANGE';
+    const limitRaw = Number(req.query.limit) || 25;
+    const limit    = Math.min(100, Math.max(1, limitRaw));
+    const cursor   = typeof req.query.cursor === 'string' ? req.query.cursor : null;
+
+    const rows = await prisma.bulkOperationLog.findMany({
+      where: { type },
+      orderBy: { createdAt: 'desc' },
+      take:    limit + 1,
+      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+      include: {
+        operator: { select: { id: true, name: true, email: true } }
+      }
+    });
+
+    const hasMore = rows.length > limit;
+    const data    = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? data[data.length - 1].id : null;
+
+    res.json({ success: true, data, meta: { hasMore, nextCursor, limit } });
+  });
+
   // ── Self-service update token ──────────────────────────────────────
   // Generates a single-use token and (optionally) dispatches the public
   // link to the customer through the channels the operator picked.

@@ -312,7 +312,7 @@
             <div class="w-12 h-12 rounded-full bg-emerald-100 flex items-center justify-center">
               <CheckCircle2 size={24} class="text-emerald-600" />
             </div>
-            <div>
+            <div class="flex-1 min-w-0">
               <h4 class="text-base font-semibold text-text-primary">Cambios aplicados</h4>
               <p class="text-xs text-text-muted">
                 {resultData?.summary?.ok || 0} aplicado{(resultData?.summary?.ok || 0) === 1 ? '' : 's'}
@@ -320,6 +320,9 @@
                 · {resultData?.summary?.failed || 0} fallido{(resultData?.summary?.failed || 0) === 1 ? '' : 's'}
               </p>
             </div>
+            <a href="/clients/bulk-history" class="text-xs text-brand-700 hover:underline font-medium whitespace-nowrap">
+              Ver historial →
+            </a>
           </div>
 
           {#if (resultData?.summary?.failed || 0) > 0}

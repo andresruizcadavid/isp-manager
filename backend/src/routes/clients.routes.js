@@ -107,6 +107,10 @@ router.get('/', validateQuery(clientQuerySchema), clientController.getClients);
 // BEFORE the /:id route so Express does not match it as an id).
 router.get('/next-pppoe-number', clientController.getNextPppoeNumber);
 
+// Bulk operation audit history. Same rule as `/next-pppoe-number` — the
+// literal path MUST precede `/:id` or Express greedily matches it.
+router.get('/bulk-history', requireOperatorOrAdmin, clientController.getBulkHistory);
+
 router.get('/:id', validateParams(commonSchemas.idParam), clientController.getClient);
 router.post('/', requireOperatorOrAdmin, validateBody(createClientSchema), clientController.createClient);
 router.put('/:id', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(updateClientSchema), clientController.updateClient);
@@ -138,6 +142,8 @@ router.post(
   validateBody(bulkPlanChangeSchema),
   clientController.bulkChangePlan
 );
+
+// (the `/bulk-history` route was moved above /:id to avoid greedy matching.)
 
 // Self-service update token generation. The public-facing GET/PUT/POST
 // that consume the token live under /api/v1/public/client-updates/*.
