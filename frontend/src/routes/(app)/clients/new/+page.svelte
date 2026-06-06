@@ -7,19 +7,23 @@
   import { plansApi } from '$lib/api/plans.api.js';
   import { routersApi } from '$lib/api/routers.api.js';
   import { ArrowLeft, ArrowRight, User, MapPin, Router as RouterIcon,
-           Wifi, Save, X, CheckCircle2, AlertTriangle,
+           Wifi, Save, X, CheckCircle2, AlertTriangle, Plus,
            Search, Loader2, AlertCircle, ShieldCheck, Database, Shield } from 'lucide-svelte';
+  import ZoneCreateSheet from '$lib/components/clients/ZoneCreateSheet.svelte';
 
-  // ── Stepper state ───────────────────────────────────
-  let step = 0;                  // 0 = pick zone, 1 = client data
-  let selectedZoneId = null;     // zone chosen at step 0 (number)
+  // Selected zone id (always required; sticky summary surfaces its state).
+  let selectedZoneId = null;
   let zonesAvailable = [];       // only zones with router
   let zonesAll = [];             // all zones (for "sin router" info)
   let plans = [];
+  let routers = [];              // for inline zone creation
   let zonesLoading = true;
   let plansLoading = true;
   let saving = false;
   let error = '';
+
+  // Inline zone creation sheet
+  let zoneSheetOpen = false;
 
   // ── Client form (no routerId — backend resolves from zone) ──
   let form = {
@@ -42,19 +46,27 @@
   $: selectedZone = zonesAvailable.find(z => z.id === selectedZoneId) || null;
   $: zonesWithoutRouter = zonesAll.filter(z => !z.routerId);
 
+  // Summary panel — derived completion metrics so the operator sees at a
+  // glance how close the form is to "guardable" without scrolling.
+  $: filledPersonal = [form.fullName, form.documentNumber, form.phone, form.address].filter(Boolean).length;
+  $: hasService = Boolean(form.planId && form.mikrotik.username && form.mikrotik.remoteAddress);
+  $: selectedPlanName = plans.find(p => p.id === form.planId)?.name || null;
+
   onMount(async () => {
     // Pre-select zone from ?zone_id query param if present
     const preZone = $pageStore.url.searchParams.get('zone_id');
 
     try {
-      const [zWith, zAll, p] = await Promise.all([
+      const [zWith, zAll, p, r] = await Promise.all([
         zonesApi.getWithRouter().catch(() => []),
         zonesApi.getAll().catch(() => []),
-        plansApi.getAll().catch(() => [])
+        plansApi.getAll().catch(() => []),
+        routersApi.getAll().catch(() => [])
       ]);
       zonesAvailable = zWith || [];
       zonesAll = zAll || [];
       plans = p || [];
+      routers = r || [];
     } catch (e) {
       error = e.message || 'Error cargando datos';
     } finally {
@@ -64,21 +76,21 @@
 
     if (preZone) {
       const match = zonesAvailable.find(z => String(z.id) === String(preZone));
-      if (match) {
-        selectedZoneId = match.id;
-        step = 1;
-      }
+      if (match) selectedZoneId = match.id;
     }
   });
 
-  function continueToData() {
-    if (!selectedZoneId) return;
-    error = '';
-    step = 1;
-  }
-
-  function backToZoneStep() {
-    step = 0;
+  // ── Inline zone created ──────────────────────────────────────────────
+  // The Sheet emits the new zone row (already with its router attached).
+  // We push it into the available list and auto-select it so the operator
+  // continues seamlessly without losing form state.
+  function onZoneCreated(e) {
+    const z = e.detail?.zone;
+    if (!z) return;
+    if (z.router) zonesAvailable = [...zonesAvailable, { ...z, clientCount: 0 }];
+    zonesAll = [...zonesAll, z];
+    selectedZoneId = z.id;
+    zoneSheetOpen = false;
   }
 
   // ── Auto-generate helpers (unchanged) ──────────────
@@ -181,7 +193,8 @@
   }
 
   // Reactively (re)load profiles whenever the zone's router changes.
-  $: if (step === 1 && selectedZone?.router?.id && selectedZone.router.id !== profilesRouterId) {
+  // Single-page form means we always want fresh profiles once a zone is set.
+  $: if (selectedZone?.router?.id && selectedZone.router.id !== profilesRouterId) {
     loadProfiles(selectedZone.router.id);
   }
 
@@ -213,7 +226,7 @@
   async function handleSubmit() {
     if (!selectedZoneId) {
       error = 'Debes seleccionar una zona';
-      step = 0;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
       return;
     }
     saving = true;
@@ -289,38 +302,6 @@
   </a>
 </div>
 
-<!-- Stepper -->
-<div class="card mb-4">
-  <div class="px-3 sm:px-5 py-3 sm:py-4 flex items-center gap-2 sm:gap-4">
-    <!-- Step 1 -->
-    <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
-      <div class="w-6 sm:w-7 h-6 sm:h-7 rounded-full flex items-center justify-center text-[11px] sm:text-xs font-semibold flex-shrink-0
-                  {step >= 0 ? 'bg-brand-800 text-white' : 'bg-slate-200 text-slate-500'}">
-        {#if step > 0}
-          <CheckCircle2 size={12} class="sm:w-3.5 sm:h-3.5" />
-        {:else}
-          1
-        {/if}
-      </div>
-      <span class="text-sm sm:text-[13px] font-medium truncate {step === 0 ? 'text-slate-900' : 'text-slate-500'}">
-        Zona
-      </span>
-    </div>
-
-    <div class="flex-1 h-px bg-slate-200 min-w-[12px]"></div>
-
-    <!-- Step 2 -->
-    <div class="flex items-center gap-1.5 sm:gap-2 min-w-0">
-      <div class="w-6 sm:w-7 h-6 sm:h-7 rounded-full flex items-center justify-center text-[11px] sm:text-xs font-semibold flex-shrink-0
-                  {step >= 1 ? 'bg-brand-800 text-white' : 'bg-slate-200 text-slate-500'}">
-        2
-      </div>
-      <span class="text-sm sm:text-[13px] font-medium truncate {step === 1 ? 'text-slate-900' : 'text-slate-500'}">
-        Datos del Cliente
-      </span>
-    </div>
-  </div>
-</div>
 
 {#if error}
   <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg
@@ -329,14 +310,17 @@
   </div>
 {/if}
 
-<!-- ─── Step 0: Pick zone ─────────────────────────── -->
-{#if step === 0}
-  <div class="max-w-4xl space-y-4">
+<!-- ─── Single-page form: 3 sections + sticky summary on the right ─── -->
+<form on:submit|preventDefault={handleSubmit} class="grid lg:grid-cols-[1fr_320px] gap-4 lg:gap-6 items-start">
+  <div class="space-y-4 min-w-0">
+
+    <!-- SECTION 1: Zona y contexto técnico -->
     <div class="card">
       <div class="card-header">
         <div class="flex items-center gap-2">
+          <div class="w-6 h-6 rounded-full bg-brand-600 text-white text-xs font-bold flex items-center justify-center">1</div>
           <MapPin size={16} class="text-slate-600" />
-          <h2 class="font-semibold text-slate-900">Selecciona la zona del cliente</h2>
+          <h2 class="font-semibold text-slate-900">Zona y contexto técnico</h2>
         </div>
       </div>
       <div class="card-body">
@@ -352,16 +336,27 @@
               No hay zonas con router asignado
             </p>
             <p class="text-xs text-slate-500 mb-4">
-              Antes de crear un cliente, asigna un router a alguna zona.
+              Crea una zona aquí mismo sin salir del alta del cliente.
             </p>
-            <a href="/zones" class="btn-warning inline-flex">
-              <MapPin size={14} /> Ir a Zonas
-            </a>
+            <div class="flex items-center justify-center gap-2 flex-wrap">
+              <button type="button" on:click={() => zoneSheetOpen = true} class="btn-primary inline-flex">
+                <Plus size={14} /> Crear zona nueva
+              </button>
+              <a href="/zones" class="btn-secondary inline-flex">
+                <MapPin size={14} /> Ir a Zonas
+              </a>
+            </div>
           </div>
         {:else}
-          <p class="text-xs sm:text-[11px] text-slate-500 mb-3">
-            La zona define el router al que el cliente quedará asociado.
-          </p>
+          <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <p class="text-xs sm:text-[11px] text-slate-500 max-w-md">
+              La zona define el router al que el cliente quedará asociado.
+            </p>
+            <button type="button" on:click={() => zoneSheetOpen = true}
+                    class="inline-flex items-center gap-1.5 text-xs font-medium text-brand-700 hover:text-brand-800 hover:underline">
+              <Plus size={13} /> Crear zona nueva
+            </button>
+          </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
             {#each zonesAvailable as zone}
               <button type="button"
@@ -413,59 +408,17 @@
             {/each}
           </div>
 
-          <div class="flex items-center justify-end gap-2 mt-4 sm:mt-5">
-            <a href="/clients" class="btn-secondary">
-              <X size={16} class="sm:w-3.5 sm:h-3.5" /> Cancelar
-            </a>
-            <button type="button" on:click={continueToData}
-                    disabled={!selectedZoneId}
-                    class="btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
-              Continuar <ArrowRight size={16} class="sm:w-3.5 sm:h-3.5" />
-            </button>
-          </div>
         {/if}
       </div>
     </div>
-  </div>
 
-<!-- ─── Step 1: Client data ──────────────────────── -->
-{:else}
-  <form on:submit|preventDefault={handleSubmit} class="space-y-5 max-w-4xl">
-
-    <!-- Zone badge (read-only) -->
-    {#if selectedZone}
-      <div class="card">
-        <div class="px-5 py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div class="flex items-center gap-3 min-w-0">
-            <div class="w-3 h-3 rounded-full flex-shrink-0"
-                 style="background-color: {selectedZone.color || '#3b82f6'}"></div>
-            <div class="min-w-0">
-              <div class="text-[11px] uppercase tracking-wider text-slate-400 font-semibold">
-                Zona seleccionada
-              </div>
-              <div class="text-sm font-semibold text-slate-900 truncate">{selectedZone.name}</div>
-              {#if selectedZone.router}
-                <div class="text-[11px] text-slate-500 mt-0.5">
-                  📡 Router <span class="font-medium text-slate-700">{selectedZone.router.name}</span>
-                  <span class="font-mono text-slate-400">— {selectedZone.router.routes?.[0]?.ip ?? '—'}</span>
-                </div>
-              {/if}
-            </div>
-          </div>
-          <button type="button" on:click={backToZoneStep}
-                  class="text-xs text-brand-800 hover:underline font-medium">
-            Cambiar zona
-          </button>
-        </div>
-      </div>
-    {/if}
-
-    <!-- SECTION 1: Personal data -->
+    <!-- SECTION 2: Datos del cliente -->
     <div class="card">
       <div class="card-header">
         <div class="flex items-center gap-2">
+          <div class="w-6 h-6 rounded-full bg-brand-600 text-white text-xs font-bold flex items-center justify-center">2</div>
           <User size={16} class="text-slate-600" />
-          <h2 class="font-semibold text-slate-900">Datos Personales</h2>
+          <h2 class="font-semibold text-slate-900">Datos del cliente</h2>
         </div>
       </div>
       <div class="card-body grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -553,12 +506,13 @@
       </div>
     </div>
 
-    <!-- SECTION 2: PPPoE Service (no router select — derived from zone) -->
+    <!-- SECTION 3: Servicio (plan, PPPoE, credenciales) — no router select; derived from zone -->
     <div class="card">
       <div class="card-header">
         <div class="flex items-center gap-2">
+          <div class="w-6 h-6 rounded-full bg-brand-600 text-white text-xs font-bold flex items-center justify-center">3</div>
           <RouterIcon size={16} class="text-slate-600" />
-          <h2 class="font-semibold text-slate-900">Servicio PPPoE</h2>
+          <h2 class="font-semibold text-slate-900">Servicio</h2>
         </div>
       </div>
       <div class="card-body grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -770,25 +724,95 @@
       </div>
     </div>
 
-    <!-- Buttons -->
-    <div class="flex items-center gap-2 sm:gap-3 flex-wrap">
-      <button type="button" on:click={backToZoneStep} class="btn-secondary">
-        <ArrowLeft size={16} class="sm:w-3.5 sm:h-3.5" /> Atrás
-      </button>
-      <button type="submit" disabled={saving} class="btn-primary">
+    <!-- Mobile-only submit (sticky summary is hidden on small screens) -->
+    <div class="lg:hidden flex items-center gap-2 flex-wrap">
+      <button type="submit" disabled={saving || !selectedZoneId} class="btn-primary flex-1">
         {#if saving}
           <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
           Guardando...
         {:else}
-          <Save size={16} class="sm:w-3.5 sm:h-3.5" /> Guardar
+          <Save size={16} /> Guardar Cliente
         {/if}
       </button>
-      <a href="/clients" class="btn-secondary ml-auto">
-        <X size={16} class="sm:w-3.5 sm:h-3.5" /> Cancelar
+      <a href="/clients" class="btn-secondary">
+        <X size={16} /> Cancelar
       </a>
     </div>
-  </form>
-{/if}
+  </div><!-- end left column -->
+
+  <!-- ── Sticky summary (desktop only) ──────────────────────────────── -->
+  <aside class="hidden lg:block lg:sticky lg:top-20 space-y-3 max-w-[320px]">
+    <div class="card">
+      <div class="card-header">
+        <h3 class="font-semibold text-slate-900 text-sm">Resumen</h3>
+      </div>
+      <div class="card-body space-y-3 text-sm">
+        <!-- Zone status -->
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0
+                      {selectedZone ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}">
+            {#if selectedZone}<CheckCircle2 size={14} />{:else}<MapPin size={12} />{/if}
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs text-text-muted uppercase tracking-wider font-semibold">Zona</div>
+            {#if selectedZone}
+              <div class="font-medium text-text-primary truncate">{selectedZone.name}</div>
+              {#if selectedZone.router}
+                <div class="text-[11px] text-text-muted truncate">📡 {selectedZone.router.name}</div>
+              {/if}
+            {:else}
+              <div class="text-text-muted text-xs">— Sin elegir</div>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Personal data status -->
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0
+                      {filledPersonal >= 3 ? 'bg-emerald-100 text-emerald-700' : filledPersonal > 0 ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-400'}">
+            {#if filledPersonal >= 3}<CheckCircle2 size={14} />{:else}<User size={12} />{/if}
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs text-text-muted uppercase tracking-wider font-semibold">Datos</div>
+            <div class="font-medium text-text-primary truncate">{form.fullName || '— Sin nombre'}</div>
+            <div class="text-[11px] text-text-muted">{filledPersonal}/4 campos clave</div>
+          </div>
+        </div>
+
+        <!-- Service status -->
+        <div class="flex items-start gap-2.5">
+          <div class="mt-0.5 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0
+                      {hasService ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}">
+            {#if hasService}<CheckCircle2 size={14} />{:else}<RouterIcon size={12} />{/if}
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs text-text-muted uppercase tracking-wider font-semibold">Servicio</div>
+            {#if selectedPlanName}
+              <div class="font-medium text-text-primary truncate">{selectedPlanName}</div>
+              {#if form.mikrotik.username}
+                <div class="text-[11px] text-text-muted truncate font-mono">{form.mikrotik.username}</div>
+              {/if}
+            {:else}
+              <div class="text-text-muted text-xs">— Sin plan</div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" disabled={saving || !selectedZoneId} class="btn-primary w-full">
+      {#if saving}
+        <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+        Guardando…
+      {:else}
+        <Save size={14} /> Guardar Cliente
+      {/if}
+    </button>
+    <a href="/clients" class="btn-secondary w-full">
+      <X size={14} /> Cancelar
+    </a>
+  </aside>
+</form>
 
 <!-- ─── Progress dialog (creating client → MikroTik → DB) ─────────── -->
 {#if progressOpen}
@@ -930,3 +954,10 @@
     </div>
   </div>
 {/if}
+
+<!-- ── Inline zone creation ─────────────────────────────────────────── -->
+<ZoneCreateSheet
+  bind:open={zoneSheetOpen}
+  routers={routers}
+  on:close={() => zoneSheetOpen = false}
+  on:created={onZoneCreated} />
