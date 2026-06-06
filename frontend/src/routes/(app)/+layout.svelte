@@ -20,10 +20,12 @@
   import { authStore, user } from '$lib/stores/auth.store.js';
   import { sidebarOpen } from '$lib/stores/ui.store.js';
   import { layout, density, focusMode } from '$lib/stores/layout.store.js';
-  import { sidebarFor, canAccess } from '$lib/permissions.js';
   import {
-    LayoutDashboard, Users, Router, Network, CreditCard, Building2,
-    LogOut, ChevronDown, ChevronRight, Menu, X, Activity,
+    menuForRole, resolveActive, resolveParent, resolveTitle,
+    isItemActive, canAccess
+  } from '$lib/navigation.js';
+  import {
+    LogOut, ChevronDown, ChevronRight, Menu, X, Network,
     Search, Bell, Settings as SettingsIcon,
     Maximize2, Minimize2, Command, ArrowRight
   } from 'lucide-svelte';
@@ -37,52 +39,37 @@
       TECHNICIAN: 'Técnico',  VIEWER: 'Visualizador'
     })[$user?.role] || '—';
 
+  // ── Reactive navigation state ───────────────────────────────────────
+  // Everything below derives from `pathname`. Reading `$page.url.pathname`
+  // inside a `$:` declaration is reactive — Svelte traces the store
+  // dependency at the top level. Calling helpers as pure functions (with
+  // pathname as argument) means the template's `{pageTitle}` /
+  // `isItemActive(item, pathname)` calls also recompute on each route
+  // change. The OLD code used `{getTitle()}` and `isActive(href)` inline
+  // — those functions read the store from their body, which Svelte did
+  // NOT trace, so the title and highlight were frozen at first render.
+  $: pathname     = $page.url.pathname;
+  $: activeItem   = resolveActive(pathname);
+  $: activeParent = resolveParent(activeItem);
+  $: pageTitle    = resolveTitle(pathname);
+
   // ── Drawer auto-close on route change ───────────────────────────────
-  // Operators click a nav item and expect to land on the page with the
-  // workspace clean — not with the drawer still hanging open.
-  $: if ($page.url.pathname) $sidebarOpen = false;
+  $: if (pathname) $sidebarOpen = false;
 
-  // ── Section expand inside the drawer ────────────────────────────────
-  let expanded = {
-    clientes: true, finanzas: true, sistema: false, empresa: false, monitor: false
-  };
-  const SECTION_ICONS = {
-    clientes: Users, finanzas: CreditCard, sistema: Router,
-    empresa: Building2, monitor: Activity
-  };
-  const TOP_ITEM_ICONS = { '/dashboard': LayoutDashboard };
+  // ── Sidebar menu tree (filtered by role) ────────────────────────────
+  // menuForRole returns [{ type:'item', item }, { type:'group', group, items }, ...]
+  $: menu = menuForRole($user?.role);
 
-  $: menu = sidebarFor($user?.role);
-
-  function toggleSection(key) { expanded[key] = !expanded[key]; }
-
-  function isActive(href) {
-    return $page.url.pathname === href ||
-           ($page.url.pathname.startsWith(href + '/') && href !== '/');
+  // ── Group expand state ──────────────────────────────────────────────
+  // Operator can toggle freely; we also auto-expand the group that
+  // contains the active item so the user always sees where they are.
+  let expanded = {};
+  // Reset expansion every time the active group changes — keeps the
+  // active group open without locking the others closed forever.
+  $: if (activeParent) {
+    expanded = { ...expanded, [activeParent.id]: true };
   }
-
-  function getTitle() {
-    const p = $page.url.pathname;
-    const map = {
-      '/dashboard':           'Dashboard',
-      '/clients/new':         'Nuevo Cliente',
-      '/clients':             'Clientes',
-      '/zones':               'Zonas',
-      '/invoices':            'Facturas',
-      '/payments':            'Pagos',
-      '/plans':               'Planes',
-      '/mikrotik/routers':    'Routers / NOC',
-      '/mikrotik/accounts':   'Cuentas MikroTik',
-      '/network/events':      'Historial',
-      '/network/settings':    'Alertas',
-      '/network':             'Monitor de Red',
-      '/reports':             'Reportes',
-      '/notifications':       'Notificaciones',
-      '/users':               'Usuarios',
-      '/settings':            'Configuración'
-    };
-    return Object.entries(map).find(([k]) => p === k || p.startsWith(k + '/'))?.[1] || 'ISP Manager';
-  }
+  function toggleSection(id) { expanded = { ...expanded, [id]: !expanded[id] }; }
 
   // ── Toggle drawer ───────────────────────────────────────────────────
   function toggleDrawer() { $sidebarOpen = !$sidebarOpen; }
@@ -217,6 +204,14 @@
   });
 </script>
 
+<!-- Document title — tab text mirrors the current module. Individual
+     pages can still <svelte:head><title>…</title></svelte:head> their own
+     more-specific titles and they take precedence (svelte:head from the
+     leaf overrides the layout's). -->
+<svelte:head>
+  <title>{pageTitle} — ISP Manager</title>
+</svelte:head>
+
 <!-- ─── SHELL ───────────────────────────────────────────────────────── -->
 <!-- `min-h-screen` instead of `h-screen` so long pages can scroll naturally
      without trapping inside a fixed-height container. Topbar uses sticky
@@ -242,7 +237,7 @@
       <div class="hidden sm:flex items-center gap-1.5 text-sm min-w-0 leading-tight">
         <span class="hidden md:inline text-text-muted">ISP Manager</span>
         <span class="hidden md:inline text-text-muted opacity-50">/</span>
-        <span class="text-text-primary font-semibold truncate">{getTitle()}</span>
+        <span class="text-text-primary font-semibold truncate">{pageTitle}</span>
       </div>
     </div>
 
@@ -374,44 +369,47 @@
       </button>
     </div>
 
-    <!-- Nav -->
+    <!-- Nav: data shape from menuForRole() —
+         [{ type:'item',  item },
+          { type:'group', group, items:[...] }, ...] -->
     <nav class="flex-1 py-2 px-2 overflow-y-auto">
       {#each menu as section}
-        {#if !section.key}
-          {#each section.items as item}
-            {@const Icon = TOP_ITEM_ICONS[item.href] || LayoutDashboard}
-            {@const active = isActive(item.href)}
-            <a href={item.href}
-               class="relative flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg mb-0.5
-                      text-sm font-medium transition-colors duration-150
-                      {active
-                        ? 'bg-brand-600 text-white font-semibold'
-                        : 'text-brand-100 hover:bg-brand-700 hover:text-white'}">
-              {#if active}<span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-white/90"></span>{/if}
-              <Icon size={16} />
-              <span>{item.label}</span>
-            </a>
-          {/each}
+        {#if section.type === 'item'}
+          {@const item = section.item}
+          {@const Icon = item.icon || Network}
+          {@const active = isItemActive(item, pathname)}
+          <a href={item.href}
+             class="relative flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg mb-0.5
+                    text-sm font-medium transition-colors duration-150
+                    {active
+                      ? 'bg-brand-600 text-white font-semibold'
+                      : 'text-brand-100 hover:bg-brand-700 hover:text-white'}">
+            {#if active}<span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-white/90"></span>{/if}
+            <Icon size={16} />
+            <span>{item.label}</span>
+          </a>
         {:else}
-          {@const SectionIcon = SECTION_ICONS[section.key] || Network}
-          {@const sectionHasActive = section.items.some(i => isActive(i.href))}
-          <button type="button" on:click={() => toggleSection(section.key)}
+          {@const group = section.group}
+          {@const GroupIcon = group.icon || Network}
+          {@const groupHasActive = activeParent?.id === group.id}
+          {@const isOpen = expanded[group.id] || groupHasActive}
+          <button type="button" on:click={() => toggleSection(group.id)}
                   class="w-full flex items-center justify-between px-3 min-h-[44px] rounded-lg
                          text-sm font-medium transition-colors duration-150 mb-0.5
-                         {sectionHasActive ? 'text-white' : 'text-brand-100 hover:bg-brand-700 hover:text-white'}">
+                         {groupHasActive ? 'text-white' : 'text-brand-100 hover:bg-brand-700 hover:text-white'}">
             <div class="flex items-center gap-2.5">
-              <SectionIcon size={16} />
-              <span>{section.label}</span>
+              <GroupIcon size={16} />
+              <span>{group.label}</span>
             </div>
             <svelte:component
-              this={expanded[section.key] || sectionHasActive ? ChevronDown : ChevronRight}
+              this={isOpen ? ChevronDown : ChevronRight}
               size={12} class="text-brand-200" />
           </button>
 
-          {#if expanded[section.key] || sectionHasActive}
+          {#if isOpen}
             <div class="mb-1">
               {#each section.items as item}
-                {@const active = isActive(item.href)}
+                {@const active = isItemActive(item, pathname)}
                 <a href={item.href}
                    class="relative flex items-center gap-2 pl-9 pr-3 min-h-[40px] rounded-lg
                           text-sm transition-colors duration-150
