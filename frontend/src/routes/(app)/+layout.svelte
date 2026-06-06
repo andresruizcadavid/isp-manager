@@ -1,48 +1,60 @@
 <script>
+  // ── App shell ────────────────────────────────────────────────────────
+  //
+  // Drawer-only layout. The sidebar is ALWAYS an overlay (no flow column,
+  // no persistent rail). The hamburger in the topbar opens/closes it.
+  // `<main>` always spans the full viewport width — the workspace is
+  // maximized by default and the operator opens the menu on demand.
+  //
+  // Layers (z-index):
+  //   • Topbar:    z-30 (sticky top)
+  //   • Backdrop:  z-40 (when drawer open)
+  //   • Drawer:    z-50
+  //   • Palette:   z-[60]
+  //   • Toasts:    z-[70] (page-level)
+
+  import { onMount, onDestroy } from 'svelte';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
+  import { browser } from '$app/environment';
   import { authStore, user } from '$lib/stores/auth.store.js';
   import { sidebarOpen } from '$lib/stores/ui.store.js';
-  import { sidebarFor } from '$lib/permissions.js';
+  import { layout, density, focusMode } from '$lib/stores/layout.store.js';
+  import { sidebarFor, canAccess } from '$lib/permissions.js';
   import {
-    LayoutDashboard, Users, Router, Network,
-    CreditCard, Building2, LogOut, ChevronDown, ChevronRight,
-    Menu, X, Activity
+    LayoutDashboard, Users, Router, Network, CreditCard, Building2,
+    LogOut, ChevronDown, ChevronRight, Menu, X, Activity,
+    Search, Bell, Settings as SettingsIcon,
+    Maximize2, Minimize2, Command, ArrowRight
   } from 'lucide-svelte';
   import InstallPrompt from '$lib/components/layout/InstallPrompt.svelte';
 
-  $: initial = ($user?.name || $user?.email || '?').trim().charAt(0).toUpperCase();
+  // ── User-derived bits ───────────────────────────────────────────────
+  $: initial     = ($user?.name || $user?.email || '?').trim().charAt(0).toUpperCase();
   $: displayName = $user?.name || $user?.email || 'Usuario';
-  $: roleLabel = ({
-    ADMIN:      'Administrador',
-    OPERATOR:   'Administrador',
-    TECHNICIAN: 'Técnico',
-    VIEWER:     'Visualizador'
-  })[$user?.role] || '—';
+  $: roleLabel   = ({
+      ADMIN: 'Administrador', OPERATOR: 'Administrador',
+      TECHNICIAN: 'Técnico',  VIEWER: 'Visualizador'
+    })[$user?.role] || '—';
 
-  // Auto-close the mobile drawer whenever the route changes.
+  // ── Drawer auto-close on route change ───────────────────────────────
+  // Operators click a nav item and expect to land on the page with the
+  // workspace clean — not with the drawer still hanging open.
   $: if ($page.url.pathname) $sidebarOpen = false;
 
+  // ── Section expand inside the drawer ────────────────────────────────
   let expanded = {
-    clientes: true, finanzas: false, sistema: false, empresa: false, monitor: false
+    clientes: true, finanzas: true, sistema: false, empresa: false, monitor: false
   };
-
-  // Icons per section key (presentation only — role gating lives in permissions.js).
   const SECTION_ICONS = {
-    clientes: Users,
-    finanzas: CreditCard,
-    sistema:  Router,
-    empresa:  Building2,
-    monitor:  Activity
+    clientes: Users, finanzas: CreditCard, sistema: Router,
+    empresa: Building2, monitor: Activity
   };
-  const TOP_ITEM_ICONS = {
-    '/dashboard': LayoutDashboard
-  };
+  const TOP_ITEM_ICONS = { '/dashboard': LayoutDashboard };
 
-  // Role-filtered menu — recomputes whenever the user (and thus role) changes.
   $: menu = sidebarFor($user?.role);
 
-  function toggle(key) { expanded[key] = !expanded[key]; }
+  function toggleSection(key) { expanded[key] = !expanded[key]; }
 
   function isActive(href) {
     return $page.url.pathname === href ||
@@ -52,110 +64,362 @@
   function getTitle() {
     const p = $page.url.pathname;
     const map = {
-      '/dashboard': 'Dashboard',
-      '/clients': 'Clientes',
-      '/clients/new': 'Nuevo Cliente',
-      '/zones': 'Zonas',
-      '/invoices': 'Facturas',
-      '/payments': 'Pagos',
-      '/plans': 'Planes de Servicio',
-      '/mikrotik/routers': 'Routers / NOC',
-      '/mikrotik/accounts': 'Cuentas MikroTik',
-      '/network/events':   'Historial de Eventos',
-      '/network/settings': 'Alertas Telegram',
-      '/network':          'Monitor de Red',
-      '/reports': 'Reportes',
-      '/settings': 'Configuración',
+      '/dashboard':           'Dashboard',
+      '/clients/new':         'Nuevo Cliente',
+      '/clients':             'Clientes',
+      '/zones':               'Zonas',
+      '/invoices':            'Facturas',
+      '/payments':            'Pagos',
+      '/plans':               'Planes',
+      '/mikrotik/routers':    'Routers / NOC',
+      '/mikrotik/accounts':   'Cuentas MikroTik',
+      '/network/events':      'Historial',
+      '/network/settings':    'Alertas',
+      '/network':             'Monitor de Red',
+      '/reports':             'Reportes',
+      '/notifications':       'Notificaciones',
+      '/users':               'Usuarios',
+      '/settings':            'Configuración'
     };
-    return Object.entries(map).find(([k]) => p.startsWith(k))?.[1] || 'ISP Manager';
+    return Object.entries(map).find(([k]) => p === k || p.startsWith(k + '/'))?.[1] || 'ISP Manager';
   }
+
+  // ── Toggle drawer ───────────────────────────────────────────────────
+  function toggleDrawer() { $sidebarOpen = !$sidebarOpen; }
+  function closeDrawer()  { $sidebarOpen = false; }
+
+  // ── User dropdown ───────────────────────────────────────────────────
+  let userMenuOpen = false;
+  function closeUserMenu() { userMenuOpen = false; }
+  function onUserMenuKey(e) { if (e.key === 'Escape') closeUserMenu(); }
+
+  // ── Command palette ─────────────────────────────────────────────────
+  let paletteOpen = false;
+  let paletteQuery = '';
+  let paletteIndex = 0;
+  let paletteInput;
+
+  $: paletteCommands = (() => {
+    const all = [
+      { id: 'go-dashboard', label: 'Ir a Dashboard',       hint: 'g d', group: 'Navegación', href: '/dashboard' },
+      { id: 'go-clients',   label: 'Ir a Clientes',        hint: 'g c', group: 'Navegación', href: '/clients' },
+      { id: 'go-new-client',label: 'Nuevo cliente',        hint: '',    group: 'Acciones',   href: '/clients/new' },
+      { id: 'go-zones',     label: 'Ir a Zonas',           hint: '',    group: 'Navegación', href: '/zones' },
+      { id: 'go-invoices',  label: 'Ir a Facturas',        hint: 'g f', group: 'Navegación', href: '/invoices' },
+      { id: 'go-payments',  label: 'Ir a Pagos',           hint: 'g p', group: 'Navegación', href: '/payments' },
+      { id: 'go-plans',     label: 'Ir a Planes',          hint: '',    group: 'Navegación', href: '/plans' },
+      { id: 'go-routers',   label: 'Ir a Routers / NOC',   hint: '',    group: 'Navegación', href: '/mikrotik/routers' },
+      { id: 'go-network',   label: 'Ir a Monitor de Red',  hint: 'g m', group: 'Navegación', href: '/network' },
+      { id: 'go-reports',   label: 'Ir a Reportes',        hint: '',    group: 'Navegación', href: '/reports' },
+      { id: 'go-notifs',    label: 'Ir a Notificaciones',  hint: '',    group: 'Navegación', href: '/notifications' },
+      { id: 'go-users',     label: 'Ir a Usuarios',        hint: '',    group: 'Navegación', href: '/users' },
+      { id: 'toggle-density', label: $density === 'comfortable' ? 'Modo compacto' : 'Modo confortable',
+        hint: '', group: 'Layout', run: () => layout.toggleDensity() },
+      { id: 'toggle-focus',  label: $focusMode ? 'Salir de enfoque' : 'Modo enfoque',
+        hint: 'f', group: 'Layout', run: () => layout.toggleFocus() },
+      { id: 'open-drawer', label: $sidebarOpen ? 'Cerrar menú' : 'Abrir menú',
+        hint: '', group: 'Layout', run: () => toggleDrawer() },
+      { id: 'logout', label: 'Cerrar sesión', hint: '', group: 'Cuenta',
+        run: async () => { await authStore.logout(); goto('/login'); } }
+    ];
+    const role = $user?.role;
+    const allowed = all.filter(c => !c.href || canAccess(c.href, role));
+    const q = paletteQuery.trim().toLowerCase();
+    if (!q) return allowed;
+    return allowed.filter(c => c.label.toLowerCase().includes(q) || (c.hint || '').toLowerCase().includes(q));
+  })();
+
+  function openPalette() {
+    paletteQuery = '';
+    paletteIndex = 0;
+    paletteOpen = true;
+    setTimeout(() => paletteInput?.focus(), 30);
+  }
+  function closePalette() { paletteOpen = false; }
+  async function runCommand(cmd) {
+    closePalette();
+    if (cmd.href) { goto(cmd.href); return; }
+    if (cmd.run)  { await cmd.run(); }
+  }
+  function onPaletteKey(e) {
+    if (e.key === 'Escape')      { closePalette(); return; }
+    if (e.key === 'ArrowDown')   { e.preventDefault(); paletteIndex = Math.min(paletteCommands.length - 1, paletteIndex + 1); return; }
+    if (e.key === 'ArrowUp')     { e.preventDefault(); paletteIndex = Math.max(0, paletteIndex - 1); return; }
+    if (e.key === 'Enter')       { e.preventDefault(); const cmd = paletteCommands[paletteIndex]; if (cmd) runCommand(cmd); }
+  }
+  $: paletteQuery, (paletteIndex = 0);
+
+  // ── Global keyboard shortcuts ───────────────────────────────────────
+  let chordPrimed = false;
+  let chordTimer  = null;
+  function isTextTarget(e) {
+    const t = e.target;
+    if (!t) return false;
+    return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable;
+  }
+  function handleGlobalKey(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault(); openPalette(); return;
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      e.preventDefault(); toggleDrawer(); return;
+    }
+    if (e.key === 'Escape') {
+      if (paletteOpen)   { closePalette();        return; }
+      if ($sidebarOpen)  { closeDrawer();         return; }
+      if ($focusMode)    { layout.setFocus(false); return; }
+      if (userMenuOpen)  { closeUserMenu();       return; }
+    }
+    if (isTextTarget(e)) return;
+    if (chordPrimed) {
+      const map = {
+        d: '/dashboard', c: '/clients', f: '/invoices',
+        p: '/payments',  m: '/network'
+      };
+      const dest = map[e.key.toLowerCase()];
+      if (dest && canAccess(dest, $user?.role)) {
+        e.preventDefault();
+        goto(dest);
+      }
+      chordPrimed = false; clearTimeout(chordTimer);
+      return;
+    }
+    if (e.key.toLowerCase() === 'g') {
+      chordPrimed = true;
+      clearTimeout(chordTimer);
+      chordTimer = setTimeout(() => { chordPrimed = false; }, 900);
+      return;
+    }
+    if (e.key.toLowerCase() === 'f') {
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        layout.toggleFocus();
+      }
+    }
+  }
+
+  function onWindowClick(e) {
+    if (!userMenuOpen) return;
+    const el = e.target;
+    if (el?.closest?.('[data-user-menu]')) return;
+    closeUserMenu();
+  }
+
+  onMount(() => {
+    if (!browser) return;
+    window.addEventListener('keydown', handleGlobalKey);
+    window.addEventListener('click', onWindowClick);
+  });
+  onDestroy(() => {
+    if (!browser) return;
+    window.removeEventListener('keydown', handleGlobalKey);
+    window.removeEventListener('click', onWindowClick);
+  });
 </script>
 
-<div class="flex h-screen overflow-hidden bg-surface-page">
+<!-- ─── SHELL ───────────────────────────────────────────────────────── -->
+<!-- `min-h-screen` instead of `h-screen` so long pages can scroll naturally
+     without trapping inside a fixed-height container. Topbar uses sticky
+     positioning so it stays at the top of the viewport.                 -->
+<div class="min-h-screen bg-surface-page">
 
-  <!-- Mobile backdrop (visible only when drawer open on < md) -->
-  {#if $sidebarOpen}
-    <button type="button" aria-label="Cerrar menú"
-            on:click={() => $sidebarOpen = false}
-            class="md:hidden fixed inset-0 z-30 bg-slate-900/40 backdrop-blur-sm"></button>
-  {/if}
+  <!-- ─── Topbar (always visible unless focus mode) ─── -->
+  {#if !$focusMode}
+  <header class="sticky top-0 z-30 h-14 bg-surface-card border-b border-slate-200
+                 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 lg:px-6">
 
-  <!-- SIDEBAR (brand-800 background, white/brand-100 text — WCAG AA) -->
-  <aside class="w-60 bg-brand-800 flex flex-col flex-shrink-0 overflow-y-auto
-                fixed inset-y-0 left-0 z-40 transform transition-transform duration-200
-                {$sidebarOpen ? 'translate-x-0' : '-translate-x-full'}
-                md:static md:translate-x-0">
+    <!-- LEFT: hamburger + breadcrumb -->
+    <div class="flex items-center gap-2 min-w-0">
+      <button type="button" on:click={toggleDrawer}
+              aria-label={$sidebarOpen ? 'Cerrar menú' : 'Abrir menú'}
+              aria-expanded={$sidebarOpen}
+              title="Abrir / cerrar menú (⌘\\)"
+              class="p-2 -ml-1 rounded-lg text-text-secondary hover:bg-slate-100 hover:text-text-primary
+                     active:scale-95 transition min-h-[40px] min-w-[40px] flex items-center justify-center">
+        {#if $sidebarOpen}<X size={20} />{:else}<Menu size={20} />{/if}
+      </button>
 
-    <!-- Brand -->
-    <div class="px-4 py-5 border-b border-brand-700">
-      <div class="flex items-center justify-between gap-2.5">
-        <div class="flex items-center gap-2.5 min-w-0">
-          <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center
-                      justify-center flex-shrink-0 shadow-md shadow-brand-900/30">
-            <svelte:component this={Network} size={16} class="text-white" />
-          </div>
-          <div class="min-w-0">
-            <div class="text-sm font-semibold text-white leading-tight truncate">
-              ISP Manager
-            </div>
-            <div class="text-xs text-brand-100 leading-tight truncate">
-              Panel Administrativo
-            </div>
-          </div>
-        </div>
-        <!-- Close button (only on mobile) -->
-        <button type="button" on:click={() => $sidebarOpen = false}
-                aria-label="Cerrar menú"
-                class="md:hidden p-2.5 -mr-2 rounded text-brand-100 hover:text-white
-                       hover:bg-brand-700 active:scale-95 transition
-                       min-h-[44px] min-w-[44px] flex items-center justify-center">
-          <X size={18} />
-        </button>
+      <div class="hidden sm:flex items-center gap-1.5 text-sm min-w-0 leading-tight">
+        <span class="hidden md:inline text-text-muted">ISP Manager</span>
+        <span class="hidden md:inline text-text-muted opacity-50">/</span>
+        <span class="text-text-primary font-semibold truncate">{getTitle()}</span>
       </div>
     </div>
 
-    <!-- Nav (filtered by role via sidebarFor) -->
-    <nav class="flex-1 py-2 px-2">
+    <div class="flex-1"></div>
+
+    <!-- RIGHT: search + focus + bell + status + user -->
+    <div class="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+      <button type="button" on:click={openPalette}
+              aria-label="Buscar (⌘K)"
+              class="hidden md:flex items-center gap-2 h-9 px-2.5 rounded-lg
+                     border border-slate-200 text-text-muted hover:text-text-primary hover:border-slate-300
+                     transition min-w-[220px] lg:min-w-[280px] bg-surface-page">
+        <Search size={14} />
+        <span class="text-xs flex-1 text-left">Buscar o ejecutar…</span>
+        <span class="text-[10px] font-medium px-1.5 py-0.5 rounded border border-slate-200 text-text-muted">⌘K</span>
+      </button>
+      <button type="button" on:click={openPalette}
+              aria-label="Buscar (⌘K)"
+              class="md:hidden p-2 rounded-lg text-text-secondary hover:bg-slate-100 transition
+                     min-h-[40px] min-w-[40px] flex items-center justify-center">
+        <Search size={18} />
+      </button>
+
+      <button type="button" on:click={() => layout.toggleFocus()}
+              aria-label={$focusMode ? 'Salir de enfoque' : 'Modo enfoque'}
+              title={$focusMode ? 'Salir de enfoque (Esc)' : 'Modo enfoque (f)'}
+              class="hidden lg:flex p-2 rounded-lg text-text-secondary hover:bg-slate-100 hover:text-text-primary
+                     transition min-h-[40px] min-w-[40px] items-center justify-center">
+        {#if $focusMode}<Minimize2 size={16} />{:else}<Maximize2 size={16} />{/if}
+      </button>
+
+      <a href="/notifications"
+         aria-label="Notificaciones"
+         class="relative p-2 rounded-lg text-text-secondary hover:bg-slate-100 hover:text-text-primary
+                transition min-h-[40px] min-w-[40px] flex items-center justify-center">
+        <Bell size={16} />
+      </a>
+
+      <div class="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-50 border border-emerald-100"
+           title="Sistema en línea">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+        <span class="text-[11px] text-emerald-700 font-medium">Sistema en línea</span>
+      </div>
+
+      <div class="relative" data-user-menu>
+        <button type="button" on:click|stopPropagation={() => userMenuOpen = !userMenuOpen}
+                on:keydown={onUserMenuKey}
+                aria-label="Menú de usuario"
+                class="flex items-center gap-1.5 p-1 pl-1.5 rounded-lg hover:bg-slate-100 transition min-h-[40px]">
+          <div class="w-8 h-8 rounded-full bg-brand-600 flex items-center justify-center text-sm font-bold text-white">
+            {initial}
+          </div>
+          <ChevronDown size={14} class="text-text-muted hidden sm:inline" />
+        </button>
+
+        {#if userMenuOpen}
+          <div class="absolute right-0 top-full mt-1 w-60 bg-surface-card rounded-xl shadow-xl border border-slate-200 py-1 z-50">
+            <div class="px-3 py-2.5 border-b border-slate-100">
+              <div class="text-sm font-semibold text-text-primary truncate">{displayName}</div>
+              <div class="text-[11px] text-text-muted mt-0.5">{$user?.email || ''} · {roleLabel}</div>
+            </div>
+            <div class="px-1.5 py-1">
+              <button type="button"
+                      on:click={() => { layout.toggleDensity(); closeUserMenu(); }}
+                      class="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg
+                             text-sm text-text-primary hover:bg-slate-50 transition">
+                <span class="flex items-center gap-2">
+                  <SettingsIcon size={14} class="text-text-muted" />
+                  Densidad
+                </span>
+                <span class="text-xs text-text-muted">
+                  {$density === 'comfortable' ? 'Confortable' : 'Compacta'}
+                </span>
+              </button>
+              <button type="button"
+                      on:click={() => { openPalette(); closeUserMenu(); }}
+                      class="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg
+                             text-sm text-text-primary hover:bg-slate-50 transition">
+                <span class="flex items-center gap-2">
+                  <Command size={14} class="text-text-muted" />
+                  Buscador / comandos
+                </span>
+                <span class="text-[10px] font-medium px-1.5 py-0.5 rounded border border-slate-200 text-text-muted">⌘K</span>
+              </button>
+            </div>
+            <div class="border-t border-slate-100 mt-1 pt-1 px-1.5 pb-1">
+              <button type="button"
+                      on:click={async () => { closeUserMenu(); await authStore.logout(); goto('/login'); }}
+                      class="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg
+                             text-sm text-red-600 hover:bg-red-50 transition">
+                <LogOut size={14} />
+                Cerrar sesión
+              </button>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </header>
+  {/if}
+
+  <!-- ─── Drawer backdrop (visible on ALL viewports when open) ─── -->
+  {#if $sidebarOpen}
+    <button type="button" aria-label="Cerrar menú"
+            on:click={closeDrawer}
+            class="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm transition-opacity"></button>
+  {/if}
+
+  <!-- ─── Drawer (always overlay, never in flow) ─── -->
+  <aside aria-label="Menú principal"
+         class="fixed inset-y-0 left-0 z-50 w-72 sm:w-80 bg-brand-800 text-brand-100
+                flex flex-col shadow-2xl
+                transition-transform duration-200 ease-out
+                {$sidebarOpen ? 'translate-x-0' : '-translate-x-full'}">
+
+    <!-- Drawer header -->
+    <div class="h-14 flex items-center gap-2.5 px-4 border-b border-brand-700 flex-shrink-0">
+      <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-md shadow-brand-900/30">
+        <Network size={16} class="text-white" />
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="text-sm font-semibold text-white leading-tight truncate">ISP Manager</div>
+        <div class="text-[11px] text-brand-100 leading-tight truncate">Panel Administrativo</div>
+      </div>
+      <button type="button" on:click={closeDrawer}
+              aria-label="Cerrar menú"
+              class="p-2 -mr-1 rounded text-brand-100 hover:text-white hover:bg-brand-700 transition">
+        <X size={16} />
+      </button>
+    </div>
+
+    <!-- Nav -->
+    <nav class="flex-1 py-2 px-2 overflow-y-auto">
       {#each menu as section}
         {#if !section.key}
           {#each section.items as item}
+            {@const Icon = TOP_ITEM_ICONS[item.href] || LayoutDashboard}
+            {@const active = isActive(item.href)}
             <a href={item.href}
-               class="flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg mb-0.5
+               class="relative flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg mb-0.5
                       text-sm font-medium transition-colors duration-150
-                      {isActive(item.href)
+                      {active
                         ? 'bg-brand-600 text-white font-semibold'
                         : 'text-brand-100 hover:bg-brand-700 hover:text-white'}">
-              <svelte:component this={TOP_ITEM_ICONS[item.href] || LayoutDashboard} size={14} />
-              {item.label}
+              {#if active}<span class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r bg-white/90"></span>{/if}
+              <Icon size={16} />
+              <span>{item.label}</span>
             </a>
           {/each}
         {:else}
-          <button on:click={() => toggle(section.key)}
-                  class="w-full flex items-center justify-between px-3 min-h-[44px]
-                         rounded-lg text-sm font-medium text-brand-100
-                         hover:bg-brand-700 hover:text-white
-                         transition-colors duration-150 mb-0.5">
+          {@const SectionIcon = SECTION_ICONS[section.key] || Network}
+          {@const sectionHasActive = section.items.some(i => isActive(i.href))}
+          <button type="button" on:click={() => toggleSection(section.key)}
+                  class="w-full flex items-center justify-between px-3 min-h-[44px] rounded-lg
+                         text-sm font-medium transition-colors duration-150 mb-0.5
+                         {sectionHasActive ? 'text-white' : 'text-brand-100 hover:bg-brand-700 hover:text-white'}">
             <div class="flex items-center gap-2.5">
-              <svelte:component this={SECTION_ICONS[section.key] || Network} size={14} />
+              <SectionIcon size={16} />
               <span>{section.label}</span>
             </div>
             <svelte:component
-              this={expanded[section.key] ? ChevronDown : ChevronRight}
+              this={expanded[section.key] || sectionHasActive ? ChevronDown : ChevronRight}
               size={12} class="text-brand-200" />
           </button>
 
-          {#if expanded[section.key]}
+          {#if expanded[section.key] || sectionHasActive}
             <div class="mb-1">
               {#each section.items as item}
+                {@const active = isActive(item.href)}
                 <a href={item.href}
-                   class="flex items-center gap-2 pl-9 pr-3 min-h-[44px] rounded-lg
+                   class="relative flex items-center gap-2 pl-9 pr-3 min-h-[40px] rounded-lg
                           text-sm transition-colors duration-150
-                          {isActive(item.href)
+                          {active
                             ? 'text-white bg-brand-600 font-medium'
                             : 'text-brand-200 hover:text-white hover:bg-brand-700'}">
-                  <div class="w-1 h-1 rounded-full bg-current opacity-70
-                               flex-shrink-0"></div>
-                  {item.label}
+                  {#if active}<span class="absolute left-3.5 top-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-white"></span>{/if}
+                  <span>{item.label}</span>
                 </a>
               {/each}
             </div>
@@ -164,79 +428,96 @@
       {/each}
     </nav>
 
-    <!-- User card (anchored to the bottom, just above logout) -->
-    <div class="mt-auto px-3 pt-4 pb-2 border-t border-brand-700">
-      <div class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-brand-700/60">
-        <div class="w-9 h-9 rounded-full bg-brand-500 flex items-center
-                    justify-center text-sm font-bold text-white flex-shrink-0">
-          {initial}
-        </div>
-        <div class="min-w-0">
-          <div class="text-sm font-medium text-white truncate leading-tight" title={displayName}>
-            {displayName}
+    <!-- Drawer footer: user card + logout -->
+    <div class="border-t border-brand-700 flex-shrink-0">
+      <div class="px-3 pt-3 pb-2">
+        <div class="flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-brand-700/60">
+          <div class="w-9 h-9 rounded-full bg-brand-500 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
+            {initial}
           </div>
-          <div class="text-[11px] text-brand-200 leading-tight mt-0.5">{roleLabel}</div>
+          <div class="min-w-0 flex-1">
+            <div class="text-sm font-medium text-white truncate leading-tight" title={displayName}>{displayName}</div>
+            <div class="text-[11px] text-brand-200 leading-tight mt-0.5 flex items-center gap-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              {roleLabel}
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-
-    <!-- Logout (anchored at the very bottom) -->
-    <div class="px-3 pb-3">
-      <button on:click={async () => { await authStore.logout(); goto('/login'); }}
-              class="w-full flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg
-                     text-sm text-brand-100 hover:bg-brand-700 hover:text-white
-                     active:scale-[0.98]
-                     transition-colors duration-150">
-        <LogOut size={14} />
-        Cerrar Sesión
-      </button>
+      <div class="px-3 pb-3">
+        <button on:click={async () => { closeDrawer(); await authStore.logout(); goto('/login'); }}
+                class="w-full flex items-center gap-2.5 px-3 min-h-[44px] rounded-lg
+                       text-sm text-brand-100 hover:bg-brand-700 hover:text-white
+                       active:scale-[0.98] transition-colors duration-150">
+          <LogOut size={14} />
+          Cerrar Sesión
+        </button>
+      </div>
     </div>
   </aside>
 
-  <!-- MAIN -->
-  <div class="flex-1 flex flex-col overflow-hidden min-w-0">
-
-    <!-- Topbar (h-14 consistent across breakpoints) -->
-    <header class="h-14 bg-surface-card border-b border-slate-100 px-4 sm:px-6
-                   flex items-center justify-between flex-shrink-0 gap-2 sm:gap-3">
-
-      <div class="flex items-center gap-2 sm:gap-3 min-w-0">
-        <!-- Hamburger (only < md) -->
-        <button type="button" on:click={() => $sidebarOpen = true}
-                aria-label="Abrir menú"
-                class="md:hidden -ml-2 p-2.5 rounded-lg text-text-secondary
-                       hover:bg-slate-100 active:scale-95 transition
-                       min-h-[44px] min-w-[44px] flex items-center justify-center">
-          <Menu size={22} />
-        </button>
-
-        <!-- Breadcrumb (md+) / page title only (< md) -->
-        <div class="flex items-center gap-2 text-[13px] sm:text-xs text-text-muted min-w-0 leading-tight">
-          <span class="hidden md:inline">ISP Manager</span>
-          <span class="hidden md:inline">/</span>
-          <span class="text-text-primary font-medium truncate">{getTitle()}</span>
-        </div>
-      </div>
-
-      <!-- Right side: system indicator + user avatar -->
-      <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-        <div class="flex items-center gap-1.5" title="Sistema en línea">
-          <div class="w-2 sm:w-1.5 h-2 sm:h-1.5 bg-emerald-500 rounded-full"></div>
-          <span class="hidden sm:inline text-xs text-text-secondary">Sistema en línea</span>
-        </div>
-        <!-- User avatar (mobile-only — sidebar already shows it on md+) -->
-        <div class="md:hidden w-9 h-9 rounded-full bg-brand-600 flex items-center
-                    justify-center text-sm font-bold text-white"
-             title={displayName}>
-          {initial}
-        </div>
-      </div>
-    </header>
-
-    <!-- Content -->
-    <main class="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6">
-      <slot />
-    </main>
-  </div>
+  <!-- ─── Main content (always 100% width — no cap) ─── -->
+  <!-- We deliberately do NOT impose a max-width on <main>. The shell's job
+       is to maximise the workspace; each individual page decides if it wants
+       to centre its own column (forms typically max-w-4xl, lists go full
+       bleed). This is the structural change vs the old layout where the
+       sidebar permanently claimed ~256px of horizontal real estate.       -->
+  <main class="{$focusMode ? '' : 'px-3 sm:px-5 lg:px-8 py-4 sm:py-6'}">
+    <slot />
+  </main>
 </div>
+
+<!-- ── Command Palette ──────────────────────────────────────────────── -->
+{#if paletteOpen}
+  <div class="fixed inset-0 z-[60] flex items-start justify-center pt-[12vh] px-4
+              bg-slate-900/40 backdrop-blur-sm"
+       on:click|self={closePalette}
+       role="dialog" aria-label="Buscador y comandos">
+    <div class="w-full max-w-xl bg-surface-card rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+      <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-100">
+        <Search size={16} class="text-text-muted flex-shrink-0" />
+        <input type="text" placeholder="Buscar módulos, acciones, atajos…"
+               bind:value={paletteQuery}
+               bind:this={paletteInput}
+               on:keydown={onPaletteKey}
+               class="flex-1 bg-transparent border-0 focus:outline-none focus:ring-0
+                      text-sm text-text-primary placeholder:text-text-muted" />
+        <kbd class="text-[10px] font-medium px-1.5 py-0.5 rounded border border-slate-200 text-text-muted">Esc</kbd>
+      </div>
+
+      <div class="max-h-[50vh] overflow-y-auto py-1.5" role="listbox">
+        {#if paletteCommands.length === 0}
+          <div class="px-4 py-6 text-center text-sm text-text-muted">
+            Sin coincidencias para "{paletteQuery}"
+          </div>
+        {:else}
+          {#each paletteCommands as cmd, i}
+            <button type="button" role="option" aria-selected={i === paletteIndex}
+                    on:click={() => runCommand(cmd)}
+                    on:mouseenter={() => paletteIndex = i}
+                    class="w-full flex items-center gap-3 px-3 py-2 text-left rounded-lg
+                           mx-1.5 transition-colors
+                           {i === paletteIndex ? 'bg-brand-50 text-brand-800' : 'text-text-primary hover:bg-slate-50'}">
+              <span class="flex-1 text-sm font-medium truncate">{cmd.label}</span>
+              <span class="text-[10px] text-text-muted uppercase tracking-wider font-semibold">{cmd.group}</span>
+              {#if cmd.hint}<kbd class="text-[10px] font-medium px-1.5 py-0.5 rounded border border-slate-200 text-text-muted">{cmd.hint}</kbd>{/if}
+              <ArrowRight size={12} class="text-text-muted opacity-60" />
+            </button>
+          {/each}
+        {/if}
+      </div>
+
+      <div class="flex items-center justify-between px-3 py-2 border-t border-slate-100 bg-slate-50 text-[11px] text-text-muted">
+        <div class="flex items-center gap-2">
+          <kbd class="px-1.5 py-0.5 rounded border border-slate-200 bg-white">↑↓</kbd> navegar
+          <kbd class="px-1.5 py-0.5 rounded border border-slate-200 bg-white">Enter</kbd> ejecutar
+        </div>
+        <div class="flex items-center gap-1.5">
+          <kbd class="px-1.5 py-0.5 rounded border border-slate-200 bg-white">g</kbd> + letra para saltar
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <InstallPrompt />

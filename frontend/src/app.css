@@ -370,4 +370,38 @@
   .data-table tbody tr:hover .col-sticky-right {
     @apply bg-slate-50;
   }
+
+  /* ─── Density modes ───────────────────────────────────
+     The layout store writes `data-density="compact"` on <html>.
+     CSS hooks tighten padding / spacing globally without changing
+     colors or component identities. Default is "comfortable" — no
+     overrides — so existing components keep their current look.   */
+  :root[data-density="compact"] .card-body {
+    @apply px-3 sm:px-4 py-3 sm:py-3.5;
+  }
+  :root[data-density="compact"] .card-header {
+    @apply px-3 sm:px-4 py-2 sm:py-2.5;
+  }
+  :root[data-density="compact"] .data-table tbody td {
+    @apply py-1.5;
+  }
+  :root[data-density="compact"] .data-table thead th {
+    @apply py-2;
+  }
+  :root[data-density="compact"] .kpi-tile {
+    @apply px-2.5 py-2;
+  }
+  :root[data-density="compact"] .kpi-value {
+    @apply text-base;
+  }
+  :root[data-density="compact"] .page-header {
+    @apply mb-3 sm:mb-4;
+  }
+
+  /* ─── Topbar + Shell helpers ──────────────────────────
+     Small surface tweaks the shell relies on.                    */
+  kbd {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                 "Liberation Mono", "Courier New", monospace;
+  }
 }
