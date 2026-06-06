@@ -123,6 +123,22 @@ router.post('/:id/suspend', requireOperatorOrAdmin, validateParams(commonSchemas
 router.post('/:id/activate', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.activateService);
 router.post('/:id/change-plan', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(z.object({ planId: z.string() })), clientController.changePlan);
 
+// Bulk plan change — operator-driven mass assignment of a plan to N clients.
+// Per-router connection pooling + per-client transaction in the service.
+const bulkPlanChangeSchema = z.object({
+  clientIds:        z.array(z.string().min(1)).min(1, 'Debes seleccionar al menos un cliente').max(500),
+  planId:           z.string().min(1, 'Plan destino requerido'),
+  syncMikrotik:     z.boolean().optional(),
+  resetMonthlyFee:  z.boolean().optional(),
+  includeSuspended: z.boolean().optional()
+});
+router.post(
+  '/bulk-change-plan',
+  requireOperatorOrAdmin,
+  validateBody(bulkPlanChangeSchema),
+  clientController.bulkChangePlan
+);
+
 // Self-service update token generation. The public-facing GET/PUT/POST
 // that consume the token live under /api/v1/public/client-updates/*.
 const channelEnum = z.enum(['EMAIL', 'WHATSAPP', 'TELEGRAM']);

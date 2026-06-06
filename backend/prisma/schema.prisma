@@ -85,6 +85,7 @@ model User {
   sessions          Session[]
   clientUpdateTokens ClientUpdateToken[]
   payments          Payment[]
+  bulkOperations    BulkOperationLog[]
 
   @@map("users")
 }
@@ -717,4 +718,34 @@ model NetworkMapView {
   updatedBy String? // user.id of the last writer (audit)
 
   @@map("network_map_views")
+}
+
+// Audit log for operator-initiated bulk operations. Purpose-built (vs.
+// reusing NotificationLog which targets customers) so audit queries
+// stay clean: every row is a single operator action against N entities.
+//
+// `payload` captures what was requested (planId, syncMikrotik flag, etc.).
+// `results` captures per-entity outcome — array of
+// { entityId, status: 'ok' | 'noop' | 'skipped' | 'failed', changes?, reason? }
+// Storing both as JSON keeps the schema flexible as new bulk operations
+// (mass invoice generation, bulk profile sync, etc.) reuse this table.
+model BulkOperationLog {
+  id          String   @id @default(cuid())
+  // 'BULK_PLAN_CHANGE' for now. Extend as new ops land.
+  type        String
+  operatorId  String?
+  payload     Json
+  results     Json
+  // Quick-glance counters so the operator list view doesn't have to parse
+  // the JSON to render row badges.
+  totalCount  Int      @default(0)
+  okCount     Int      @default(0)
+  failedCount Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  operator User? @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+
+  @@index([type, createdAt])
+  @@index([operatorId])
+  @@map("bulk_operation_logs")
 }

@@ -4,6 +4,7 @@ import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { notificationService } from '../services/notification.service.js';
 import { getMikrotikService, getMikrotikServiceForClient } from '../services/mikrotik.service.js';
 import { generateToken as generateUpdateToken, dispatchLinkToClient } from '../services/client-update-token.service.js';
+import { bulkChangePlan } from '../services/bulk-plan-change.service.js';
 
 const MOROSO_LIST = 'Moroso';
 
@@ -1322,6 +1323,49 @@ class ClientsController {
       success: true,
       data: result
     });
+  });
+
+  // ── Bulk plan change ────────────────────────────────────────────────
+  // Operator-initiated mass assignment. Validations + per-router pooling
+  // + idempotency live in services/bulk-plan-change.service.js. We persist
+  // a BulkOperationLog row so the operator can review what they did and
+  // who they did it as later.
+  bulkChangePlan = asyncHandler(async (req, res) => {
+    const payload = {
+      clientIds:        req.body.clientIds || [],
+      planId:           req.body.planId,
+      syncMikrotik:     req.body.syncMikrotik     !== false,    // default true
+      resetMonthlyFee:  req.body.resetMonthlyFee  === true,     // default false
+      includeSuspended: req.body.includeSuspended === true      // default false
+    };
+
+    let result;
+    try {
+      result = await bulkChangePlan(payload);
+    } catch (e) {
+      // Service throws { code, status } on validation failures.
+      const status = Number.isInteger(e.status) ? e.status : 500;
+      return res.status(status).json({
+        success: false,
+        error: { code: e.code || 'BULK_PLAN_CHANGE_FAILED', message: e.message }
+      });
+    }
+
+    // Audit log — fire and forget. If logging fails we still ack the op
+    // (the work already happened) but warn in stderr.
+    await prisma.bulkOperationLog.create({
+      data: {
+        type:        'BULK_PLAN_CHANGE',
+        operatorId:  req.user?.id || null,
+        payload,
+        results:     result.results,
+        totalCount:  result.summary.total,
+        okCount:     (result.summary.ok || 0) + (result.summary.noop || 0),
+        failedCount: result.summary.failed || 0
+      }
+    }).catch(err => console.error('[bulk-plan-change] audit log failed:', err.message));
+
+    res.json({ success: true, data: result });
   });
 
   // ── Self-service update token ──────────────────────────────────────
