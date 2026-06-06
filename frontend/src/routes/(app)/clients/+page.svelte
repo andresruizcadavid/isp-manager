@@ -16,8 +16,10 @@
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import ResponsiveTable from '$lib/components/ui/ResponsiveTable.svelte';
+  import BulkPlanChangeModal from '$lib/components/clients/BulkPlanChangeModal.svelte';
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
+  import { Zap, CheckSquare, Square } from 'lucide-svelte';
 
   // ── Data ────────────────────────────────────────────
   let clients = [];
@@ -51,6 +53,83 @@
 
   // Per-row mobile menu (kebab) — only one open at a time
   let mobileMenuId = null;
+
+  // ── Bulk selection state ───────────────────────────
+  // selectionMode toggles the checkbox column + sticky action bar.
+  // selectedIds is a Set for O(1) lookup; we rebuild via reassignment
+  // to trigger Svelte reactivity.
+  let selectionMode = false;
+  let selectedIds   = new Set();
+  let showBulkPlanModal = false;
+
+  $: selectedCount = selectedIds.size;
+  $: pageAllSelected = clients.length > 0 && clients.every(c => selectedIds.has(c.id));
+  $: pageSomeSelected = clients.length > 0 && !pageAllSelected && clients.some(c => selectedIds.has(c.id));
+
+  function toggleSelectionMode() {
+    selectionMode = !selectionMode;
+    if (!selectionMode) selectedIds = new Set();
+  }
+  function toggleSelectOne(id) {
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else                     selectedIds.add(id);
+    selectedIds = new Set(selectedIds);
+  }
+  function toggleSelectPage() {
+    if (pageAllSelected) {
+      for (const c of clients) selectedIds.delete(c.id);
+    } else {
+      for (const c of clients) selectedIds.add(c.id);
+    }
+    selectedIds = new Set(selectedIds);
+  }
+  function clearSelection() { selectedIds = new Set(); }
+  async function selectAllFiltered() {
+    // For entry-point B and "select all matching filter": fetch every
+    // matching client (no pagination) and select them. Capped at 500 to
+    // match the backend zod schema.
+    try {
+      const params = { page: 1, limit: 500 };
+      if (q.trim()) params.search = q.trim();
+      if (status)   params.status = status;
+      if (planId)   params.planId = planId;
+      if (zoneId)   params.zoneId = zoneId;
+      const res = await clientsApi.getPage(params);
+      const ids = (res?.data || []).map(c => c.id);
+      selectedIds = new Set(ids);
+    } catch (e) {
+      error = e.message || 'No se pudo seleccionar todos los clientes filtrados';
+    }
+  }
+
+  // When opening the bulk modal we need FULL client objects for ALL selected
+  // IDs, not just the current page. We fetch them in one batched call so the
+  // preview has accurate plan/mikrotikAccount/monthlyFee even for off-page
+  // selections.
+  let bulkModalClients = [];
+  let bulkModalLoading = false;
+  async function openBulkPlanModal() {
+    if (selectedIds.size === 0) return;
+    bulkModalLoading = true;
+    try {
+      // Reuse search endpoint with limit big enough; selection is capped at 500.
+      const res = await clientsApi.getPage({ page: 1, limit: 500 });
+      const all = res?.data || [];
+      bulkModalClients = all.filter(c => selectedIds.has(c.id));
+      showBulkPlanModal = true;
+    } catch (e) {
+      error = e.message || 'No se pudieron cargar los clientes seleccionados';
+    } finally {
+      bulkModalLoading = false;
+    }
+  }
+
+  function onBulkPlanDone(e) {
+    showBulkPlanModal = false;
+    selectedIds = new Set();
+    selectionMode = false;
+    load(); // refresh
+  }
 
   // ── Modal state (create / edit only — view goes to /clients/[id]) ──
   let modalMode = null;
@@ -238,9 +317,18 @@
 
   onMount(async () => {
     // Pre-fill zone filter from ?zone=<id> (used by /zones page links)
+    // and ?bulk=zone:<id> (entry-point B: lands here with selection mode
+    // pre-armed for that zone's clients).
+    let autoBulkForZone = null;
     if (typeof window !== 'undefined') {
-      const urlZone = new URL(window.location.href).searchParams.get('zone');
+      const sp = new URL(window.location.href).searchParams;
+      const urlZone = sp.get('zone');
       if (urlZone) zoneId = urlZone;
+      const bulk = sp.get('bulk');
+      if (bulk?.startsWith('zone:')) {
+        autoBulkForZone = bulk.slice('zone:'.length);
+        zoneId = autoBulkForZone;
+      }
     }
     try {
       const [z, pl, r] = await Promise.all([
@@ -253,6 +341,10 @@
       routers = r || [];
     } catch {/* swallow — still load clients */}
     await load();
+    if (autoBulkForZone) {
+      selectionMode = true;
+      await selectAllFiltered();
+    }
   });
 
   // Debounced search
@@ -573,6 +665,13 @@
       </span>
     </div>
     <div class="flex items-center gap-1.5 sm:gap-2">
+      <button type="button" on:click={toggleSelectionMode}
+              title={selectionMode ? 'Salir del modo selección' : 'Activar modo selección para acción masiva'}
+              class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 min-h-[44px] sm:py-1.5 text-xs font-medium rounded-lg shadow-sm transition-colors border
+                     {selectionMode ? 'bg-brand-50 border-brand-300 text-brand-800' : 'bg-white border-slate-200 hover:border-brand-600 hover:text-brand-700 text-slate-700'}">
+        {#if selectionMode}<CheckSquare size={14} />{:else}<Square size={14} />{/if}
+        <span class="hidden xs:inline">{selectionMode ? 'Selección activa' : 'Selección'}</span>
+      </button>
       <button type="button" on:click={openImport}
               class="inline-flex items-center gap-1.5 px-2.5 sm:px-3 min-h-[44px] sm:py-1.5
                      bg-white border border-slate-200 hover:border-brand-600 hover:text-brand-700
@@ -728,6 +827,16 @@
                      tableClass={'data-table' + (density === 'cozy' ? ' density-cozy' : '')}>
       <thead slot="thead">
         <tr>
+          {#if selectionMode}
+            <th class="sticky-top w-10 text-center">
+              <input type="checkbox"
+                     checked={pageAllSelected}
+                     indeterminate={pageSomeSelected}
+                     on:change={toggleSelectPage}
+                     class="rounded border-slate-300 text-brand-600 focus:ring-brand-600/30"
+                     aria-label="Seleccionar / deseleccionar página" />
+            </th>
+          {/if}
           <th class="sortable sticky-top" on:click={() => toggleSort('name')}>
             <span class="inline-flex items-center gap-1">
               Cliente <svelte:component this={sortIcon('name')} size={11} />
@@ -753,7 +862,17 @@
       </thead>
       <tbody slot="tbody">
         {#each clients as client}
-            <tr>
+            <tr class={selectionMode && selectedIds.has(client.id) ? 'bg-brand-50/50' : ''}>
+              {#if selectionMode}
+                <td class="text-center w-10">
+                  <input type="checkbox"
+                         checked={selectedIds.has(client.id)}
+                         on:change={() => toggleSelectOne(client.id)}
+                         on:click|stopPropagation
+                         class="rounded border-slate-300 text-brand-600 focus:ring-brand-600/30"
+                         aria-label="Seleccionar {client.name}" />
+                </td>
+              {/if}
               <td>
                 <a href="/clients/{client.id}" class="flex items-center gap-3 group cursor-pointer">
                   <div class="avatar">{initials(client.name || client.fullName)}</div>
@@ -1587,4 +1706,50 @@
       </div>
     </div>
   </div>
+{/if}
+
+<!-- ─── Sticky bottom action bar (visible when selection has items) ─── -->
+{#if selectionMode && selectedCount > 0}
+  <div class="fixed bottom-0 inset-x-0 z-30 bg-brand-800 text-white shadow-2xl border-t border-brand-900"
+       role="region" aria-label="Acciones masivas">
+    <div class="max-w-screen-2xl mx-auto px-4 py-2.5 flex items-center gap-3 flex-wrap">
+      <div class="flex items-center gap-2 min-w-0">
+        <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-white/15 text-xs font-bold tabular-nums">
+          {selectedCount}
+        </span>
+        <span class="text-sm font-medium">
+          {selectedCount === 1 ? 'cliente seleccionado' : 'clientes seleccionados'}
+        </span>
+        <button type="button" on:click={selectAllFiltered}
+                class="ml-3 text-xs text-brand-100 hover:text-white underline underline-offset-2 hidden sm:inline">
+          Seleccionar todos los filtrados ({total})
+        </button>
+      </div>
+      <div class="flex items-center gap-2 ml-auto">
+        <button type="button" on:click={clearSelection}
+                class="text-xs text-brand-100 hover:text-white px-2 py-1 rounded">
+          Limpiar
+        </button>
+        <button type="button" on:click={openBulkPlanModal}
+                disabled={bulkModalLoading}
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-brand-800
+                       hover:bg-brand-50 text-xs font-semibold rounded-lg shadow-sm transition-colors disabled:opacity-60">
+          {#if bulkModalLoading}
+            <Loader2 size={14} class="animate-spin" />
+          {:else}
+            <Zap size={14} />
+          {/if}
+          Cambiar plan…
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showBulkPlanModal}
+  <BulkPlanChangeModal
+    clients={bulkModalClients}
+    plans={plans}
+    on:close={() => showBulkPlanModal = false}
+    on:done={onBulkPlanDone} />
 {/if}

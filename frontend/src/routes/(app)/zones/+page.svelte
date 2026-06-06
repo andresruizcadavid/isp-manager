@@ -210,12 +210,20 @@
               </span>
             </div>
           </div>
-          <div class="mt-3 flex items-center gap-3">
+          <div class="mt-3 flex items-center gap-3 flex-wrap">
             <a href="/clients?zone={zone.id}"
                class="inline-flex items-center gap-1 text-xs text-blue-600
                       hover:underline">
               👥 Ver clientes →
             </a>
+            {#if (zone.clientCount || 0) > 0}
+              <a href="/clients?bulk=zone:{zone.id}"
+                 class="inline-flex items-center gap-1 text-xs text-brand-700
+                        hover:underline"
+                 title="Abre la lista de clientes con esta zona pre-seleccionada para asignar plan masivo">
+                ⚡ Cambiar plan masivo
+              </a>
+            {/if}
             {#if zone.router}
               <a href="/clients/new?zone_id={zone.id}"
                  class="inline-flex items-center gap-1 text-xs text-emerald-700
