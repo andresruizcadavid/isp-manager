@@ -84,8 +84,8 @@
       {#if loading}<Loader2 size={14} class="animate-spin" />{:else}<RefreshCw size={14} />{/if}
       Recargar
     </button>
-    <a href="/clients" class="btn-secondary">
-      <ArrowLeft size={14} /> Volver a Clientes
+    <a href="/invoices" class="btn-secondary">
+      <ArrowLeft size={14} /> Volver a Facturas
     </a>
   </div>
 </div>
@@ -111,8 +111,8 @@
       <p class="text-xs text-text-muted mt-1">
         Cuando uses el botón "Cambiar plan…" desde la lista de clientes, cada operación quedará registrada aquí.
       </p>
-      <a href="/clients" class="btn-secondary inline-flex mt-4">
-        <ArrowLeft size={14} /> Ir a Clientes
+      <a href="/invoices" class="btn-secondary inline-flex mt-4">
+        <ArrowLeft size={14} /> Ir a Facturas
       </a>
     </div>
   {:else}

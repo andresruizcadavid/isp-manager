@@ -320,7 +320,7 @@
                 · {resultData?.summary?.failed || 0} fallido{(resultData?.summary?.failed || 0) === 1 ? '' : 's'}
               </p>
             </div>
-            <a href="/clients/bulk-history" class="text-xs text-brand-700 hover:underline font-medium whitespace-nowrap">
+            <a href="/invoices/bulk-history" class="text-xs text-brand-700 hover:underline font-medium whitespace-nowrap">
               Ver historial →
             </a>
           </div>

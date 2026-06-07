@@ -471,41 +471,78 @@ class InvoicesController {
     });
   });
 
+  // Aggregate KPIs across the FULL filtered set (not the current page).
+  // Accepts the same query params as getInvoices so the frontend can fetch
+  // both endpoints with the same filter object and the KPI numbers always
+  // match what the operator can see by paging through the list.
+  //
+  // Calls reduce to ~5 prisma queries that run in parallel.
   getInvoiceStats = asyncHandler(async (req, res) => {
-    const [total, byStatus, totalAmount, paidAmount] = await Promise.all([
-      prisma.invoice.count(),
+    const { search, status, clientId, dueDateFrom, dueDateTo, amountMin, amountMax } = req.query;
+
+    const where = {
+      ...(status   && { status }),
+      ...(clientId && { clientId }),
+      ...(dueDateFrom && dueDateTo && {
+        dueDate: { gte: new Date(dueDateFrom), lte: new Date(dueDateTo) }
+      }),
+      ...(amountMin && amountMax && {
+        amount: { gte: Number(amountMin) * 100, lte: Number(amountMax) * 100 }
+      }),
+      ...(search && {
+        OR: [
+          { invoiceNumber:   { contains: search, mode: 'insensitive' } },
+          { client: { name:           { contains: search, mode: 'insensitive' } } },
+          { client: { documentNumber: { contains: search, mode: 'insensitive' } } }
+        ]
+      })
+    };
+
+    const now = new Date();
+
+    // Two queries: one groupBy (respects the user-supplied `where`,
+    // including any operator status filter) + one overdue-by-date
+    // sub-aggregate. Per-status counts/sums are derived from byStatus so
+    // a `?status=PAID` filter cleanly reports "pending: 0" instead of
+    // ignoring the filter.
+    const [total, byStatus, overdueAgg] = await Promise.all([
+      prisma.invoice.count({ where }),
       prisma.invoice.groupBy({
         by: ['status'],
+        where,
         _count: true,
-        _sum: { amount: true }
+        _sum: { total: true, balanceDue: true }
       }),
       prisma.invoice.aggregate({
-        _sum: { amount: true }
-      }),
-      prisma.invoice.aggregate({
-        where: { status: 'PAID' },
-        _sum: { amount: true }
+        where: { ...where, status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] }, dueDate: { lt: now } },
+        _sum:  { balanceDue: true }
       })
     ]);
 
-    const overdueAmount = await prisma.invoice.aggregate({
-      where: {
-        status: { in: ['PENDING', 'OVERDUE'] },
-        dueDate: { lt: new Date() }
-      },
-      _sum: { amount: true }
-    });
+    const counts = Object.fromEntries(byStatus.map(b => [b.status, b._count]));
+    const sumsTotal      = Object.fromEntries(byStatus.map(b => [b.status, b._sum.total      || 0]));
+    const sumsBalanceDue = Object.fromEntries(byStatus.map(b => [b.status, b._sum.balanceDue || 0]));
+
+    const pending = (counts.PENDING || 0) + (counts.PARTIAL || 0);
+    const paid    = counts.PAID || 0;
+    const outstandingAmount =
+      (sumsBalanceDue.PENDING || 0) +
+      (sumsBalanceDue.PARTIAL || 0) +
+      (sumsBalanceDue.OVERDUE || 0);
+    const paidAmount = sumsTotal.PAID || 0;
 
     res.json({
       success: true,
       data: {
         total,
         byStatus,
-        totalAmount: totalAmount._sum.amount || 0,
-        paidAmount: paidAmount._sum.amount || 0,
-        overdueAmount: overdueAmount._sum.amount || 0,
-        collectionRate: totalAmount._sum.amount > 0 
-          ? (paidAmount._sum.amount || 0) / totalAmount._sum.amount * 100 
+        pending,
+        paid,
+        outstandingAmount,
+        overdueAmount: overdueAgg._sum.balanceDue || 0,
+        paidAmount,
+        collectionRate: (paidAmount + outstandingAmount) > 0
+          ? Math.round((paidAmount / (paidAmount + outstandingAmount)) * 100)
           : 0
       }
     });

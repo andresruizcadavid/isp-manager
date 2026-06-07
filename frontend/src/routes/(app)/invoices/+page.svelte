@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { invoicesApi } from '$lib/api/invoices.api.js';
+  import { api } from '$lib/api/client.js';
   import {
     Search, FileText, Eye, AlertCircle,
     Wallet, Clock, CheckCircle2, AlertTriangle
@@ -11,18 +12,31 @@
   let loading = true;
   let error = '';
 
+  // KPI stats — pulled from /invoices/stats/overview with the same filters
+  // the table query uses. The numbers always match the full filtered set,
+  // never the visible page. Empty object until the first response lands.
+  let stats = {};
+  let statsLoading = false;
+
   let q = '';
   let status = '';
   let page = 1;
   const pageSize = 20;
   let searchTimer;
 
+  /** Build the shared filter object used by BOTH the list query and the
+   *  stats query. Single source of truth so they can't drift. */
+  function buildFilterParams() {
+    const p = {};
+    if (q.trim()) p.search = q.trim();
+    if (status)   p.status = status;
+    return p;
+  }
+
   async function load() {
     loading = true; error = '';
     try {
-      const params = { page, limit: pageSize };
-      if (q.trim()) params.search = q.trim();
-      if (status)   params.status = status;
+      const params = { page, limit: pageSize, ...buildFilterParams() };
       const res = await invoicesApi.getPage(params);
       invoices = res?.data ?? [];
       total    = res?.meta?.total ?? invoices.length;
@@ -30,22 +44,48 @@
       error = e.message || 'Error al cargar facturas';
     } finally { loading = false; }
   }
-  onMount(load);
+
+  /** Aggregate KPIs for the FULL filtered set. Run in parallel with load(). */
+  async function loadStats() {
+    statsLoading = true;
+    try {
+      const qs = new URLSearchParams(buildFilterParams()).toString();
+      stats = await api.get(`/invoices/stats/overview${qs ? '?' + qs : ''}`);
+    } catch (e) {
+      // Non-fatal: leave previous stats in place + flag.
+      console.error('stats load failed:', e.message);
+    } finally { statsLoading = false; }
+  }
+
+  function reloadAll() {
+    page = 1;
+    load();
+    loadStats();
+  }
+
+  onMount(() => { load(); loadStats(); });
 
   function onSearchInput() {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => { page = 1; load(); }, 300);
+    searchTimer = setTimeout(reloadAll, 300);
   }
-  function onStatusChange() { page = 1; load(); }
+  function onStatusChange() { reloadAll(); }
 
   $: totalPages = Math.max(1, Math.ceil(total / pageSize));
-  function setPage(p) { if (p < 1 || p > totalPages || p === page) return; page = p; load(); }
+  function setPage(p) {
+    if (p < 1 || p > totalPages || p === page) return;
+    page = p;
+    load();
+    // No need to reload stats on page change — they don't depend on page.
+  }
 
-  // KPIs derived from current page
-  $: kpiTotal      = total;
-  $: kpiPending    = invoices.filter(i => i.status === 'PENDING').length;
-  $: kpiPaid       = invoices.filter(i => i.status === 'PAID').length;
-  $: kpiPendingAmt = invoices.filter(i => i.status === 'PENDING' || i.status === 'OVERDUE').reduce((s,i) => s + (i.total || 0), 0);
+  // KPIs sourced from the stats endpoint (server-side aggregate over the
+  // full filtered set). Fallback to 0 while the first call is in flight.
+  $: kpiTotal      = stats?.total            ?? 0;
+  $: kpiPending    = stats?.pending          ?? 0;
+  $: kpiPaid       = stats?.paid             ?? 0;
+  $: kpiPendingAmt = stats?.outstandingAmount ?? 0;
+  $: hasFilters    = !!(q.trim() || status);
 
   function fmtMoney(cents) {
     if (cents == null) return '—';
@@ -64,42 +104,50 @@
 <div class="page-header">
   <div>
     <h1 class="page-title">Facturas</h1>
-    <p class="page-subtitle">{total} {total === 1 ? 'factura' : 'facturas'} en el sistema</p>
+    <p class="page-subtitle">
+      {total} {total === 1 ? 'factura' : 'facturas'}
+      {#if hasFilters}<span class="text-amber-700 font-medium">· filtros activos</span>{:else}<span>en el sistema</span>{/if}
+    </p>
   </div>
 </div>
 
-<!-- KPI strip -->
+<!-- KPI strip — values are SERVER aggregates over the filtered set,
+     not derived from the visible page. -->
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   <div class="kpi-tile">
     <div class="icon-square-blue"><FileText size={14} /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Total</div>
       <div class="kpi-value">{kpiTotal}</div>
-      <div class="kpi-sub">Facturas en sistema</div>
+      <div class="kpi-sub">{hasFilters ? 'Coinciden con filtros' : 'Facturas en sistema'}</div>
     </div>
   </div>
   <div class="kpi-tile">
     <div class="icon-square-amber"><Clock size={14} /></div>
     <div class="kpi-tile-text">
-      <div class="kpi-label">Pendientes (página)</div>
+      <div class="kpi-label">Pendientes</div>
       <div class="kpi-value">{kpiPending}</div>
-      <div class="kpi-sub">Por cobrar</div>
+      <div class="kpi-sub">Pendiente + parcial</div>
     </div>
   </div>
   <div class="kpi-tile">
     <div class="icon-square-green"><CheckCircle2 size={14} /></div>
     <div class="kpi-tile-text">
-      <div class="kpi-label">Pagadas (página)</div>
+      <div class="kpi-label">Pagadas</div>
       <div class="kpi-value">{kpiPaid}</div>
-      <div class="kpi-sub">Este conjunto</div>
+      <div class="kpi-sub">{stats?.collectionRate != null ? `${stats.collectionRate}% cobrado` : 'Cobradas'}</div>
     </div>
   </div>
   <div class="kpi-tile">
     <div class="icon-square-rose"><Wallet size={14} /></div>
     <div class="kpi-tile-text">
-      <div class="kpi-label">Cobranza (página)</div>
+      <div class="kpi-label">Cobranza</div>
       <div class="kpi-value">{fmtMoney(kpiPendingAmt)}</div>
-      <div class="kpi-sub">Pendiente + vencida</div>
+      <div class="kpi-sub">
+        {#if stats?.overdueAmount > 0}
+          <span class="text-red-600 font-medium">{fmtMoney(stats.overdueAmount)} vencida</span>
+        {:else}Saldo por cobrar{/if}
+      </div>
     </div>
   </div>
 </div>

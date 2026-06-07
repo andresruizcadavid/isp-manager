@@ -7,7 +7,7 @@
   import {
     ArrowLeft, FileText, CreditCard, Download, Send, Loader2, Receipt,
     CheckCircle2, AlertCircle, Calendar, User, MapPin, Wifi, Image as ImageIcon,
-    Upload, ExternalLink, Phone, Mail, Banknote, Eye, X
+    Upload, ImageUp, ExternalLink, Phone, Mail, Banknote, Eye, X
   } from 'lucide-svelte';
 
   // ── State ────────────────────────────────────────────────────────────
@@ -28,6 +28,8 @@
   let payDate        = '';
   let payNotes       = '';
   let payFile        = null;       // single evidence file (optional)
+  let payFilePreview = null;       // object URL (image only) or null for PDFs
+  let payFileError   = '';         // client-side validation message
 
   // ── Constants ────────────────────────────────────────────────────────
   const STATUS_PT = {
@@ -177,14 +179,42 @@
     payDate   = new Date().toISOString().slice(0,10);
     payNotes  = '';
     payFile   = null;
+    payFilePreview = null;
+    payFileError   = '';
     showPayModal = true;
   }
   function closePayModal() {
     if (paySubmitting) return;
+    if (payFilePreview && payFilePreview.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
+    payFilePreview = null;
     showPayModal = false;
   }
+
+  // Two entry points (file picker + mobile camera) write through this
+  // single handler so validation + preview stay consistent.
+  const ACCEPTED_EVIDENCE_MIME = ['image/jpeg','image/png','image/webp','image/heic','image/heif','application/pdf'];
+  const MAX_EVIDENCE_BYTES     = 8 * 1024 * 1024;   // 8 MB
   function onPayFile(e) {
-    payFile = e.target.files?.[0] || null;
+    payFileError = '';
+    const file = e.target?.files?.[0] || null;
+    if (!file) { payFile = null; payFilePreview = null; return; }
+    if (!ACCEPTED_EVIDENCE_MIME.includes(file.type)) {
+      payFileError = 'Tipo de archivo no permitido. Usa JPG / PNG / WebP / HEIC / PDF.';
+      e.target.value = ''; return;
+    }
+    if (file.size > MAX_EVIDENCE_BYTES) {
+      payFileError = `Archivo muy grande (${(file.size/1024/1024).toFixed(1)} MB). Máximo 8 MB.`;
+      e.target.value = ''; return;
+    }
+    payFile = file;
+    if (payFilePreview && payFilePreview.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
+    payFilePreview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+  }
+  function clearPayFile() {
+    if (payFilePreview && payFilePreview.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
+    payFile = null;
+    payFilePreview = null;
+    payFileError = '';
   }
 
   async function submitPayment() {
@@ -735,13 +765,66 @@
           </div>
 
           <div>
-            <label for="pay-file" class="label flex items-center gap-1.5">
-              <Upload size={13} /> Comprobante (opcional)
-            </label>
-            <input id="pay-file" type="file" accept="image/*,application/pdf"
-                   on:change={onPayFile} class="text-sm" />
-            {#if payFile}
-              <div class="text-xs text-text-muted mt-1">{payFile.name} · {(payFile.size / 1024).toFixed(1)} KB</div>
+            <div class="label flex items-center gap-1.5 !mb-2">
+              <Upload size={13} /> Comprobante de pago
+              <span class="text-text-muted font-normal">(opcional)</span>
+            </div>
+
+            {#if payFilePreview}
+              <!-- Image preview with replace / remove -->
+              <div class="relative rounded-lg border border-slate-200 overflow-hidden">
+                <img src={payFilePreview} alt="Vista previa del comprobante"
+                     class="w-full max-h-56 object-contain bg-slate-50" />
+                <button type="button" on:click={clearPayFile}
+                        title="Quitar"
+                        class="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-white shadow-md border border-slate-200
+                               flex items-center justify-center hover:bg-red-50 hover:border-red-200 hover:text-red-700 transition">
+                  <X size={14} />
+                </button>
+              </div>
+              <div class="text-xs text-text-muted mt-1 flex items-center justify-between">
+                <span class="truncate">{payFile?.name}</span>
+                <span class="tabular-nums">{(payFile?.size / 1024).toFixed(1)} KB</span>
+              </div>
+            {:else if payFile}
+              <!-- Non-image (PDF) — no preview, just file chip -->
+              <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50">
+                <FileText size={16} class="text-slate-500 flex-shrink-0" />
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-medium text-text-primary truncate">{payFile.name}</div>
+                  <div class="text-[11px] text-text-muted tabular-nums">{(payFile.size / 1024).toFixed(1)} KB</div>
+                </div>
+                <button type="button" on:click={clearPayFile} class="btn-icon">
+                  <X size={14} />
+                </button>
+              </div>
+            {:else}
+              <!-- Two-button picker — camera (mobile) + file (any device) -->
+              <div class="grid grid-cols-2 gap-2">
+                <label class="flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg border border-slate-200
+                              hover:border-brand-300 hover:bg-brand-50/30 cursor-pointer transition-colors text-xs font-medium text-text-primary">
+                  <ImageUp size={14} class="text-brand-600" />
+                  <span>Tomar foto</span>
+                  <input type="file" accept="image/*" capture="environment"
+                         on:change={onPayFile} class="hidden" />
+                </label>
+                <label class="flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg border border-slate-200
+                              hover:border-slate-300 hover:bg-slate-50 cursor-pointer transition-colors text-xs font-medium text-text-primary">
+                  <Upload size={14} class="text-slate-500" />
+                  <span>Subir archivo</span>
+                  <input type="file" accept="image/*,application/pdf"
+                         on:change={onPayFile} class="hidden" />
+                </label>
+              </div>
+              <p class="text-[11px] text-text-muted mt-1.5">
+                Imagen (JPG / PNG / WebP / HEIC) o PDF. Máx. 8 MB.
+              </p>
+            {/if}
+
+            {#if payFileError}
+              <div class="mt-1.5 text-xs text-red-600 flex items-center gap-1.5">
+                <AlertCircle size={12} /> {payFileError}
+              </div>
             {/if}
           </div>
 

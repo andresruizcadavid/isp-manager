@@ -79,10 +79,13 @@ export const NAV_ITEMS = [
     href: '/zones', roles: OPERATIONAL_TIER,
     match: ['/zones', under('/zones')] },
 
-  { id: 'clients-bulk-history', type: 'item', parentId: 'group-clients',
-    label: 'Historial masivo', title: 'Historial de cambios masivos',
-    href: '/clients/bulk-history', roles: ADMIN_TIER,
-    match: ['/clients/bulk-history'] },
+  // Moved from Clientes → Finanzas (objective 3 of the collections sweep):
+  // bulk operations on customers are financial flows operationally; their
+  // history belongs alongside Facturas / Pagos / Ventanas de cobranza.
+  { id: 'invoices-bulk-history', type: 'item', parentId: 'group-finance',
+    label: 'Historial masivo', title: 'Historial de cobros masivos',
+    href: '/invoices/bulk-history', roles: ADMIN_TIER,
+    match: ['/invoices/bulk-history'] },
 
   // ── Finanzas ─────────────────────────────────────────────────────
   { id: 'group-finance', type: 'group',
@@ -110,6 +113,14 @@ export const NAV_ITEMS = [
     label: 'Ventanas de cobranza', title: 'Ventanas de cobranza',
     href: '/invoices/collection-windows', roles: ADMIN_TIER,
     match: ['/invoices/collection-windows', /^\/invoices\/collection-windows\/[^/]+$/] },
+
+  // Month-driven mass billing flow (FASE 2 hybrid — selection-driven
+  // version remains in /clients via the modal). Strict match so the
+  // parent /invoices regex doesn't shadow it.
+  { id: 'bulk-billing', type: 'item', parentId: 'group-finance',
+    label: 'Cobro masivo', title: 'Cobro masivo por mes',
+    href: '/invoices/bulk-billing', roles: ADMIN_TIER,
+    match: ['/invoices/bulk-billing'] },
 
   // ── Sistema ──────────────────────────────────────────────────────
   { id: 'group-system', type: 'group',
