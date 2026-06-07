@@ -611,6 +611,73 @@
   </div>
 {:else}
 
+<!-- Debt banner — only when the client owes something. Red, prominent,
+     lists every unpaid period so the operator can decide what to charge. -->
+{#if pendingAmount > 0}
+  {@const MONTHS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']}
+  <div class="mb-4 sm:mb-6 rounded-xl border border-red-200 bg-gradient-to-r from-red-50 to-red-50/40 overflow-hidden">
+    <div class="px-4 sm:px-5 py-3 sm:py-4 flex flex-wrap items-start gap-3 sm:gap-4 justify-between">
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
+          <h3 class="text-sm sm:text-base font-bold text-red-800 uppercase tracking-wider">
+            Cliente en deuda
+          </h3>
+          <span class="text-xs sm:text-sm text-red-900 font-mono tabular-nums">
+            · {fmtMoney(pendingAmount)} pendientes
+          </span>
+        </div>
+        <div class="text-xs sm:text-[13px] text-red-700/90 mt-1.5">
+          {pendingInvoices.length} {pendingInvoices.length === 1 ? 'factura' : 'facturas'} sin pagar
+          {#if pendingInvoices.some(i => i.status === 'OVERDUE')}
+            · {pendingInvoices.filter(i => i.status === 'OVERDUE').length} vencida{pendingInvoices.filter(i => i.status === 'OVERDUE').length === 1 ? '' : 's'}
+          {/if}
+        </div>
+      </div>
+      {#if pendingInvoices.length > 0}
+        <button on:click={openPayment}
+                class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg
+                       bg-red-600 hover:bg-red-700 text-white text-xs font-semibold
+                       shadow-sm transition-colors">
+          <CreditCard size={14} /> Registrar pago
+        </button>
+      {/if}
+    </div>
+    <!-- Per-month detail. Ordered by periodYear+periodMonth from the API include. -->
+    <div class="px-4 sm:px-5 pb-3 sm:pb-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+      {#each pendingInvoices as inv}
+        {@const labelMonth = inv.periodMonth ? MONTHS[inv.periodMonth - 1] : null}
+        {@const isOverdue  = inv.status === 'OVERDUE'}
+        {@const isPartial  = inv.status === 'PARTIAL'}
+        <a href="/invoices/{inv.id}"
+           class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border bg-white/70 hover:bg-white transition-colors
+                  {isOverdue ? 'border-red-300' : 'border-red-100'}"
+           title="Factura {inv.invoiceNumber || ''} — clic para ver detalle">
+          <div class="min-w-0">
+            <div class="text-[11px] sm:text-xs font-semibold text-red-900 uppercase tracking-wider">
+              {#if labelMonth}{labelMonth} {inv.periodYear}
+              {:else}{fmtDate(inv.dueDate)}{/if}
+            </div>
+            <div class="text-[10px] sm:text-[11px] mt-0.5 inline-flex items-center gap-1">
+              <span class="px-1.5 py-0.5 rounded font-medium
+                           {isOverdue ? 'bg-red-200 text-red-800'
+                            : isPartial ? 'bg-amber-100 text-amber-700'
+                            : 'bg-red-100 text-red-700'}">
+                {#if isOverdue}vencida
+                {:else if isPartial}parcial
+                {:else}pendiente{/if}
+              </span>
+            </div>
+          </div>
+          <div class="text-right tabular-nums font-mono text-xs sm:text-sm font-semibold text-red-900">
+            {fmtMoney(inv.balanceDue > 0 ? inv.balanceDue : (inv.total || inv.amount))}
+          </div>
+        </a>
+      {/each}
+    </div>
+  </div>
+{/if}
+
 <!-- KPI strip (design-system .kpi-tile) -->
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
   <div class="kpi-tile">

@@ -10,10 +10,22 @@ const MOROSO_LIST = 'Moroso';
 
 class ClientsController {
   getClients = asyncHandler(async (req, res) => {
-    const { page = 1, limit = 10, search, sortBy = 'createdAt', sortOrder = 'desc', status, planId, zoneId, city } = req.query;
+    const { page = 1, limit = 10, search, sortBy = 'createdAt', sortOrder = 'desc', status, planId, zoneId, city, debtors } = req.query;
     const pageNum = Number(page);
     const limitNum = Number(limit);
     const skip = (pageNum - 1) * limitNum;
+
+    // Debt filter — "?debtors=true" returns only clients that currently
+    // have at least one unpaid invoice with a positive balance. Derived
+    // on the fly from Invoice rows (no denormalized field on Client).
+    const debtorsFilter = (debtors === 'true' || debtors === true) ? {
+      invoices: {
+        some: {
+          status:     { in: ['PENDING', 'OVERDUE', 'PARTIAL'] },
+          balanceDue: { gt: 0 }
+        }
+      }
+    } : {};
 
     const where = {
       ...(search && {
@@ -27,7 +39,8 @@ class ClientsController {
       ...(status && { status }),
       ...(planId && { planId }),
       ...(zoneId && { zoneId: Number(zoneId) }),
-      ...(city && { city: { contains: city, mode: 'insensitive' } })
+      ...(city && { city: { contains: city, mode: 'insensitive' } }),
+      ...debtorsFilter
     };
 
     const [clients, total] = await Promise.all([
@@ -88,8 +101,18 @@ class ClientsController {
               total: true,
               amount: true,
               balanceDue: true,
-              dueDate: true
-            }
+              dueDate: true,
+              // Period info lets the frontend render "Meses adeudados"
+              // without a second query.
+              periodYear:  true,
+              periodMonth: true,
+              invoiceNumber: true
+            },
+            orderBy: [
+              { periodYear: 'asc' },
+              { periodMonth: 'asc' },
+              { dueDate: 'asc' }
+            ]
           },
           _count: {
             select: {

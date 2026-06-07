@@ -35,6 +35,9 @@
   let status  = '';
   let planId  = '';
   let zoneId  = '';
+  // Fase 1 cobranzas: cuando está ON, la API filtra a clientes con
+  // al menos una factura sin pagar y balanceDue > 0.
+  let debtorsOnly = false;
   let sortBy  = 'createdAt';
   let sortDir = 'desc';
   let page    = 1;
@@ -317,10 +320,11 @@
     loading = true; error = '';
     try {
       const params = { page, limit: pageSize, sortBy, sortOrder: sortDir };
-      if (q.trim())  params.search = q.trim();
-      if (status)    params.status = status;
-      if (planId)    params.planId = planId;
-      if (zoneId)    params.zoneId = zoneId;
+      if (q.trim())     params.search  = q.trim();
+      if (status)       params.status  = status;
+      if (planId)       params.planId  = planId;
+      if (zoneId)       params.zoneId  = zoneId;
+      if (debtorsOnly)  params.debtors = 'true';
       const res = await clientsApi.getPage(params);
       clients = res?.data ?? [];
       total   = res?.meta?.total ?? clients.length;
@@ -798,9 +802,18 @@
           <option value={z.id}>{z.name}{z.routerId ? '' : ' ⚠️'}</option>
         {/each}
       </select>
-      {#if q || status || planId || zoneId}
+      <!-- Solo deudores: toggle pill aligned with the other filter selects -->
+      <button type="button"
+              on:click={() => { debtorsOnly = !debtorsOnly; onFilterChange(); }}
+              title="Mostrar solo clientes con deuda pendiente"
+              class="hidden md:inline-flex items-center gap-1 px-2 h-7 rounded-md border text-xs font-medium transition-colors
+                     {debtorsOnly ? 'bg-red-50 border-red-300 text-red-700 hover:bg-red-100' : 'bg-white border-slate-200 text-slate-700 hover:border-red-300 hover:text-red-700'}">
+        <span class="w-1.5 h-1.5 rounded-full {debtorsOnly ? 'bg-red-500' : 'bg-slate-300'}"></span>
+        Solo deudores
+      </button>
+      {#if q || status || planId || zoneId || debtorsOnly}
         <button class="hidden md:inline-flex text-xs text-slate-500 hover:text-slate-700 px-1.5"
-                on:click={() => { q=''; status=''; planId=''; zoneId=''; page=1; load(); }}>
+                on:click={() => { q=''; status=''; planId=''; zoneId=''; debtorsOnly=false; page=1; load(); }}>
           Limpiar
         </button>
       {/if}
@@ -878,7 +891,13 @@
       </thead>
       <tbody slot="tbody">
         {#each clients as client}
-            <tr class={selectionMode && selectedIds.has(client.id) ? 'bg-brand-50/50' : ''}>
+            {@const inDebt = (client.pendingAmount || 0) > 0}
+            {@const debtMonths = client.pendingInvoices?.length || 0}
+            <tr class={
+                  selectionMode && selectedIds.has(client.id)
+                    ? 'bg-brand-50/50'
+                    : (inDebt ? 'bg-red-50/40 hover:bg-red-50/60' : '')
+                }>
               {#if selectionMode}
                 <td class="text-center w-10">
                   <input type="checkbox"
@@ -924,13 +943,29 @@
               <td class="text-right font-mono text-xs whitespace-nowrap">{fmtMoney(client.balance)}</td>
               <td>
                 {#if client.paymentStatus === 'OVERDUE'}
-                  <span class="badge bg-red-50 text-red-700 ring-red-100" title="Factura vencida">
-                    Vencida
-                  </span>
+                  <div class="flex flex-col items-start gap-0.5">
+                    <span class="badge bg-red-100 text-red-800 ring-red-200 font-semibold inline-flex items-center gap-1"
+                          title="Deuda vencida — {fmtMoney(client.pendingAmount || 0)}">
+                      <span class="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse"></span>
+                      En deuda · {fmtMoney(client.pendingAmount || 0)}
+                    </span>
+                    {#if debtMonths > 0}
+                      <span class="text-[10px] text-red-700/80 font-medium">
+                        {debtMonths} {debtMonths === 1 ? 'mes' : 'meses'} adeudado{debtMonths === 1 ? '' : 's'}
+                      </span>
+                    {/if}
+                  </div>
                 {:else if client.paymentStatus === 'PENDING'}
-                  <span class="badge bg-amber-50 text-amber-700 ring-amber-100 tabular-nums" title="Saldo pendiente">
-                    {fmtMoney(client.pendingAmount || 0)}
-                  </span>
+                  <div class="flex flex-col items-start gap-0.5">
+                    <span class="badge bg-amber-50 text-amber-700 ring-amber-100 tabular-nums" title="Saldo pendiente">
+                      {fmtMoney(client.pendingAmount || 0)}
+                    </span>
+                    {#if debtMonths > 0}
+                      <span class="text-[10px] text-amber-700/80">
+                        {debtMonths} {debtMonths === 1 ? 'factura' : 'facturas'} por cobrar
+                      </span>
+                    {/if}
+                  </div>
                 {:else}
                   <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100">
                     ✓ Al día
@@ -1130,6 +1165,17 @@
           <option value={z.id}>{z.name}{z.routerId ? '' : ' ⚠️'}</option>
         {/each}
       </select>
+    </div>
+    <div>
+      <label class="flex items-center gap-2 p-2.5 rounded-lg border cursor-pointer
+                    {debtorsOnly ? 'border-red-300 bg-red-50' : 'border-slate-200 hover:border-red-300'}">
+        <input type="checkbox" bind:checked={debtorsOnly}
+               on:change={() => onFilterChange()}
+               class="rounded border-slate-300 text-red-600 focus:ring-red-600/30" />
+        <span class="text-sm font-medium {debtorsOnly ? 'text-red-700' : 'text-text-primary'}">
+          Solo deudores
+        </span>
+      </label>
     </div>
     <div>
       <label class="label">Densidad</label>

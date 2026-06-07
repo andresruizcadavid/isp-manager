@@ -90,7 +90,11 @@ const updateClientSchema = createClientSchema.partial();
 const clientQuerySchema = commonSchemas.pagination.extend({
   status: z.enum(['ACTIVE', 'SUSPENDED', 'INACTIVE', 'PENDING']).optional(),
   planId: z.string().optional(),
-  city: z.string().optional()
+  zoneId: z.string().optional(),                 // was already being read by the controller
+  city:   z.string().optional(),
+  // Fase 1 (cobranzas): "?debtors=true" filters to clients with at least
+  // one unpaid invoice with positive balanceDue. Coerced from string.
+  debtors: z.enum(['true', 'false']).optional()
 });
 
 const deviceSchema = z.object({
