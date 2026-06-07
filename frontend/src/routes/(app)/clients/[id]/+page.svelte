@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { api } from '$lib/api/client.js';
-  import { paymentsApi } from '$lib/api/payments.api.js';
   import { evidenceApi } from '$lib/api/evidence.api.js';
   import { goto } from '$app/navigation';
   import {

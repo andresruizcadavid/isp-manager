@@ -1,3 +1,18 @@
+// Payments routes — only the endpoints that remain consumed by the system
+// after the "Pagos Recibidos" + "Registrar Pago" UI sections were removed.
+//
+// What still uses these:
+//   • POST /payments                 ← clients/+page.svelte (in-row "Pagar" modal)
+//   • POST /payments/bulk-payment    ← CashierWizard (multi-month settlement)
+//   • POST /payments/:id/evidence    ← invoices/[id] payment modal +
+//                                      CashierWizard upload step
+//   • GET  /payments/wompi/checkout  ← Wompi checkout-link generator
+//   • POST /webhooks/wompi (public)  ← Wompi async confirmation
+//   • POST /payments/backfill        ← operator-only data repair tool
+//
+// Everything else (list / detail / refund / stats / export / reconcile /
+// consolidated report) was removed along with the deleted UI surfaces.
+
 import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
@@ -6,8 +21,8 @@ import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { paymentController } from '../controllers/payments.controller.js';
 import { billingController } from '../controllers/billing.controller.js';
-import { authMiddleware, requireOperational, requireOperatorOrAdmin } from '../middleware/auth.middleware.js';
-import { validateBody, validateQuery, validateParams, commonSchemas } from '../middleware/validate.middleware.js';
+import { requireOperational, requireOperatorOrAdmin } from '../middleware/auth.middleware.js';
+import { validateBody } from '../middleware/validate.middleware.js';
 import { z } from 'zod';
 
 const router = Router();
@@ -16,7 +31,6 @@ const router = Router();
 // providers (Wompi) can POST without a JWT. Do NOT add internal endpoints here.
 export const webhookRouter = Router();
 
-// Validation schemas
 const createPaymentSchema = z.object({
   invoiceId: z.string().min(1, 'Factura es requerida'),
   amount: z.number().positive('Monto debe ser positivo'),
@@ -24,34 +38,10 @@ const createPaymentSchema = z.object({
   notes: z.string().optional()
 });
 
-const paymentQuerySchema = commonSchemas.pagination.extend({
-  status: z.enum(['PENDING', 'COMPLETED', 'FAILED', 'REFUNDED']).optional(),
-  paymentMethod: z.enum(['CASH', 'BANK_TRANSFER', 'WOMPI', 'NEQUI', 'BANCOLOMBIA']).optional(),
-  invoiceId: z.string().optional(),
-  dateFrom: z.string().datetime().optional(),
-  dateTo: z.string().datetime().optional(),
-  amountMin: z.string().transform(Number).optional(),
-  amountMax: z.string().transform(Number).optional()
-});
-
-const refundSchema = z.object({
-  reason: z.string().min(5, 'Motivo debe tener al menos 5 caracteres'),
-  amount: z.number().positive().optional()
-});
-
-// CRUD routes
-router.get('/', validateQuery(paymentQuerySchema), paymentController.getPayments);
-router.get('/:id', validateParams(commonSchemas.idParam), paymentController.getPayment);
+// Single-invoice payment registration (in-row modal in /clients).
 router.post('/', requireOperatorOrAdmin, validateBody(createPaymentSchema), paymentController.createPayment);
-router.put('/:id', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(createPaymentSchema.partial()), paymentController.updatePayment);
-router.delete('/:id', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), paymentController.deletePayment);
 
-// Payment operations
-router.post('/:id/confirm', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), paymentController.confirmPayment);
-router.post('/:id/fail', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), paymentController.failPayment);
-router.post('/:id/refund', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(refundSchema), paymentController.refundPayment);
-
-// Bulk payment — pay multiple invoices at once
+// Bulk payment — pay multiple invoices at once (CashierWizard).
 const ALLOWED_PAYMENT_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
 const evidenceDir = path.resolve(env.UPLOADS_PATH, 'evidence');
 fs.mkdirSync(evidenceDir, { recursive: true });
@@ -85,37 +75,18 @@ const bulkPaymentSchema = z.object({
 });
 
 router.post('/bulk-payment', requireOperational, validateBody(bulkPaymentSchema), billingController.registerPayment);
-router.post('/:id/evidence', requireOperational, uploadEvidence.single('file'), billingController.uploadPaymentEvidence);
+router.post('/:id/evidence',  requireOperational, uploadEvidence.single('file'), billingController.uploadPaymentEvidence);
 
-// Wompi integration — the WEBHOOK lives on the public webhookRouter exported
-// above (mounted in app.js before authMiddleware). The checkout-link generator
+// Wompi integration — the WEBHOOK lives on the public webhookRouter
+// (mounted in app.js before authMiddleware). The checkout-link generator
 // stays authenticated because it's invoked from the operator UI.
 router.get('/wompi/checkout/:invoiceId', paymentController.getWompiCheckout);
 
 // Public Wompi webhook. MUST NOT use authMiddleware — Wompi has no JWT.
-// Express needs the raw JSON body for signature verification, so we keep the
-// global express.json() (it parses + leaves req.body); the service rebuilds
-// the canonical string from the parsed object using the official spec.
 webhookRouter.post('/wompi', paymentController.wompiWebhook);
 
-// Data repair — create Payment records for PAID invoices that lack them
+// Data repair — operator-triggered, no UI link. Creates Payment records
+// for PAID invoices that lack them (legacy data fix).
 router.post('/backfill', requireOperatorOrAdmin, paymentController.backfillMissingPayments);
-
-// Reports and statistics
-router.get('/stats/overview', paymentController.getPaymentStats);
-router.get('/stats/by-method', paymentController.getPaymentsByMethod);
-router.get('/stats/by-month', paymentController.getPaymentsByMonth);
-router.get('/stats/daily', paymentController.getDailyPayments);
-
-// Consolidated report (JSON or CSV with ?format=csv)
-router.get('/report/consolidated', requireOperatorOrAdmin, paymentController.getConsolidatedReport);
-
-// Export functionality
-router.get('/export/excel', paymentController.exportToExcel);
-router.get('/export/pdf', paymentController.exportToPDF);
-
-// Reconciliation
-router.post('/reconcile', requireOperatorOrAdmin, paymentController.reconcilePayments);
-router.get('/reconciliation/report', paymentController.getReconciliationReport);
 
 export default router;

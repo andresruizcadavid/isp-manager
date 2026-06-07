@@ -97,18 +97,6 @@ export const NAV_ITEMS = [
     href: '/invoices', roles: ADMIN_TIER,
     match: ['/invoices', /^\/invoices\/[^/]+(\/.*)?$/] },
 
-  { id: 'payments', type: 'item', parentId: 'group-finance',
-    label: 'Pagos Recibidos', title: 'Pagos Recibidos',
-    href: '/payments', roles: ADMIN_TIER,
-    // /payments/new exists in the menu definition but not yet as a route;
-    // when it lands, sibling `payments-new` will pick it up first.
-    match: ['/payments', /^\/payments\/(?!new)[^/]+(\/.*)?$/] },
-
-  { id: 'payments-new', type: 'item', parentId: 'group-finance',
-    label: 'Registrar Pago', title: 'Registrar Pago',
-    href: '/payments/new', roles: ADMIN_TIER,
-    match: ['/payments/new'] },
-
   { id: 'collection-windows', type: 'item', parentId: 'group-finance',
     label: 'Ventanas de cobranza', title: 'Ventanas de cobranza',
     href: '/invoices/collection-windows', roles: ADMIN_TIER,

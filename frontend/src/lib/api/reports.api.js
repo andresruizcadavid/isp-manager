@@ -18,10 +18,6 @@ export const reportsApi = {
   invoicesSummary: (params) => api.get('/reports/invoices/summary?' + new URLSearchParams(params)),
   overdueInvoices: () => api.get('/reports/invoices/overdue'),
   
-  // Payments
-  paymentsSummary: (params) => api.get('/reports/payments/summary?' + new URLSearchParams(params)),
-  paymentsByMethod: (params) => api.get('/reports/payments/by-method?' + new URLSearchParams(params)),
-  
   // Network
   networkTraffic: (params) => api.get('/reports/network/traffic?' + new URLSearchParams(params)),
   interfaces: () => api.get('/reports/network/interfaces'),

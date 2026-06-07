@@ -5,7 +5,7 @@
   import { zonesApi } from '$lib/api/zones.api.js';
   import { plansApi } from '$lib/api/plans.api.js';
   import { routersApi } from '$lib/api/routers.api.js';
-  import { paymentsApi } from '$lib/api/payments.api.js';
+  import { api } from '$lib/api/client.js';
   import {
     Search, Plus, Eye, EyeOff, Pencil, Trash2, Users, X,
     Power, PowerOff, ArrowUpDown, ArrowUp, ArrowDown,
@@ -683,7 +683,7 @@
     if (!amt || amt <= 0) { payError = 'Monto inválido'; return; }
     paySaving = true; payError = '';
     try {
-      await paymentsApi.create({
+      await api.post('/payments', {
         invoiceId: payInvoice.id,
         amount: amt,
         paymentMethod: payMethod,

@@ -74,12 +74,6 @@ router.get('/invoices/overdue', reportController.getOverdueInvoicesReport);
 router.get('/invoices/by-status', validateQuery(dateRangeSchema), reportController.getInvoicesByStatusReport);
 router.get('/invoices/by-plan', validateQuery(dateRangeSchema), reportController.getInvoicesByPlanReport);
 
-// Payment reports
-router.get('/payments/summary', validateQuery(dateRangeSchema), reportController.getPaymentsSummaryReport);
-router.get('/payments/by-method', validateQuery(dateRangeSchema), reportController.getPaymentsByMethodReport);
-router.get('/payments/reconciliation', validateQuery(dateRangeSchema), reportController.getPaymentsReconciliationReport);
-router.get('/payments/failures', validateQuery(dateRangeSchema), reportController.getPaymentFailuresReport);
-
 // Custom reports
 router.post('/custom/generate', reportController.generateCustomReport);
 router.get('/custom/templates', reportController.getCustomReportTemplates);

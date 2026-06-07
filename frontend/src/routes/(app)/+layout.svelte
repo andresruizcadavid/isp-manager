@@ -93,7 +93,6 @@
       { id: 'go-new-client',label: 'Nuevo cliente',        hint: '',    group: 'Acciones',   href: '/clients/new' },
       { id: 'go-zones',     label: 'Ir a Zonas',           hint: '',    group: 'Navegación', href: '/zones' },
       { id: 'go-invoices',  label: 'Ir a Facturas',        hint: 'g f', group: 'Navegación', href: '/invoices' },
-      { id: 'go-payments',  label: 'Ir a Pagos',           hint: 'g p', group: 'Navegación', href: '/payments' },
       { id: 'go-plans',     label: 'Ir a Planes',          hint: '',    group: 'Navegación', href: '/plans' },
       { id: 'go-routers',   label: 'Ir a Routers / NOC',   hint: '',    group: 'Navegación', href: '/mikrotik/routers' },
       { id: 'go-network',   label: 'Ir a Monitor de Red',  hint: 'g m', group: 'Navegación', href: '/network' },
@@ -161,7 +160,7 @@
     if (chordPrimed) {
       const map = {
         d: '/dashboard', c: '/clients', f: '/invoices',
-        p: '/payments',  m: '/network'
+        m: '/network'
       };
       const dest = map[e.key.toLowerCase()];
       if (dest && canAccess(dest, $user?.role)) {
