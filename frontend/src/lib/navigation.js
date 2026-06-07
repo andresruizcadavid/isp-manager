@@ -106,6 +106,11 @@ export const NAV_ITEMS = [
     href: '/payments/new', roles: ADMIN_TIER,
     match: ['/payments/new'] },
 
+  { id: 'collection-windows', type: 'item', parentId: 'group-finance',
+    label: 'Ventanas de cobranza', title: 'Ventanas de cobranza',
+    href: '/invoices/collection-windows', roles: ADMIN_TIER,
+    match: ['/invoices/collection-windows', /^\/invoices\/collection-windows\/[^/]+$/] },
+
   // ── Sistema ──────────────────────────────────────────────────────
   { id: 'group-system', type: 'group',
     label: 'Sistema', icon: RouterIcon, roles: ADMIN_TIER },

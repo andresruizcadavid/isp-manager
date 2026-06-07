@@ -147,6 +147,22 @@ router.post(
   clientController.bulkChangePlan
 );
 
+// Bulk billing — generate (or reuse) invoices for many clients × many months.
+// Idempotent via Invoice.@@unique(clientId, periodYear, periodMonth).
+const bulkBillSchema = z.object({
+  clientIds: z.array(z.string().min(1)).min(1).max(500),
+  months: z.array(z.object({
+    year:  z.number().int().min(2020).max(2100),
+    month: z.number().int().min(1).max(12)
+  })).min(1).max(24)
+});
+router.post(
+  '/bulk-bill',
+  requireOperatorOrAdmin,
+  validateBody(bulkBillSchema),
+  clientController.bulkBill
+);
+
 // (the `/bulk-history` route was moved above /:id to avoid greedy matching.)
 
 // Self-service update token generation. The public-facing GET/PUT/POST

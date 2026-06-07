@@ -13,6 +13,7 @@ import { startRouterMonitor } from './services/router-monitor.service.js';
 import './jobs/billing.job.js';
 import './jobs/overdue.job.js';
 import './jobs/debtor-notification.job.js';
+import './jobs/auto-collection.job.js';
 
 // Initialize Redis connection
 export const redis = createRedisClient();

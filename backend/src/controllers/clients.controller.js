@@ -5,6 +5,7 @@ import { notificationService } from '../services/notification.service.js';
 import { getMikrotikService, getMikrotikServiceForClient } from '../services/mikrotik.service.js';
 import { generateToken as generateUpdateToken, dispatchLinkToClient } from '../services/client-update-token.service.js';
 import { bulkChangePlan } from '../services/bulk-plan-change.service.js';
+import { bulkBill } from '../services/bulk-bill.service.js';
 
 const MOROSO_LIST = 'Moroso';
 
@@ -1387,6 +1388,44 @@ class ClientsController {
         failedCount: result.summary.failed || 0
       }
     }).catch(err => console.error('[bulk-plan-change] audit log failed:', err.message));
+
+    res.json({ success: true, data: result });
+  });
+
+  // ── Bulk billing ────────────────────────────────────────────────────
+  // Generate (or reuse) invoices for many clients × many months at once.
+  // Idempotent via Invoice.@@unique(clientId, periodYear, periodMonth).
+  // Writes a BulkOperationLog row of type 'BULK_BILL' for audit.
+  bulkBill = asyncHandler(async (req, res) => {
+    const payload = {
+      clientIds: req.body.clientIds || [],
+      months:    req.body.months    || []
+    };
+    let result;
+    try {
+      result = await bulkBill({ ...payload, currentUserId: req.user?.id || null });
+    } catch (e) {
+      const status = Number.isInteger(e.status) ? e.status : 500;
+      return res.status(status).json({
+        success: false,
+        error: { code: e.code || 'BULK_BILL_FAILED', message: e.message }
+      });
+    }
+
+    await prisma.bulkOperationLog.create({
+      data: {
+        type:        'BULK_BILL',
+        operatorId:  req.user?.id || null,
+        payload,
+        results:     result.results,
+        totalCount:  result.summary.total,
+        okCount:     (result.summary.ok || 0) +
+                     (result.summary.allReused || 0) +
+                     (result.summary.mixed || 0) +
+                     (result.summary.paidSkipped || 0),
+        failedCount: result.summary.failed || 0
+      }
+    }).catch(err => console.error('[bulk-bill] audit log failed:', err.message));
 
     res.json({ success: true, data: result });
   });

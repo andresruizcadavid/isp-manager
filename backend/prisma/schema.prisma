@@ -57,6 +57,7 @@ enum NotificationType {
   INVOICE_CREATED
   PAYMENT_RECEIVED
   PAYMENT_FAILED
+  PAYMENT_REMINDER       // FASE 4: auto-collection campaign sends
   SERVICE_SUSPENDED
   SERVICE_ACTIVATED
   INSTALLATION_SCHEDULED
@@ -86,6 +87,7 @@ model User {
   clientUpdateTokens ClientUpdateToken[]
   payments          Payment[]
   bulkOperations    BulkOperationLog[]
+  collectionWindows CollectionWindow[]
 
   @@map("users")
 }
@@ -748,4 +750,43 @@ model BulkOperationLog {
   @@index([type, createdAt])
   @@index([operatorId])
   @@map("bulk_operation_logs")
+}
+
+// Collection windows — operator-defined date ranges during which an
+// automatic reminder campaign runs against debtor clients. Drives the
+// FASE 4 cron: the worker wakes hourly, finds the currently-active
+// window (only one is allowed via the partial unique index below), then
+// for each debtor in scope checks NotificationLog to avoid spam.
+//
+// Fields:
+//   • startDate / endDate          half-open [start, end) at minute precision
+//   • targetStatuses               which invoice statuses count as "owing"
+//                                  for this window (default: PENDING + OVERDUE)
+//   • channels                     EMAIL / WHATSAPP / TELEGRAM
+//   • sendFrequencyHours           min spacing between reminders per client
+//   • messageTemplate              text with {name} / {amount} / {dueDate}
+//                                  placeholders
+//   • isActive                     manual on/off override; the cron also
+//                                  respects start/end window bounds
+//
+// A SystemConfig key cannot replace this — we want history, multiple past
+// windows, and per-window metrics in FASE 5.
+model CollectionWindow {
+  id                  String   @id @default(cuid())
+  name                String   // operator-facing label (e.g. "Cierre Junio")
+  startDate           DateTime
+  endDate             DateTime
+  targetStatuses      String[] @default(["PENDING","OVERDUE"])
+  channels            String[] @default(["EMAIL"])
+  sendFrequencyHours  Int      @default(24)
+  messageTemplate     String   @default("Hola {name}, tu factura por {amount} vence el {dueDate}. Realiza tu pago para evitar inconvenientes.")
+  isActive            Boolean  @default(true)
+  createdById         String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([isActive, startDate, endDate])
+  @@map("collection_windows")
 }

@@ -17,6 +17,7 @@
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import ResponsiveTable from '$lib/components/ui/ResponsiveTable.svelte';
   import BulkPlanChangeModal from '$lib/components/clients/BulkPlanChangeModal.svelte';
+  import BulkBillModal from '$lib/components/clients/BulkBillModal.svelte';
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
   import { Zap, CheckSquare, Square } from 'lucide-svelte';
@@ -127,6 +128,30 @@
   // selections.
   let bulkModalClients = [];
   let bulkModalLoading = false;
+  let showBulkBillModal = false;
+
+  async function openBulkBillModal() {
+    if (selectedIds.size === 0) return;
+    bulkModalLoading = true;
+    try {
+      const res = await clientsApi.getPage({ page: 1, limit: 500 });
+      const all = res?.data || [];
+      bulkModalClients = all.filter(c => selectedIds.has(c.id))
+                           .map(c => ({ id: c.id, name: c.name })); // minimal shape
+      showBulkBillModal = true;
+    } catch (e) {
+      error = e.message || 'No se pudieron cargar los clientes seleccionados';
+    } finally {
+      bulkModalLoading = false;
+    }
+  }
+  function onBulkBillDone() {
+    showBulkBillModal = false;
+    selectedIds = new Set();
+    selectionMode = false;
+    load();
+  }
+
   async function openBulkPlanModal() {
     if (selectedIds.size === 0) return;
     bulkModalLoading = true;
@@ -1806,6 +1831,13 @@
                 class="text-xs text-brand-100 hover:text-white px-2 py-1 rounded">
           Limpiar
         </button>
+        <button type="button" on:click={openBulkBillModal}
+                disabled={bulkModalLoading}
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-500 hover:bg-red-600
+                       text-white text-xs font-semibold rounded-lg shadow-sm transition-colors disabled:opacity-60">
+          {#if bulkModalLoading}<Loader2 size={14} class="animate-spin" />{:else}<svelte:component this={CreditCard} size={14} />{/if}
+          Cobro masivo…
+        </button>
         <button type="button" on:click={openBulkPlanModal}
                 disabled={bulkModalLoading}
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-brand-800
@@ -1828,4 +1860,11 @@
     plans={plans}
     on:close={() => showBulkPlanModal = false}
     on:done={onBulkPlanDone} />
+{/if}
+
+{#if showBulkBillModal}
+  <BulkBillModal
+    clients={bulkModalClients}
+    on:close={() => showBulkBillModal = false}
+    on:done={onBulkBillDone} />
 {/if}
