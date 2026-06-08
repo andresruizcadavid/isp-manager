@@ -97,6 +97,11 @@ export const NAV_ITEMS = [
     href: '/invoices', roles: ADMIN_TIER,
     match: ['/invoices', /^\/invoices\/[^/]+(\/.*)?$/] },
 
+  { id: 'billing-cycles', type: 'item', parentId: 'group-finance',
+    label: 'Ciclos de cobro', title: 'Ciclos de cobro',
+    href: '/invoices/billing-cycles', roles: ADMIN_TIER,
+    match: ['/invoices/billing-cycles'] },
+
   { id: 'collection-windows', type: 'item', parentId: 'group-finance',
     label: 'Ventanas de cobranza', title: 'Ventanas de cobranza',
     href: '/invoices/collection-windows', roles: ADMIN_TIER,

@@ -89,6 +89,7 @@ model User {
   bulkOperations    BulkOperationLog[]
   collectionWindows CollectionWindow[]
   routerBackups     RouterBackup[]
+  billingCycles     BillingCycle[]
 
   @@map("users")
 }
@@ -854,4 +855,51 @@ model CollectionWindow {
 
   @@index([isActive, startDate, endDate])
   @@map("collection_windows")
+}
+
+// BillingCycle — parámetro mensual del ciclo de cobro del servicio.
+// Un row por (year, month). Gobierna las FECHAS del ciclo (inicio de cobro
+// y fecha máxima de pago), el estado del período, notas operativas y un
+// toggle SEPARADO de "corte automático" que está OFF por defecto.
+//
+// Lo que ESTE modelo NO hace:
+//   • No genera facturas (eso es bulk-billing).
+//   • No suspende servicios (esa es una política manual).
+//   • No envía notificaciones (eso es CollectionWindow / auto-collection).
+//
+// Lo que SÍ hace:
+//   • Clasifica clientes en buckets para el período (al día, dentro de
+//     ventana, vencido, en mora, suspendible) consultable vía endpoint.
+//   • Persiste la decisión de fechas por mes para auditoría/UI.
+//
+// Estados:
+//   draft   — el operador está configurando, sin efecto en clasificación
+//   active  — el ciclo en curso; el clasificador lo usa como referencia
+//   closed  — ciclo histórico, read-only en UI
+//
+// Reglas derivadas:
+//   • Solo PUEDE haber un cycle 'active' a la vez (verificación en service).
+//   • moraGraceDays define cuántos días después de collectionEnd un cliente
+//     pasa de "vencido" a "mora" (default 7).
+//   • autoSuspendEnabled NO ejecuta corte; sólo habilita la etiqueta
+//     "suspendible" en el clasificador.
+model BillingCycle {
+  id                 String   @id @default(cuid())
+  year               Int                                  // ej. 2026
+  month              Int                                  // 1..12
+  collectionStart    DateTime                             // fecha de inicio de cobro (ej. 25 jun)
+  collectionEnd      DateTime                             // fecha máxima de pago (ej. 30 jun)
+  moraGraceDays      Int      @default(7)
+  status             String   @default("draft")           // draft | active | closed
+  autoSuspendEnabled Boolean  @default(false)
+  notes              String?
+  createdById        String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([year, month])
+  @@index([status, year, month])
+  @@map("billing_cycles")
 }
