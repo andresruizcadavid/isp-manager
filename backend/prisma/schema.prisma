@@ -88,6 +88,7 @@ model User {
   payments          Payment[]
   bulkOperations    BulkOperationLog[]
   collectionWindows CollectionWindow[]
+  routerBackups     RouterBackup[]
 
   @@map("users")
 }
@@ -377,11 +378,68 @@ model Router {
   alertSent        Boolean           @default(false)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
-  mikrotikAccounts MikrotikAccount[]
-  zones            Zone[]
-  routes           RouterRoute[]
+  // SSH connection for `.rsc` backup export (Backup module).
+  // The username/password fields above are for RouterOS API; SSH may use
+  // the same credentials (most setups) or a dedicated SSH user. Port
+  // defaults to 22; sshUser falls back to `username` if null.
+  sshPort  Int?    @default(22)
+  sshUser  String?
+  sshPass  String?
+
+  mikrotikAccounts  MikrotikAccount[]
+  zones             Zone[]
+  routes            RouterRoute[]
+  backups           RouterBackup[]
+  backupSchedule    RouterBackupSchedule?
 
   @@map("routers")
+}
+
+// RouterBackup — one row per `.rsc` export run.
+//   • triggeredBy: 'cron' | 'manual'
+//   • status:      'pending' (running) | 'success' | 'failed'
+//   • filePath:    absolute path under env.UPLOADS_PATH/backups/router-<id>
+//
+// Rotation: when a backup completes successfully, the service trims the
+// oldest rows + files for this router beyond `retentionCount` from the
+// schedule (or 30 if no schedule exists).
+model RouterBackup {
+  id           String   @id @default(cuid())
+  routerId     Int
+  fileName     String
+  filePath     String
+  sizeBytes    Int      @default(0)
+  startedAt    DateTime @default(now())
+  completedAt  DateTime?
+  status       String   @default("pending")
+  errorMessage String?
+  triggeredBy  String   @default("manual")
+  createdById  String?
+
+  router    Router @relation(fields: [routerId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([routerId, startedAt])
+  @@map("router_backups")
+}
+
+// RouterBackupSchedule — at most one per router. Drives the cron tick.
+//   • cronExpression: 5-field POSIX cron (e.g. "0 3 * * *" → 03:00 daily)
+//   • retentionCount: keep last N backups, prune older
+//   • nextRunAt / lastRunAt: maintained by the job, also useful in UI
+model RouterBackupSchedule {
+  id              String   @id @default(cuid())
+  routerId        Int      @unique
+  isActive        Boolean  @default(true)
+  cronExpression  String   @default("0 3 * * *")
+  lastRunAt       DateTime?
+  nextRunAt       DateTime?
+  retentionCount  Int      @default(30)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  router Router @relation(fields: [routerId], references: [id], onDelete: Cascade)
+  @@map("router_backup_schedules")
 }
 
 // One physical/logical path to the router. Up to 3 per router (1 primary +

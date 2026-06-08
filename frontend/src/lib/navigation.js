@@ -129,10 +129,10 @@ export const NAV_ITEMS = [
     href: '/plans', roles: ADMIN_TIER,
     match: ['/plans', under('/plans')] },
 
-  { id: 'mikrotik-accounts', type: 'item', parentId: 'group-system',
-    label: 'Cuentas MikroTik', title: 'Cuentas MikroTik',
-    href: '/mikrotik/accounts', roles: ADMIN_TIER,
-    match: ['/mikrotik/accounts', under('/mikrotik/accounts')] },
+  { id: 'backups', type: 'item', parentId: 'group-system',
+    label: 'Backup', title: 'Backup MikroTik',
+    href: '/system/backups', roles: ADMIN_TIER,
+    match: ['/system/backups'] },
 
   // ── Monitor de Red ───────────────────────────────────────────────
   { id: 'group-monitor', type: 'group',

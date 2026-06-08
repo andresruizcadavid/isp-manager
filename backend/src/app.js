@@ -15,6 +15,7 @@ import planRoutes     from './routes/plans.routes.js';
 import routerRoutes   from './routes/routers.routes.js';
 import invoiceRoutes  from './routes/invoices.routes.js';
 import collectionWindowsRoutes from './routes/collection-windows.routes.js';
+import backupsRoutes  from './routes/backups.routes.js';
 import paymentRoutes, { webhookRouter as paymentWebhookRouter } from './routes/payments.routes.js';
 import reportRoutes   from './routes/reports.routes.js';
 import dashboardRoutes from './routes/dashboard.routes.js';
@@ -101,6 +102,7 @@ app.use('/api/v1/mikrotik/routers',  authMiddleware, requireAdmin,       routerR
 app.use('/api/v1/mikrotik/accounts', authMiddleware, requireAdmin,       accountsRoutes);
 app.use('/api/v1/invoices',          authMiddleware, requireAdmin,       invoiceRoutes);
 app.use('/api/v1/collection-windows', authMiddleware, requireAdmin,      collectionWindowsRoutes);
+app.use('/api/v1/backups',           authMiddleware, requireAdmin,       backupsRoutes);
 app.use('/api/v1/payments',          authMiddleware, requireOperational, paymentRoutes);
 app.use('/api/v1/reports',           authMiddleware, requireAdmin,       reportRoutes);
 app.use('/api/v1/users',             authMiddleware,                     usersRoutes);
