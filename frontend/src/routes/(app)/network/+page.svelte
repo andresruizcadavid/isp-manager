@@ -821,18 +821,23 @@
   /* Fill the parent <main> exactly. The main has padding (p-4 / sm:p-6) so
      we use negative margin to go edge-to-edge — the toolbar/tabs end up
      flush with the layout chrome, and nothing inside the canvas can push
-     the toolbar off the viewport. min-height:0 lets workspace shrink. */
+     the toolbar off the viewport. min-height:0 lets workspace shrink.
+     The shell wrapper is `min-h-screen` (not `h-screen`) so `height:100%`
+     collapses to the content height; we lock the page to dvh minus the
+     topbar+padding chrome instead. 100dvh handles mobile URL bar. */
   .page {
     display: flex; flex-direction: column;
-    height: 100%;
-    min-height: 0;
+    /* topbar ≈ 56 px + main py-4 (16 px) = 72 px. Mobile: same. */
+    height: calc(100dvh - 72px);
+    min-height: 600px;
     margin: -1rem;
     background: white;
     border-radius: 0;
     overflow: hidden;
   }
   @media (min-width: 640px) {
-    .page { margin: -1.5rem; }
+    /* sm: main py-6 (24 px) instead of 16 px → 80 px chrome total. */
+    .page { margin: -1.5rem; height: calc(100dvh - 80px); }
   }
 
   .toolbar {
