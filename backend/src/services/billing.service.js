@@ -64,6 +64,13 @@ class BillingService {
     });
     if (!client) throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
 
+    // Free plans (trueque / cortesía) never generate invoices. Surface as
+    // a dedicated error code so the bulk-bill loop can demote it to a
+    // soft skip without confusing it with NO_MONTHLY_FEE (missing plan).
+    if (client.plan?.isFree) {
+      throw new AppError('Cliente con plan gratis — no se factura.', 200, 'CLIENT_IS_FREE');
+    }
+
     const monthlyFee = client.monthlyFee > 0 ? client.monthlyFee : (client.plan?.monthlyPrice || 0);
     if (monthlyFee <= 0) throw new AppError('Este cliente no tiene un plan asignado. Asigna un plan antes de generar factura.', 400, 'NO_MONTHLY_FEE');
 

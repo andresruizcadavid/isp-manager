@@ -12,7 +12,7 @@
     CheckCircle2, PauseCircle, Wallet, AlertCircle,
     User, Router as RouterIcon, Wifi, Save,
     CreditCard, FileText, Loader2, SlidersHorizontal, MoreVertical,
-    Download, Database
+    Download, Database, Camera, Upload
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import ResponsiveTable from '$lib/components/ui/ResponsiveTable.svelte';
@@ -195,6 +195,33 @@
   let payNotes = '';
   let paySaving = false;
   let payError = '';
+  // Optional payment evidence — same UX as /invoices/[id]:
+  // camera capture on mobile + file picker + image preview + size/MIME check.
+  let payFile        = null;
+  let payFilePreview = null;
+  let payFileError   = '';
+  const PAY_EVIDENCE_MIME  = ['image/jpeg','image/png','image/webp','image/heic','image/heif','application/pdf'];
+  const PAY_EVIDENCE_BYTES = 8 * 1024 * 1024;
+  function onPayFile(e) {
+    payFileError = '';
+    const file = e.target?.files?.[0] || null;
+    if (!file) { payFile = null; payFilePreview = null; return; }
+    if (!PAY_EVIDENCE_MIME.includes(file.type)) {
+      payFileError = 'Tipo de archivo no permitido. Usa JPG / PNG / WebP / HEIC / PDF.';
+      e.target.value = ''; return;
+    }
+    if (file.size > PAY_EVIDENCE_BYTES) {
+      payFileError = `Archivo muy grande (${(file.size/1024/1024).toFixed(1)} MB). Máximo 8 MB.`;
+      e.target.value = ''; return;
+    }
+    payFile = file;
+    if (payFilePreview?.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
+    payFilePreview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+  }
+  function clearPayFile() {
+    if (payFilePreview?.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
+    payFile = null; payFilePreview = null; payFileError = '';
+  }
 
   function emptyClient() {
     return {
@@ -621,6 +648,7 @@
   function closePaymentModal() {
     payOpen = false; payClient = null; payInvoice = null;
     payAmount = ''; payNotes = ''; payError = '';
+    clearPayFile();
   }
 
   // Detect clients that came in via the MikroTik import flow. The import
@@ -683,12 +711,28 @@
     if (!amt || amt <= 0) { payError = 'Monto inválido'; return; }
     paySaving = true; payError = '';
     try {
-      await api.post('/payments', {
+      const res = await api.post('/payments', {
         invoiceId: payInvoice.id,
         amount: amt,
         paymentMethod: payMethod,
         notes: payNotes || undefined
       });
+      // Best-effort evidence upload: a failure here doesn't roll back the
+      // payment — operator can re-upload from the invoice detail later.
+      const paymentId = res?.data?.id || res?.id;
+      if (payFile && paymentId) {
+        try {
+          const fd = new FormData();
+          fd.append('file', payFile);
+          await fetch(`/api/v1/payments/${paymentId}/evidence`, {
+            method: 'POST',
+            credentials: 'include',
+            body: fd
+          });
+        } catch (e) {
+          console.warn('Evidence upload failed:', e?.message);
+        }
+      }
       closePaymentModal();
       await load();
     } catch (e) {
@@ -916,7 +960,8 @@
       </thead>
       <tbody slot="tbody">
         {#each clients as client}
-            {@const inDebt = (client.pendingAmount || 0) > 0}
+            {@const isFreeClient = !!client.plan?.isFree}
+            {@const inDebt = !isFreeClient && (client.pendingAmount || 0) > 0}
             {@const debtMonths = client.pendingInvoices?.length || 0}
             <tr class={
                   selectionMode && selectedIds.has(client.id)
@@ -967,7 +1012,13 @@
               <td><span class="{statusBadgeClass(client.status)}">{statusLabel(client.status)}</span></td>
               <td class="text-right font-mono text-xs whitespace-nowrap">{fmtMoney(client.balance)}</td>
               <td>
-                {#if client.paymentStatus === 'OVERDUE'}
+                {#if isFreeClient}
+                  <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100 font-semibold inline-flex items-center gap-1"
+                        title="Plan gratuito (trueque) — no se factura">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                    Gratis
+                  </span>
+                {:else if client.paymentStatus === 'OVERDUE'}
                   <div class="flex flex-col items-start gap-0.5">
                     <span class="badge bg-red-100 text-red-800 ring-red-200 font-semibold inline-flex items-center gap-1"
                           title="Deuda vencida — {fmtMoney(client.pendingAmount || 0)}">
@@ -1788,6 +1839,66 @@
         <div>
           <label for="pay-notes" class="label">Notas (opcional)</label>
           <input id="pay-notes" type="text" bind:value={payNotes} class="input" placeholder="Referencia o comentario" />
+        </div>
+
+        <div>
+          <div class="label flex items-center gap-1.5 !mb-2">
+            <FileText size={13} /> Comprobante <span class="text-text-muted font-normal">(opcional)</span>
+          </div>
+
+          {#if payFilePreview}
+            <div class="relative rounded-lg border border-slate-200 overflow-hidden">
+              <img src={payFilePreview} alt="Vista previa del comprobante"
+                   class="w-full max-h-56 object-contain bg-slate-50" />
+              <button type="button" on:click={clearPayFile}
+                      title="Quitar"
+                      class="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-white shadow-md border border-slate-200
+                             flex items-center justify-center hover:bg-red-50 hover:border-red-200 hover:text-red-700 transition">
+                <X size={14} />
+              </button>
+            </div>
+            <div class="text-xs text-text-muted mt-1 flex items-center justify-between">
+              <span class="truncate">{payFile?.name}</span>
+              <span class="tabular-nums">{(payFile?.size / 1024).toFixed(1)} KB</span>
+            </div>
+          {:else if payFile}
+            <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50">
+              <FileText size={16} class="text-slate-500 flex-shrink-0" />
+              <div class="flex-1 min-w-0">
+                <div class="text-xs font-medium text-text-primary truncate">{payFile.name}</div>
+                <div class="text-[11px] text-text-muted tabular-nums">{(payFile.size / 1024).toFixed(1)} KB</div>
+              </div>
+              <button type="button" on:click={clearPayFile} class="btn-icon">
+                <X size={14} />
+              </button>
+            </div>
+          {:else}
+            <div class="grid grid-cols-2 gap-2">
+              <label class="flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg border border-slate-200
+                            hover:border-brand-300 hover:bg-brand-50/30 cursor-pointer transition-colors text-xs font-medium text-text-primary">
+                <Camera size={14} class="text-brand-600" />
+                <span>Tomar foto</span>
+                <input type="file" accept="image/*" capture="environment"
+                       on:change={onPayFile} class="hidden" />
+              </label>
+              <label class="flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg border border-slate-200
+                            hover:border-slate-300 hover:bg-slate-50 cursor-pointer transition-colors text-xs font-medium text-text-primary">
+                <Upload size={14} class="text-slate-500" />
+                <span>Subir archivo</span>
+                <input type="file" accept="image/*,application/pdf"
+                       on:change={onPayFile} class="hidden" />
+              </label>
+            </div>
+            <p class="text-[11px] text-text-muted mt-1.5">
+              Imagen (JPG / PNG / WebP / HEIC) o PDF. Máx. 8 MB.
+            </p>
+          {/if}
+
+          {#if payFileError}
+            <div class="mt-1.5 text-xs text-red-600 flex items-center gap-1.5">
+              <AlertCircle size={12} /> {payFileError}
+            </div>
+          {/if}
         </div>
       </div>
 

@@ -139,7 +139,8 @@
   $: kpiTotal    = plans.length;
   $: kpiActive   = plans.filter(p => p.isActive).length;
   $: kpiInactive = plans.filter(p => !p.isActive).length;
-  $: kpiNoPrice  = plans.filter(p => !(p.monthlyPrice || p.price)).length;
+  // Free plans are intentionally priced 0 — they don't count as "por configurar".
+  $: kpiNoPrice  = plans.filter(p => !p.isFree && !(p.monthlyPrice || p.price)).length;
   $: kpiSynced   = plans.filter(p => syncStatus(p) === 'synced').length;
 
   function openEdit(p) {
@@ -153,6 +154,7 @@
       uploadMbps:   Number((p.uploadSpeed   || 0) / 1000) || 0,
       dataLimit:    p.dataLimit ?? '',
       isActive:     p.isActive !== false,
+      isFree:       !!p.isFree,
     };
     editError = ''; showEdit = true;
   }
@@ -168,6 +170,7 @@
       uploadMbps: 0,
       dataLimit: '',
       isActive: true,
+      isFree: false,
     };
     syncToRouter = false;
     editError = ''; showEdit = true;
@@ -189,12 +192,14 @@
         name: editing.name.trim(),
         type: editing.type || null,
         mikrotikProfile: editing.mikrotikProfile || null,
-        price: cents,
-        monthlyPrice: cents,
+        // Free plans force price to 0 regardless of what the input held.
+        price:        editing.isFree ? 0 : cents,
+        monthlyPrice: editing.isFree ? 0 : cents,
         downloadSpeed: Math.round(Number(editing.downloadMbps || 0) * 1000),
         uploadSpeed:   Math.round(Number(editing.uploadMbps   || 0) * 1000),
         dataLimit:     editing.dataLimit === '' ? null : Number(editing.dataLimit),
         isActive: !!editing.isActive,
+        isFree:   !!editing.isFree,
       };
 
       if (createMode && syncToRouter && routerId && editing.mikrotikProfile) {
@@ -400,7 +405,9 @@
                 {/if}
               </td>
               <td class="text-right font-mono text-xs">
-                {#if p.monthlyPrice || p.price}
+                {#if p.isFree}
+                  <span class="badge bg-emerald-50 text-emerald-700 ring-emerald-100 font-semibold">Gratis</span>
+                {:else if p.monthlyPrice || p.price}
                   <span class="font-semibold text-slate-900">{fmtMoney(p.monthlyPrice || p.price)}</span>
                 {:else}
                   <span class="text-amber-600 italic">sin definir</span>
@@ -670,7 +677,15 @@
           </div>
           <div>
             <label for="plan-price" class="label">Precio mensual (COP)</label>
-            <input id="plan-price" type="number" min="0" step="1000" class="input" bind:value={editing.monthlyPesos} />
+            <input id="plan-price" type="number" min="0" step="1000" class="input"
+                   bind:value={editing.monthlyPesos}
+                   disabled={editing.isFree}
+                   placeholder={editing.isFree ? '0 (gratis)' : ''} />
+            {#if editing.isFree}
+              <p class="text-[11px] text-emerald-700 mt-1">
+                Plan gratuito (trueque) — no se facturará.
+              </p>
+            {/if}
           </div>
           <div>
             <label for="plan-down" class="label">Bajada (Mbps)</label>
@@ -688,6 +703,14 @@
             <label class="inline-flex items-center gap-2 text-sm">
               <input type="checkbox" class="rounded border-slate-300" bind:checked={editing.isActive} />
               Activo
+            </label>
+          </div>
+          <div class="flex items-end">
+            <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+              <input type="checkbox" class="rounded border-slate-300 text-emerald-600 focus:ring-emerald-600/30"
+                     bind:checked={editing.isFree}
+                     on:change={() => { if (editing.isFree) editing.monthlyPesos = 0; }} />
+              <span>Plan gratis <span class="text-text-muted">(trueque)</span></span>
             </label>
           </div>
         </div>

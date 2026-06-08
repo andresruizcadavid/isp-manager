@@ -45,6 +45,8 @@
       // matches (year, month), mark it; otherwise we don't know about PAID
       // invoices for that period — the backend will return them as 'reused'.
       clients = all
+        // Free-plan clients (trueque) never get billed — exclude entirely.
+        .filter(c => !c.plan?.isFree)
         .filter(c => c.planId || c.monthlyFee > 0)
         .map(c => {
           const eff = (c.monthlyFee && c.monthlyFee > 0) ? c.monthlyFee : (c.plan?.monthlyPrice || c.plan?.price || 0);

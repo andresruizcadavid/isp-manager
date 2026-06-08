@@ -246,6 +246,13 @@ model Plan {
   // in /ppp/profile on the router.
   mikrotikProfile String?
   isActive        Boolean  @default(true)
+  // Trueque / cortesía — el cliente provee energía o espacio físico para
+  // equipos del ISP a cambio de servicio gratuito. Cuando isFree=true:
+  //   • price y monthlyPrice se aceptan en 0 (no se valida "sin definir")
+  //   • generateInvoices NO crea facturas para clientes en este plan
+  //   • el cron de cobranza NO los lista como deudores (no aplica)
+  //   • la UI muestra badge "Gratis" en /clients y en /clients/[id]
+  isFree          Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 

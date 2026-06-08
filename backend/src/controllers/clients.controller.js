@@ -58,7 +58,8 @@ class ClientsController {
               price: true,
               monthlyPrice: true,
               downloadSpeed: true,
-              uploadSpeed: true
+              uploadSpeed: true,
+              isFree: true
             }
           },
           zone: {

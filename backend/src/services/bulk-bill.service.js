@@ -15,6 +15,7 @@ import { billingService } from './billing.service.js';
 const STATUS_OK     = 'ok';       // invoice created
 const STATUS_REUSED = 'reused';   // matching invoice already existed (still PENDING/PARTIAL/OVERDUE)
 const STATUS_PAID   = 'paid';     // month already paid — silently skipped
+const STATUS_FREE   = 'free';     // client is on a free plan (trueque) — silently skipped
 const STATUS_FAILED = 'failed';   // any other error (no plan, validation, etc.)
 
 /**
@@ -68,15 +69,21 @@ export async function bulkBill({ clientIds, months, currentUserId = null }) {
           total:     first?.invoice?.total || 0
         });
       } catch (e) {
-        // MONTH_ALREADY_PAID is a soft skip, not a failure.
         const code = e?.code || e?.errorCode;
+        // Soft skips — not failures: the operator can't (or shouldn't)
+        // pay these months again, and the client is intentionally on a
+        // free plan, respectively.
         if (code === 'MONTH_ALREADY_PAID') {
-          out.invoices.push({
-            year, month,
-            status:  STATUS_PAID,
-            reason:  e.message
-          });
+          out.invoices.push({ year, month, status: STATUS_PAID, reason: e.message });
           continue;
+        }
+        if (code === 'CLIENT_IS_FREE') {
+          // The whole client is on a free plan — every remaining month
+          // is also free, so break out and tag the client as 'free'.
+          out.invoices.push({ year, month, status: STATUS_FREE, reason: e.message });
+          out.status = STATUS_FREE;
+          out.reason = e.message;
+          break;
         }
         // First real error per client wins; we tag the row failed but
         // keep iterating so the operator sees the full per-month picture.
@@ -89,7 +96,10 @@ export async function bulkBill({ clientIds, months, currentUserId = null }) {
       }
     }
 
-    if (anyError) {
+    // out.status may already be 'free' if the CLIENT_IS_FREE path tagged it.
+    if (out.status === STATUS_FREE) {
+      // already finalized
+    } else if (anyError) {
       out.status = STATUS_FAILED;
       out.reason = anyError;
     } else if (totalCreated > 0 && totalReused > 0) {
@@ -115,6 +125,7 @@ export async function bulkBill({ clientIds, months, currentUserId = null }) {
     allReused:        results.filter(r => r.status === 'allReused').length,
     mixed:            results.filter(r => r.status === 'mixed').length,
     paidSkipped:      results.filter(r => r.status === 'paidSkipped').length,
+    free:             results.filter(r => r.status === STATUS_FREE).length,
     failed:           results.filter(r => r.status === STATUS_FAILED).length,
     invoicesCreated:  results.reduce((s, r) => s + (r.totalCreated || 0), 0),
     invoicesReused:   results.reduce((s, r) => s + (r.totalReused  || 0), 0),
