@@ -59,10 +59,45 @@ class WompiService {
     }
   }
 
+  // Widget / Checkout Web — generate the config needed by the frontend to open
+  // the Wompi Widget directly, WITHOUT calling the Wompi API. The Widget only
+  // needs: publicKey, amountInCents, currency, reference, integrity signature,
+  // redirectUrl, and optional customer data.
+  // See https://docs.wompi.co/docs/colombia/widget-checkout-web/
+  generateWidgetConfig(invoice) {
+    const reference = this.generateReference(invoice);
+    const amountInCents = invoice.total || invoice.amount;
+    const currency = 'COP';
+    const signature = this.generateCheckoutSignature(reference, amountInCents, currency);
+    return {
+      publicKey: this.publicKey,
+      amountInCents,
+      currency,
+      reference,
+      signature,
+      redirectUrl: `${env.FRONTEND_URL}/clients/${invoice.clientId}?wompi=return&invoice=${invoice.id}`,
+      customerData: {
+        email: invoice.client?.email || '',
+        fullName: invoice.client?.name || '',
+        phone: invoice.client?.phone || ''
+      }
+    };
+  }
+
+  // Generate a unique, traceable reference for each checkout attempt.
+  // Format: INV-{invoiceNumber}-{timestamp}-{random4chars}
+  // This guarantees uniqueness even if the same invoice is retried.
+  generateReference(invoice) {
+    const ts = Date.now().toString(36);
+    const rand = crypto.randomBytes(2).toString('hex');
+    return `INV-${invoice.invoiceNumber || invoice.id.slice(-8)}-${ts}-${rand}`;
+  }
+
   // Checkout signature: sha256(reference + amount_in_cents + currency + integrity_secret).
   // Used to harden the redirect URL so an attacker can't tamper with the
   // amount/reference. The integrity_secret is a different value from the
   // events_secret — see constructor.
+  // Wompi Widget docs: https://docs.wompi.co/docs/colombia/integridad
   generateCheckoutSignature(reference, amount, currency) {
     if (!this.integrityKey) {
       throw new AppError(

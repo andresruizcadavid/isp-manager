@@ -169,7 +169,7 @@ class PaymentsController {
     const invoice = await prisma.invoice.findUnique({
       where: { id: invoiceId },
       include: {
-        client: { select: { id: true, name: true, email: true } }
+        client: { select: { id: true, name: true, email: true, phone: true } }
       }
     });
     if (!invoice) {
@@ -179,8 +179,8 @@ class PaymentsController {
       throw new AppError('La factura ya está pagada', 400, 'INVOICE_ALREADY_PAID');
     }
 
-    const checkoutData = await wompiService.createCheckout(invoice);
-    res.json({ success: true, data: checkoutData });
+    const config = wompiService.generateWidgetConfig(invoice);
+    res.json({ success: true, data: config });
   });
 
   backfillMissingPayments = asyncHandler(async (req, res) => {

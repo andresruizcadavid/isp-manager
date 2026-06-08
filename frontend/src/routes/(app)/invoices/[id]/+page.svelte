@@ -4,6 +4,7 @@
   import { browser } from '$app/environment';
   import { api } from '$lib/api/client.js';
   import { invoicesApi } from '$lib/api/invoices.api.js';
+  import WompiButton from '$lib/components/payments/WompiButton.svelte';
   import {
     ArrowLeft, FileText, CreditCard, Download, Send, Loader2, Receipt,
     CheckCircle2, AlertCircle, Calendar, User, MapPin, Wifi, Image as ImageIcon,
@@ -103,7 +104,18 @@
   $: payable  = invoice && ['PENDING','PARTIAL','OVERDUE'].includes(invoice.status);
 
   // ── Load ─────────────────────────────────────────────────────────────
-  onMount(reload);
+  onMount(async () => {
+    await reload();
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('wompi') === 'return') {
+      const ref = urlParams.get('ref') || '';
+      showToast('success', ref
+        ? `Pago iniciado con Wompi. Ref: ${ref.slice(-12)}. Esperando confirmación…`
+        : 'Redirigido desde Wompi. Esperando confirmación del pago…');
+      const clean = window.location.pathname;
+      window.history.replaceState({}, '', clean);
+    }
+  });
 
   async function reload() {
     loading = true;
@@ -346,6 +358,7 @@
         <button class="btn-primary" on:click={openPayModal}>
           <CreditCard size={15} /> Registrar pago
         </button>
+        <WompiButton {invoice} on:paid={reload} on:failed={() => showToast('error', 'El pago con Wompi no fue completado')} />
       {/if}
       {#if invoice.status === 'PENDING' || invoice.status === 'OVERDUE'}
         <button class="btn-ghost" on:click={markAsPaid} disabled={actionBusy} title="Marcar como pagada sin registrar pago detallado">

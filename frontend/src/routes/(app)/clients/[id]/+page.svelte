@@ -13,6 +13,7 @@
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import CashierWizard from '$lib/components/cashier/CashierWizard.svelte';
+  import WompiButton from '$lib/components/payments/WompiButton.svelte';
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
 
@@ -24,6 +25,18 @@
     try {
       client = await api.get(`/clients/${id}`);
       resetForm();
+
+      // Handle Wompi redirect callback
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('wompi') === 'return') {
+        const ref = urlParams.get('ref') || '';
+        showToast('success', ref
+          ? `Pago iniciado con Wompi. Referencia: ${ref.slice(-12)}. El sistema actualizará el estado automáticamente al recibir la confirmación.`
+          : 'Redirigido desde Wompi. Esperando confirmación del pago…');
+        // Clean URL
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, '', cleanUrl);
+      }
     } catch (e) {
       pageError = e.message || 'Error al cargar el cliente';
     }
@@ -997,10 +1010,13 @@
                         <Receipt size={12} /> Ver pago
                       </button>
                     {:else if inv.status !== 'CANCELLED'}
-                      <button class="text-xs text-emerald-700 hover:underline font-medium"
-                              on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
-                        Pagar
-                      </button>
+                      <div class="flex items-center gap-1">
+                        <button class="text-xs text-emerald-700 hover:underline font-medium"
+                                on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
+                          Pagar
+                        </button>
+                        <WompiButton {invoice} on:paid={() => onPaymentDone()} on:failed={() => showToast('error', 'El pago con Wompi no fue completado')} />
+                      </div>
                     {/if}
                   </td>
                 </tr>
@@ -1030,10 +1046,13 @@
                     <Receipt size={12} /> Ver
                   </button>
                 {:else if inv.status !== 'CANCELLED'}
-                  <button class="btn-ghost text-xs text-emerald-700"
-                          on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
-                    Pagar
-                  </button>
+                  <div class="flex items-center gap-1">
+                    <button class="btn-ghost text-xs text-emerald-700"
+                            on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
+                      Pagar
+                    </button>
+                    <WompiButton {invoice} on:paid={() => onPaymentDone()} on:failed={() => showToast('error', 'El pago con Wompi no fue completado')} />
+                  </div>
                 {/if}
               </div>
             </div>
