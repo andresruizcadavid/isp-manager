@@ -574,7 +574,7 @@ class ClientsController {
 
     const existingClient = await prisma.client.findUnique({
       where: { id },
-      include: { mikrotikAccount: true }
+      include: { mikrotikAccount: true, plan: true }
     });
 
     if (!existingClient) {
@@ -718,6 +718,30 @@ class ClientsController {
       }
     }
 
+    // If the client lands on a free plan (trueque), any open invoice loses
+    // its right to be collected — cancel PENDING/OVERDUE/PARTIAL and zero
+    // out balanceDue in the same transaction. Idempotent: a re-save on a
+    // client already on a free plan with no open invoices is a no-op.
+    // We use the post-update plan: `targetPlan` if we just switched, else
+    // the existing plan loaded earlier.
+    const effectivePlan = (planIdChanged && targetPlan)
+      ? targetPlan
+      : existingClient.plan;
+    let cancelledInvoiceCount = 0;
+    if (effectivePlan?.isFree) {
+      const openInvoices = await prisma.invoice.findMany({
+        where: { clientId: id, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
+        select: { id: true }
+      });
+      cancelledInvoiceCount = openInvoices.length;
+      if (openInvoices.length > 0) {
+        ops.push(prisma.invoice.updateMany({
+          where: { id: { in: openInvoices.map(i => i.id) } },
+          data: { status: 'CANCELLED', balanceDue: 0 }
+        }));
+      }
+    }
+
     const [client] = await prisma.$transaction(ops);
 
     // ── Post-transaction: sync plan profile to MikroTik ───────────────
@@ -725,6 +749,9 @@ class ClientsController {
     if (planIdChanged && targetPlan) {
       const result = await this.#syncPlanToMikrotik(id, targetPlan, client.mikrotikAccount);
       if (result.warning) warnings.push(result.warning);
+    }
+    if (cancelledInvoiceCount > 0) {
+      warnings.push(`${cancelledInvoiceCount} factura(s) pendiente(s) fueron canceladas porque el cliente pasa a un plan gratuito.`);
     }
 
     // Re-fetch client so returned data includes any profileName update

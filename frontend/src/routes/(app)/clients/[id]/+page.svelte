@@ -335,7 +335,11 @@
   $: paidInvoices    = client?.invoices?.filter(i => i.status === 'PAID') || [];
   $: recentPayments  = client?.payments || [];
   $: isOnline        = client?.mikrotikAccount?.status === 'ACTIVE' || client?.status === 'ACTIVE';
-  $: pendingAmount   = pendingInvoices.reduce(
+  // Free-plan (trueque) clients never owe money even if old invoices linger.
+  // The backend cancels open invoices on plan change to free, but we still
+  // suppress every debt-related surface to be defensive.
+  $: isFreeClient    = !!client?.plan?.isFree;
+  $: pendingAmount   = isFreeClient ? 0 : pendingInvoices.reduce(
        (sum, inv) => sum + (inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0)),
        0
      );
@@ -560,9 +564,13 @@
     {/if}
   </div>
 
-  <!-- Actions: horizontal scroll on mobile -->
+  <!-- Actions: horizontal scroll on mobile.
+       Free-plan clients don't ever owe money so the Cobrar entry-point is
+       hidden — the in-row modal in /clients also suppresses it. -->
   <div class="flex items-center gap-1.5 sm:gap-2 overflow-x-auto sm:overflow-visible -mx-4 px-4 sm:mx-0 sm:px-0 pb-1 sm:pb-0 scrollbar-thin flex-shrink-0">
-    {#if pendingAmount > 0}
+    {#if isFreeClient}
+      <!-- nothing here — free plan, no debt surface -->
+    {:else if pendingAmount > 0}
       <button on:click={openPayment} class="btn-primary whitespace-nowrap">
         <CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /> Cobrar
         <span class="bg-white/20 px-1.5 py-0.5 rounded-md text-xs tabular-nums">{fmtMoney(pendingAmount)}</span>
@@ -680,11 +688,16 @@
 <!-- KPI strip (design-system .kpi-tile) -->
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
   <div class="kpi-tile">
-    <div class="icon-square-rose"><CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /></div>
+    <div class="icon-square-{isFreeClient ? 'green' : 'rose'}"><CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Saldo Pendiente</div>
-      <div class="kpi-value {pendingAmount > 0 ? 'text-orange-600' : 'text-emerald-600'}">{fmtMoney(pendingAmount)}</div>
-      <div class="kpi-sub">{pendingInvoices.length} factura{pendingInvoices.length === 1 ? '' : 's'} por cobrar</div>
+      {#if isFreeClient}
+        <div class="kpi-value text-emerald-600">$ 0</div>
+        <div class="kpi-sub">Plan gratis · sin cobro</div>
+      {:else}
+        <div class="kpi-value {pendingAmount > 0 ? 'text-orange-600' : 'text-emerald-600'}">{fmtMoney(pendingAmount)}</div>
+        <div class="kpi-sub">{pendingInvoices.length} factura{pendingInvoices.length === 1 ? '' : 's'} por cobrar</div>
+      {/if}
     </div>
   </div>
   <div class="kpi-tile">
@@ -698,13 +711,18 @@
     </div>
   </div>
   <div class="kpi-tile">
-    <div class="icon-square-amber"><Calendar size={16} class="sm:w-3.5 sm:h-3.5" /></div>
+    <div class="icon-square-{isFreeClient ? 'green' : 'amber'}"><Calendar size={16} class="sm:w-3.5 sm:h-3.5" /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Próximo Vencimiento</div>
-      <div class="kpi-value text-base {nextDue && isOverdueInvoice(nextDue) ? 'text-red-600' : 'text-slate-900'}">
-        {nextDue ? fmtDate(nextDue.dueDate) : '—'}
-      </div>
-      <div class="kpi-sub">{nextDue ? (isOverdueInvoice(nextDue) ? 'Vencida' : 'Próxima a vencer') : 'Sin pendientes'}</div>
+      {#if isFreeClient}
+        <div class="kpi-value text-base text-emerald-600">—</div>
+        <div class="kpi-sub">No aplica</div>
+      {:else}
+        <div class="kpi-value text-base {nextDue && isOverdueInvoice(nextDue) ? 'text-red-600' : 'text-slate-900'}">
+          {nextDue ? fmtDate(nextDue.dueDate) : '—'}
+        </div>
+        <div class="kpi-sub">{nextDue ? (isOverdueInvoice(nextDue) ? 'Vencida' : 'Próxima a vencer') : 'Sin pendientes'}</div>
+      {/if}
     </div>
   </div>
   <div class="kpi-tile">
