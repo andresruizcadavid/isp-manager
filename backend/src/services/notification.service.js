@@ -461,9 +461,10 @@ class NotificationService {
    * @param {string}   [opts.icon]          Header emoji — defaults to 📣 (general announcement).
    * @param {string}   [opts.title]         Header title — defaults to the subject, or "Aviso".
    * @param {Array}    [opts.fields]        Optional list of {label, value} bullets after the body.
+   * @param {object}   [opts.cta]           Optional call-to-action button { text, url }.
    * @param {string}   [opts.preset]        Pull icon+title from EMAIL_PRESETS by name.
    */
-  async sendEmailRaw({ to, subject, body, icon, title, fields, preset }) {
+  async sendEmailRaw({ to, subject, body, icon, title, fields, cta, preset }) {
     if (!to) throw new Error('sendEmailRaw: to requerido');
     const { transporter, from } = await this.getTransporter();
 
@@ -480,6 +481,7 @@ class NotificationService {
       title:         resolvedTitle,
       body:          body || '',
       fields:        fields || [],
+      cta:           cta || undefined,
       companyName:   from.fromName,
       companyDomain: from.fromEmail?.split('@')[1]
     });

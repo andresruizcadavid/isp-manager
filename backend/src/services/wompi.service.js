@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { env } from '../config/env.js';
 import { AppError } from '../middleware/error.middleware.js';
 import { prisma } from '../config/database.js';
+import { dispatch, NOTIFICATION_TYPES } from './notification-orchestrator.service.js';
 
 class WompiService {
   constructor() {
@@ -27,70 +28,77 @@ class WompiService {
     };
   }
 
-  async createCheckout(invoice) {
+  // Creates a Wompi Payment Link (Link de Pago) and persists the attempt
+  // for full traceability. The frontend redirects the customer to the
+  // returned checkoutUrl; Wompi handles the payment UX. The webhook
+  // handler (handleTransactionUpdate) matches the transaction back to
+  // the attempt via payment_link_id and updates its status.
+  async createCheckout(invoice, options = {}) {
+    const amountInCents = invoice.total || invoice.amount;
+    const currency = 'COP';
+    const reference = this.generateReference(invoice);
+
+    // Persist attempt BEFORE the API call
+    const attempt = await prisma.paymentAttempt.create({
+      data: {
+        invoiceId: invoice.id,
+        clientId: invoice.clientId,
+        reference,
+        amount: amountInCents,
+        status: 'PENDING',
+        expiresAt: new Date(Date.now() + 3600000),
+      }
+    });
+
     try {
-      const checkoutData = {
-        amount_in_cents: invoice.amount,
-        currency: 'COP',
-        customer_data: {
-          customer_email: invoice.client.email,
-          customer_name: invoice.client.name,
-          phone_number: invoice.client.phone
-        },
-        payment_method: {
-          installments_type: 'all'
-        },
-        reference: invoice.invoiceNumber,
-        signature: this.generateCheckoutSignature(invoice.invoiceNumber, invoice.amount, 'COP'),
-        redirect_url: `${env.FRONTEND_URL}/invoices/${invoice.id}`,
-        expiration_time: new Date(Date.now() + 3600000).toISOString() // 1 hour
+      const redirectUrl = options.redirectUrl || `${env.FRONTEND_URL}/invoices/${invoice.id}?wompi_attempt=${attempt.id}`;
+      const linkData = {
+        name: `Pago factura ${invoice.invoiceNumber}`,
+        description: `Factura servicio internet - ${invoice.invoiceNumber}`,
+        single_use: true,
+        collect_shipping: false,
+        currency,
+        amount_in_cents: amountInCents,
+        expires_at: new Date(Date.now() + 3600000).toISOString(),
+        redirect_url: redirectUrl,
       };
 
       const response = await axios.post(
-        `${this.baseURL}/checkout/sessions`,
-        checkoutData,
+        `${this.baseURL}/payment_links`,
+        linkData,
         { headers: this.getAuthHeaders() }
       );
 
-      return response.data.data;
+      const result = response.data.data;
+      const checkoutUrl = `https://checkout.wompi.co/l/${result.id}`;
+
+      // Update the attempt with Wompi's response
+      await prisma.paymentAttempt.update({
+        where: { id: attempt.id },
+        data: { checkoutUrl, externalId: result.id }
+      });
+
+      return { checkoutUrl, paymentAttemptId: attempt.id, wompiLinkId: result.id };
     } catch (error) {
-      console.error('Wompi checkout error:', error.response?.data || error.message);
-      throw new AppError('Error al crear checkout de Wompi', 500, 'WOMPI_CHECKOUT_ERROR');
+      await prisma.paymentAttempt.update({
+        where: { id: attempt.id },
+        data: { status: 'FAILED' }
+      }).catch(e => console.error('[wompi] Failed to mark attempt as FAILED:', e.message));
+
+      console.error('Wompi payment link error:', error.response?.data || error.message);
+      throw new AppError('Error al crear link de pago de Wompi', 500, 'WOMPI_CHECKOUT_ERROR');
     }
   }
 
-  // Widget / Checkout Web — generate the config needed by the frontend to open
-  // the Wompi Widget directly, WITHOUT calling the Wompi API. The Widget only
-  // needs: publicKey, amountInCents, currency, reference, integrity signature,
-  // redirectUrl, and optional customer data.
-  // See https://docs.wompi.co/docs/colombia/widget-checkout-web/
-  generateWidgetConfig(invoice) {
-    const reference = this.generateReference(invoice);
-    const amountInCents = invoice.total || invoice.amount;
-    const currency = 'COP';
-    const signature = this.generateCheckoutSignature(reference, amountInCents, currency);
-    return {
-      publicKey: this.publicKey,
-      amountInCents,
-      currency,
-      reference,
-      signature,
-      redirectUrl: `${env.FRONTEND_URL}/clients/${invoice.clientId}?wompi=return&invoice=${invoice.id}`,
-      customerData: {
-        email: invoice.client?.email || '',
-        fullName: invoice.client?.name || '',
-        phone: invoice.client?.phone || ''
-      }
-    };
-  }
-
   // Generate a unique, traceable reference for each checkout attempt.
-  // Format: INV-{invoiceNumber}-{timestamp}-{random4chars}
+  // Format: {invoiceNumber}-{timestamp}-{random4chars}
+  // e.g. INV-0007-mq5ny1op-d3e5
   // This guarantees uniqueness even if the same invoice is retried.
   generateReference(invoice) {
     const ts = Date.now().toString(36);
     const rand = crypto.randomBytes(2).toString('hex');
-    return `INV-${invoice.invoiceNumber || invoice.id.slice(-8)}-${ts}-${rand}`;
+    const number = invoice.invoiceNumber || invoice.id.slice(-8);
+    return `${number}-${ts}-${rand}`;
   }
 
   // Checkout signature: sha256(reference + amount_in_cents + currency + integrity_secret).
@@ -191,15 +199,65 @@ class WompiService {
         return;
       }
 
-      // Find invoice by reference (= invoiceNumber).
-      const invoice = await prisma.invoice.findUnique({
-        where:   { invoiceNumber: reference },
+      // Resolve invoice. Three strategies (tried in order):
+      //   1. By reference — {invoiceNumber} or {invoiceNumber}-{ts}-{rand}
+      //   2. By payment_link_id — maps to PaymentAttempt.externalId
+      let invoice;
+
+      const parts = reference.split('-');
+      const invoiceNumber = parts.length >= 3
+        ? parts.slice(0, -2).join('-')
+        : reference;
+      invoice = await prisma.invoice.findUnique({
+        where:   { invoiceNumber },
         include: { client: true, payments: true }
       });
+
+      if (!invoice && tx.payment_link_id) {
+        const attempt = await prisma.paymentAttempt.findFirst({
+          where: { externalId: tx.payment_link_id }
+        });
+        if (attempt) {
+          invoice = await prisma.invoice.findUnique({
+            where: { id: attempt.invoiceId },
+            include: { client: true, payments: true }
+          });
+        }
+      }
+
       if (!invoice) {
-        console.error(`[wompi] invoice not found for reference: ${reference}`);
+        console.error(`[wompi] invoice not found`, {
+          reference, invoiceNumber, payment_link_id: tx.payment_link_id
+        });
         return;
       }
+
+      // Update the PaymentAttempt traceability record. Try both matching
+      // strategies so this works for payment-link and direct-API flows.
+      const mappedStatus = this.mapWompiStatus(status);
+      await prisma.paymentAttempt.updateMany({
+        where: { reference },
+        data: { status: mappedStatus, webhookPayload: eventBody, externalId: transactionId }
+      });
+      if (tx.payment_link_id) {
+        await prisma.paymentAttempt.updateMany({
+          where: { externalId: tx.payment_link_id },
+          data: { status: mappedStatus, webhookPayload: eventBody }
+        });
+      }
+
+      // Sync PaymentLink.status so the admin and portal see the real state.
+      // Matches by invoiceId or by the paymentAttemptId that was just updated.
+      const paymentLinkStatusMap = {
+        'COMPLETED': 'paid',
+        'FAILED':    'cancelled',
+        'REFUNDED':  'cancelled'
+      };
+      const plStatus = paymentLinkStatusMap[mappedStatus] || 'pending';
+      await prisma.paymentLink.updateMany({
+        where: { invoiceId: invoice.id },
+        data:  { status: plStatus, paidAt: mappedStatus === 'COMPLETED' ? new Date() : undefined }
+      });
 
       // Idempotency: a Wompi event for the same transaction may arrive
       // multiple times. Look up by transactionId (UNIQUE in schema).
@@ -249,13 +307,27 @@ class WompiService {
         });
       }
 
-      // Side-effects — notification. Best-effort; never let it abort the
-      // webhook ack.
+      // Side-effects — notification via the orchestrator. Best-effort; never
+      // let it abort the webhook ack.
       try {
-        if (status === 'APPROVED') {
-          await this.sendPaymentConfirmation(invoice, transactionId);
-        } else if (status === 'DECLINED') {
-          await this.sendPaymentFailure(invoice, transactionId);
+        if (status === 'APPROVED' && invoice.client) {
+          dispatch({
+            type: NOTIFICATION_TYPES.PAYMENT_RECEIVED,
+            client: invoice.client,
+            payload: {
+              invoice,
+              payment: { amount: amountInCents }
+            }
+          }).catch(e => console.warn('[wompi] PAYMENT_RECEIVED dispatch failed:', e.message));
+        } else if (status === 'DECLINED' && invoice.client) {
+          dispatch({
+            type: NOTIFICATION_TYPES.PAYMENT_FAILED,
+            client: invoice.client,
+            payload: {
+              invoice,
+              cta: { text: 'Reintentar pago', url: `${env.FRONTEND_URL}/invoices/${invoice.id}` }
+            }
+          }).catch(e => console.warn('[wompi] PAYMENT_FAILED dispatch failed:', e.message));
         }
       } catch (notifErr) {
         console.warn('[wompi] notification failed:', notifErr.message);
@@ -526,15 +598,24 @@ class WompiService {
   }
 
   async sendPaymentConfirmation(invoice, transactionId) {
-    // This would integrate with notification service
-    // For now, just log the confirmation
-    console.log(`Payment confirmed for invoice ${invoice.invoiceNumber}, transaction: ${transactionId}`);
+    if (!invoice.client) return;
+    dispatch({
+      type: NOTIFICATION_TYPES.PAYMENT_RECEIVED,
+      client: invoice.client,
+      payload: { invoice, payment: { amount: invoice.total || invoice.amount } }
+    }).catch(e => console.warn('[wompi] sendPaymentConfirmation dispatch failed:', e.message));
   }
 
   async sendPaymentFailure(invoice, transactionId) {
-    // This would integrate with notification service
-    // For now, just log the failure
-    console.log(`Payment failed for invoice ${invoice.invoiceNumber}, transaction: ${transactionId}`);
+    if (!invoice.client) return;
+    dispatch({
+      type: NOTIFICATION_TYPES.PAYMENT_FAILED,
+      client: invoice.client,
+      payload: {
+        invoice,
+        cta: { text: 'Reintentar pago', url: `${env.FRONTEND_URL}/invoices/${invoice.id}` }
+      }
+    }).catch(e => console.warn('[wompi] sendPaymentFailure dispatch failed:', e.message));
   }
 
   // Helper method to validate webhook integrity

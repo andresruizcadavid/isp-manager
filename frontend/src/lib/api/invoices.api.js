@@ -10,7 +10,8 @@ export const invoicesApi = {
     return getRaw(`/invoices${q ? '?' + q : ''}`);
   },
   getOne:         (id)     => api.get(`/invoices/${id}`),
+  create:         (data)   => api.post('/invoices', data),
   generateMonthly: ()      => api.post('/invoices/generate-monthly'),
-  send:           (id, ch) => api.post(`/invoices/${id}/send`, { channels: ch }),
-  markPaid:       (id)     => api.post(`/invoices/${id}/mark-paid`),
+  send:           (id, opts) => api.post(`/invoices/${id}/send`, { channels: opts.channels, sendPdf: opts.sendPdf ?? true, sendPaymentLink: opts.sendPaymentLink ?? false }),
+  markPaid:       (id)      => api.post(`/invoices/${id}/mark-paid`),
 };

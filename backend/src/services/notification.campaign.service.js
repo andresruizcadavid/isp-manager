@@ -1,9 +1,10 @@
 import { notificationService } from './notification.service.js';
+import { paymentLinkService } from './payment-link.service.js';
 import { prisma } from '../config/database.js';
 
 /**
  * Variable substitution. Supports {{name}}, {{plan}}, {{balance}}, {{email}},
- * {{phone}}, {{zone}}, {{ip}}, {{dueDate}}, {{amount}}.
+ * {{phone}}, {{zone}}, {{ip}}, {{dueDate}}, {{amount}}, {{paymentLink}}.
  * Any unknown placeholder renders as an empty string so we don't leak
  * `{{foo}}` literals to end users.
  */
@@ -20,20 +21,21 @@ const fmtMoney = (cents) =>
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('es-CO') : '';
 
-function clientVars(client) {
+function clientVars(client, overrides = {}) {
   // Oldest pending invoice for {{dueDate}} / {{amount}}
   const pending = (client.invoices || []).filter(i => ['PENDING', 'OVERDUE', 'PARTIAL'].includes(i.status));
   const oldest = pending.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
   return {
-    name:     client.name || '',
-    email:    client.email || '',
-    phone:    client.phone || '',
-    plan:     client.plan?.name || '',
-    zone:     client.zone?.name || '',
-    ip:       client.mikrotikAccount?.remoteAddress || '',
-    balance:  fmtMoney(client.balance),
-    dueDate:  oldest ? fmtDate(oldest.dueDate) : '',
-    amount:   oldest ? fmtMoney(oldest.balanceDue || oldest.total || oldest.amount) : ''
+    name:        client.name || '',
+    email:       client.email || '',
+    phone:       client.phone || '',
+    plan:        client.plan?.name || '',
+    zone:        client.zone?.name || '',
+    ip:          client.mikrotikAccount?.remoteAddress || '',
+    balance:     fmtMoney(client.balance),
+    dueDate:     oldest ? fmtDate(oldest.dueDate) : '',
+    amount:      oldest ? fmtMoney(oldest.balanceDue || oldest.total || oldest.amount) : '',
+    paymentLink: overrides.paymentLinkUrl || ''
   };
 }
 
@@ -57,7 +59,7 @@ async function resolveAudience(filter) {
       mikrotikAccount: { select: { remoteAddress: true } },
       invoices: {
         where: { status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
-        select: { status: true, total: true, amount: true, balanceDue: true, dueDate: true }
+        select: { id: true, status: true, total: true, amount: true, balanceDue: true, dueDate: true }
       }
     }
   });
@@ -185,7 +187,24 @@ export async function runCampaign(campaignId) {
   let failed = 0;
 
   for (const client of audience) {
-    const vars = clientVars(client);
+    // Generate payment link if the campaign has the flag enabled
+    let paymentLinkUrl = '';
+    let paymentLinkId = null;
+    if (campaign.generatePaymentLinks) {
+      const pending = (client.invoices || []).filter(i => ['PENDING', 'OVERDUE', 'PARTIAL'].includes(i.status));
+      const oldest = pending.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+      if (oldest) {
+        try {
+          const link = await paymentLinkService.createForInvoice(oldest.id);
+          paymentLinkUrl = link.checkoutUrl;
+          paymentLinkId = link.id;
+        } catch (e) {
+          console.error(`[campaign ${campaignId}] failed to create payment link for client ${client.id}: ${e.message}`);
+        }
+      }
+    }
+
+    const vars = clientVars(client, { paymentLinkUrl });
     const subject = renderTemplate(campaign.template.subject || '', vars);
     const body    = renderTemplate(campaign.template.body, vars);
 
@@ -212,16 +231,23 @@ export async function runCampaign(campaignId) {
       try {
         console.log(`[campaign ${campaignId}] → ${ch} to ${recipient}`);
         if (ch === 'EMAIL') {
-          // Pass the per-template preset so the styled header (icon + title)
-          // matches the message type (invoice, reminder, etc.).
+          const cta = paymentLinkUrl ? { text: 'Pagar ahora', url: paymentLinkUrl } : undefined;
           await notificationService.sendEmailRaw({
             to: recipient,
             subject,
             body,
+            cta,
             preset: campaign.template.preset || undefined
           });
         } else {
           await notificationService.sendWhatsApp({ to: recipient, message: body });
+        }
+        // Mark PaymentLink as sent when email is delivered
+        if (paymentLinkId && ch === 'EMAIL') {
+          await prisma.paymentLink.update({
+            where: { id: paymentLinkId },
+            data: { sentAt: new Date() }
+          }).catch(e => console.error(`[campaign ${campaignId}] failed to update sentAt: ${e.message}`));
         }
         await prisma.notificationLog.create({
           data: {

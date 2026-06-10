@@ -70,6 +70,8 @@ Hemos generado tu factura por el plan {{plan}}.
 
 Realiza tu pago antes de la fecha de corte para mantener tu servicio activo.
 
+Link de pago: {{paymentLink}}
+
 Datos de contacto:
 WhatsApp: 323 6329425
 Email: contacto@internetonline.co
@@ -88,8 +90,7 @@ Tu pago de internet está próximo a vencer.
 
 Realiza tu pago antes de la fecha de corte para evitar la suspensión del servicio.
 
-Formas de pago:
-Banco: xxx xxxx
+Link de pago: {{paymentLink}}
 
 Contacto:
 WhatsApp: 323 6329425
@@ -278,7 +279,7 @@ Email: contacto@internetonline.co
 
   function emptyCmp() {
     return {
-      name: '', templateId: '', channel: 'EMAIL',
+      name: '', templateId: '', channel: 'EMAIL', generatePaymentLinks: false,
       audience: { zoneId: '', planId: '', status: '', overdue: false }
     };
   }
@@ -303,6 +304,7 @@ Email: contacto@internetonline.co
       name:       `Copia de ${c.name}`,
       templateId: c.templateId || '',
       channel:    c.channel || 'EMAIL',
+      generatePaymentLinks: !!c.generatePaymentLinks,
       audience: {
         zoneId:  audience.zoneId  ?? '',
         planId:  audience.planId  ?? '',
@@ -350,6 +352,7 @@ Email: contacto@internetonline.co
         name:       `${c.name} (reenvío)`,
         templateId: c.templateId,
         channel:    c.channel,
+        generatePaymentLinks: !!c.generatePaymentLinks,
         audience
       });
       campaigns = [created, ...campaigns];
@@ -432,6 +435,7 @@ Email: contacto@internetonline.co
         name: cmpForm.name.trim(),
         templateId: cmpForm.templateId,
         channel: cmpForm.channel,
+        generatePaymentLinks: cmpForm.generatePaymentLinks,
         audience: filter
       });
       campaigns = [created, ...campaigns];
@@ -858,6 +862,9 @@ Email: contacto@internetonline.co
                   {/if}
                   <div class="text-[11px] text-slate-400 mt-0.5">
                     Audiencia: <span class="text-slate-500">{audienceSummary(c)}</span>
+                    {#if c.generatePaymentLinks}
+                      <span class="ml-1.5 badge bg-blue-50 text-blue-700 ring-blue-100 text-[9px]">🔗 links de pago</span>
+                    {/if}
                   </div>
                 </td>
                 <td>
@@ -1782,6 +1789,13 @@ Email: contacto@internetonline.co
           Solo con facturas vencidas
         </label>
       </div>
+      <label class="inline-flex items-center gap-2 text-sm pt-1 border-t border-slate-200">
+        <input type="checkbox" bind:checked={cmpForm.generatePaymentLinks} class="w-4 h-4" />
+        <span>Generar links de pago para cada cliente</span>
+        <span class="badge bg-amber-50 text-amber-700 ring-amber-100 text-[10px]">
+          {'{{'}paymentLink{'}}'}
+        </span>
+      </label>
 
       <!-- Expandable list of clients matching the audience filter -->
       {#if (audiencePreview ?? 0) > 0}

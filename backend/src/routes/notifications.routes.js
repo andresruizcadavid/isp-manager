@@ -30,6 +30,7 @@ const campaignSchema = z.object({
   name:       z.string().min(2),
   templateId: z.string().min(1, 'Selecciona una plantilla'),
   channel:    CHANNEL,
+  generatePaymentLinks: z.boolean().optional().default(false),
   audience:   z.object({
     zoneId:  z.union([z.number(), z.string()]).optional(),
     planId:  z.string().optional(),
@@ -155,7 +156,7 @@ router.post('/campaigns/preview-clients', async (req, res) => {
 // The frontend polls /campaigns/:id to see progress.
 router.post('/campaigns', validateBody(campaignSchema), async (req, res) => {
   try {
-    const { name, templateId, channel, audience } = req.body;
+    const { name, templateId, channel, generatePaymentLinks, audience } = req.body;
 
     // Validate template exists and channel matches the template's channel
     // (when sending single-channel; "BOTH" requires the template to be EMAIL
@@ -193,6 +194,7 @@ router.post('/campaigns', validateBody(campaignSchema), async (req, res) => {
         name,
         templateId,
         channel,
+        generatePaymentLinks,
         audienceJson: audience ? JSON.stringify(audience) : null,
         status: 'running',
         startedAt: new Date(),

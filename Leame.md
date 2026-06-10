@@ -1,7 +1,7 @@
 # ISP Manager — Documentación Técnica del Proyecto
 
 > Generado automáticamente mediante auditoría de código.
-> Última actualización: 2026-06-01 (hotfix producción)
+> Última actualización: 2026-06-08 (Fase Portal + Wompi Links de Pago)
 
 ---
 
@@ -23,9 +23,10 @@
 | Autenticación | JWT (jsonwebtoken) + bcryptjs + sesiones DB | ^9.0.2 / ^2.4.3 |
 | Validación | Zod | ^3.22.4 |
 | Tiempo real | socket.io + socket.io-client | ^4.8.3 |
+| Pasarela de pago | Wompi — Links de Pago API | v1 |
 | Procesos prod | PM2 | 7.0.1 |
 | Infra | Docker + Docker Compose | Alpine-based |
-| Proxy reverso | Nginx | Alpine-based |
+| Proxy reverso | Nginx | Alpine-based / Ubuntu |
 
 ---
 
@@ -35,39 +36,51 @@
 isp-manager/
 ├── backend/
 │   ├── src/
-│   │   ├── app.js                        # Express setup, CORS, 19 routers montados
+│   │   ├── app.js                        # Express setup, CORS, 21+ routers montados
 │   │   ├── server.js                     # Entry: Prisma, Redis, Socket.io, crons
 │   │   ├── config/
-│   │   │   └── env.js                    # Zod schema de 30+ variables de entorno
+│   │   │   ├── env.js                    # Zod schema de 30+ variables de entorno
+│   │   │   └── database.js              # Singleton PrismaClient (fuente única)
 │   │   ├── controllers/
 │   │   │   ├── auth.controller.js        # login/register/logout/change-password
 │   │   │   ├── clients.controller.js     # CRUD + suspend/activate/changePlan/tokens
-│   │   │   ├── invoices.controller.js    # CRUD + bulkGenerate + PDF + Wompi checkout
+│   │   │   ├── invoices.controller.js    # CRUD + bulkGenerate + PDF
 │   │   │   ├── mikrotik.controller.js    # Proxy a RouterOS REST API
-│   │   │   ├── payments.controller.js    # CRUD + refunds + Wompi webhook + sync
+│   │   │   ├── payments.controller.js    # CRUD + refunds + webhook + sync
 │   │   │   └── reports.controller.js     # Dashboard + financial + collection + export
 │   │   ├── middleware/
 │   │   │   ├── auth.middleware.js        # JWT verify + session DB lookup + roles
+│   │   │   ├── client-auth.middleware.js # JWT verify para portal clientes (type: 'client')
 │   │   │   ├── error.middleware.js       # AppError + Prisma/Zod/Multer handlers
-│   │   │   └── validate.middleware.js    # Zod body/query/params validators
-│   │   ├── routes/ (19 archivos)
-│   │   │   ├── auth.routes.js            # 6 endpoints
-│   │   │   ├── clients.routes.js         # 9 endpoints + bulk
-│   │   │   ├── invoices.routes.js        # 9 endpoints
-│   │   │   ├── payments.routes.js        # 5 endpoints + webhook
-│   │   │   ├── mikrotik.routes.js        # 10+ endpoints de proxy RouterOS
+│   │   │   ├── validate.middleware.js    # Zod body/query/params validators
+│   │   │   ├── rateLimit.middleware.js   # Global rate limiter (express-rate-limit)
+│   │   │   └── origin-guard.middleware.js # CSRF defense-in-depth por origin
+│   │   ├── routes/ (21+ archivos)
+│   │   │   ├── auth.routes.js            # Login, register, logout, profile, changePassword
+│   │   │   ├── client-auth.routes.js     # Portal cliente: login, register-password, forgot/reset password, me
+│   │   │   ├── portal.routes.js          # Portal cliente: dashboard, invoices, payments, profile, pay
+│   │   │   ├── clients.routes.js         # CRUD + bulk + suspend/activate + changePlan
+│   │   │   ├── invoices.routes.js        # CRUD + bulkGenerate + PDF + send
+│   │   │   ├── payments.routes.js        # CRUD + refunds + webhook Wompi
+│   │   │   ├── mikrotik.routes.js        # Proxy RouterOS: secrets, perfiles, IPs, firewall
 │   │   │   ├── routers.routes.js         # CRUD + sync + import PPPoE
 │   │   │   ├── network.routes.js         # Devices + connections + events
-│   │   │   ├── notifications.routes.js   # Templates + campaigns + history
+│   │   │   ├── notifications.routes.js   # Templates + campaigns (con paymentLinks) + history
 │   │   │   ├── public.client-updates.routes.js  # Público: token GET/PUT/POST
-│   │   │   ├── ... (zones, plans, accounts, evidence, reports, dashboard, smtp, telegram, whatsapp, users)
-│   │   ├── services/ (14 archivos)
-│   │   │   ├── mikrotik.service.js       # RouterOS REST client + failover
-│   │   │   ├── network-monitor.service.js # ICMP sweep + state machine
-│   │   │   ├── router-monitor.service.js  # ICMP per route + router status
-│   │   │   ├── notification.service.js    # SMTP + WhatsApp + Telegram sends
-│   │   │   ├── notification.campaign.service.js  # Audiencia + envío masivo
-│   │   │   ├── wompi.service.js           # Checkout + webhook signature
+│   │   │   ├── collection-windows.routes.js     # Ventanas de cobranza
+│   │   │   ├── billing-cycles.routes.js         # Ciclos de facturación
+│   │   │   ├── backups.routes.js                # Backups de router
+│   │   │   └── ... (zones, plans, accounts, evidence, reports, dashboard, smtp, telegram, whatsapp, users)
+│   │   ├── services/ (16+ archivos)
+│   │   │   ├── wompi.service.js           # Links de Pago + webhook + reconciliation
+│   │   │   ├── payment-link.service.js     # Creación individual/bulk de payment links
+│   │   │   ├── client-auth.service.js      # Auth portal cliente: login, register, forgot/reset
+│   │   │   ├── mikrotik.service.js         # RouterOS REST client + failover
+│   │   │   ├── network-monitor.service.js  # ICMP sweep + state machine
+│   │   │   ├── router-monitor.service.js   # ICMP per route + router status
+│   │   │   ├── notification.service.js     # SMTP + WhatsApp + Telegram sends
+│   │   │   ├── notification.campaign.service.js  # Audiencia + envío masivo + paymentLinks
+│   │   │   ├── notification-orchestrator.service.js  # Dispatch multicanal transactional
 │   │   │   ├── whatsapp.service.js         # Meta Cloud API
 │   │   │   ├── telegram.service.js         # Bot alerts
 │   │   │   ├── invoice.service.js          # PDFKit generation
@@ -79,12 +92,14 @@ isp-manager/
 │   │   ├── jobs/
 │   │   │   ├── billing.job.js             # 6 cron jobs (facturación)
 │   │   │   ├── overdue.job.js             # 4 cron jobs (suspensiones)
-│   │   │   └── queue.bootstrap.js         # BullMQ workers (placeholder)
-│   │   └── prisma/
+│   │   │   ├── debtor-notification.job.js # Recordatorio de deuda (día 25–EOM)
+│   │   │   ├── auto-collection.job.js     # Cobranza automática horaria
+│   │   │   └── backup.job.js              # Backup de routers
+│   │   └── prisma/ (NO USAR — deprecated)
 │   │       └── schema.prisma              # ⚠️ SCHEMA ANTIGUO — no usar
 │   ├── prisma/
-│   │   ├── schema.prisma                  # Schema activo (25 modelos, 11 enums)
-│   │   ├── migrations/                    # 21 migraciones aplicadas
+│   │   ├── schema.prisma                  # Schema activo (38 modelos, 14+ enums)
+│   │   ├── migrations/                    # 32 migraciones aplicadas
 │   │   ├── seed.js                        # admin@demo.com / password123
 │   │   └── init.sql
 │   ├── scripts/                           # import-wisphub, scrape, analyze, seed-templates
@@ -94,15 +109,15 @@ isp-manager/
 ├── frontend/
 │   ├── src/
 │   │   ├── routes/
-│   │   │   ├── +layout.svelte             # Root layout
+│   │   │   ├── +layout.svelte             # Root layout (Toaster, etc.)
 │   │   │   ├── +page.svelte               # Home
-│   │   │   ├── login/+page.svelte         # Login page
-│   │   │   ├── (app)/                     # Rutas autenticadas (sidebar layout)
+│   │   │   ├── login/+page.svelte         # Admin login page
+│   │   │   ├── (app)/                     # Rutas autenticadas admin (sidebar layout)
 │   │   │   │   ├── dashboard/             # KPIs + charts
 │   │   │   │   ├── clients/               # List + [id] detail + new (stepper)
 │   │   │   │   ├── plans/                 # CRUD planes
 │   │   │   │   ├── zones/                 # CRUD zonas
-│   │   │   │   ├── invoices/              # List + PDF + send
+│   │   │   │   ├── invoices/              # List + PDF + send + collection-windows + billing-cycles
 │   │   │   │   ├── payments/              # List + register
 │   │   │   │   ├── mikrotik/              # Overview + routers + accounts
 │   │   │   │   ├── network/               # Map + events + settings
@@ -110,13 +125,24 @@ isp-manager/
 │   │   │   │   ├── reports/               # Multi-tab financial + clients + invoices
 │   │   │   │   ├── users/                 # CRUD usuarios sistema
 │   │   │   │   └── forbidden/             # 403 page
+│   │   │   ├── portal/                    # Portal de Cliente (rutas literales)
+│   │   │   │   ├── +layout.svelte         # Layout portal con auth guard + nav móvil
+│   │   │   │   ├── login/+page.svelte     # Login portal cliente
+│   │   │   │   ├── register-password/[token]/+page.svelte  # Primera vez
+│   │   │   │   ├── forgot-password/+page.svelte
+│   │   │   │   ├── dashboard/+page.svelte # Resumen: cards + facturas recientes
+│   │   │   │   ├── invoices/+page.svelte  # Lista de facturas
+│   │   │   │   ├── invoices/[id]/+page.svelte  # Detalle + pagar
+│   │   │   │   ├── payments/+page.svelte  # Historial de pagos
+│   │   │   │   └── profile/+page.svelte   # Datos personales, plan, estado
 │   │   │   └── (public)/                  # Rutas públicas
 │   │   │       └── update/[token]/        # Portal auto-servicio cliente
 │   │   ├── lib/
-│   │   │   ├── api/ (15 wrappers)         # clients, invoices, payments, etc.
-│   │   │   ├── stores/ (4 stores)         # auth, socket, toast, ui
+│   │   │   ├── api/ (17 wrappers)         # clients, invoices, payments, portal, etc.
+│   │   │   ├── stores/ (6 stores)         # auth, client-auth, socket, toast, ui, etc.
 │   │   │   ├── components/
 │   │   │   │   ├── layout/ (Header, Sidebar)
+│   │   │   │   ├── payments/ (WompiButton — redirect-only)
 │   │   │   │   ├── network/ (DeviceNode, ZoneTabs)
 │   │   │   │   └── ui/ (Button, Input, Modal, Sheet, Table, etc.)
 │   │   │   └── permissions.js             # RBAC route guard + sidebar filter
@@ -137,32 +163,307 @@ isp-manager/
 
 ---
 
-## Variables de Entorno Detectadas
+## Variables de Entorno
 
 ### Backend (backend/.env)
-`NODE_ENV`, `PORT`, `DATABASE_URL`, `REDIS_URL`, `JWT_SECRET`, `JWT_EXPIRES_IN`,
-`FRONTEND_URL`, `WOMPI_PUBLIC_KEY`, `WOMPI_PRIVATE_KEY`, `WOMPI_EVENTS_KEY`,
-`WOMPI_API_URL`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`,
-`WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_VERSION`, `TWILIO_SID`,
-`TWILIO_AUTH`, `TWILIO_PHONE`, `COMPANY_NAME`, `COMPANY_NIT`, `COMPANY_CITY`,
-`COMPANY_ADDRESS`, `COMPANY_PHONE`, `COMPANY_EMAIL`, `UPLOADS_PATH`,
-`MAX_FILE_SIZE`, `MIKROTIK_HOST`, `MIKROTIK_USER`, `MIKROTIK_PASSWORD`,
-`MIKROTIK_PORT`, `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX_REQUESTS`
+
+| Variable | Requerida | Descripción |
+|----------|-----------|-------------|
+| `NODE_ENV` | Sí | development / production / test |
+| `PORT` | Sí | Puerto del servidor (3001) |
+| `DATABASE_URL` | Sí | PostgreSQL connection string |
+| `REDIS_URL` | Sí | Redis connection string |
+| `JWT_SECRET` | Sí | Secreto JWT (≥32 chars) |
+| `JWT_EXPIRES_IN` | No (default 8h) | TTL del token (formato: `8h`, `24h`) |
+| `COOKIE_SECRET` | Sí | Secreto para cookies firmadas (≥32 chars) |
+| `FRONTEND_URL` | Sí | URL exacta del frontend (para CORS y redirects). **Debe coincidir con el origin del navegador** |
+| `CORS_EXTRA_ORIGINS` | No | Orígenes CORS adicionales (separados por coma) |
+| `WOMPI_PUBLIC_KEY` | Sí | Llave pública Wompi (`pub_test_*` / `pub_prod_*`) |
+| `WOMPI_PRIVATE_KEY` | Sí | Llave privada Wompi (`prv_test_*` / `prv_prod_*`)  |
+| `WOMPI_EVENTS_KEY` | Sí | Events key para verificar webhooks (`evt_test_*` / `evt_prod_*`) |
+| `WOMPI_API_URL` | No (default `https://api.wompi.co/v1`) | Base URL de la API de Wompi |
+| `SMTP_HOST` | Sí | Servidor SMTP (ej: smtp.brevo.com) |
+| `SMTP_PORT` | No (default 587) | Puerto SMTP |
+| `SMTP_USER` | Sí | Usuario SMTP |
+| `SMTP_PASS` | Sí | Contraseña SMTP |
+| `COMPANY_*` | Sí | Datos de la empresa (nombre, NIT, ciudad, dirección, teléfono, email) |
+| `UPLOADS_PATH` | No (default ./uploads) | Ruta para archivos subidos |
+| `MAX_FILE_SIZE` | No (default 10485760) | Tamaño máximo de archivo (bytes) |
+| `RATE_LIMIT_WINDOW_MS` | No (default 900000) | Ventana de rate limiting (ms) |
+| `RATE_LIMIT_MAX_REQUESTS` | No (default 1000) | Máximo de requests por ventana |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID` | No | Credenciales WhatsApp Cloud API (bootstrap) |
+| `TWILIO_*` | No | Credenciales Twilio (scaffold, no implementado) |
+| `MIKROTIK_*` | No | Router MikroTik por defecto (opcional, la config per-router está en DB) |
 
 ### Frontend (frontend/.env)
-`PUBLIC_API_URL`
+
+| Variable | Requerida | Descripción |
+|----------|-----------|-------------|
+| `PUBLIC_API_URL` | No (vacío en dev → Vite proxy) | URL base del API. Vacío = mismo origen (producción), o `http://localhost:3001` para standalone |
+
+---
+
+## Integración Wompi — Links de Pago
+
+### Arquitectura General
+
+Wompi es la **única pasarela de pago** del sistema. Se implementa mediante **Links de Pago** (Payment Links), NO mediante el Widget Checkout Web (deprecado por inestabilidad).
+
+```
+Frontend (SPA)                         Backend (Express)                  Wompi API
+     │                                      │                                │
+     │  POST /portal/invoices/:id/pay       │                                │
+     │─────────────────────────────────────>│                                │
+     │                                      │  POST /v1/payment_links        │
+     │                                      │───────────────────────────────>│
+     │                                      │     { data: { id: "xxx" } }   │
+     │                                      │<───────────────────────────────│
+     │  { checkoutUrl }                     │                                │
+     │<─────────────────────────────────────│                                │
+     │                                      │                                │
+     │  Redirect a checkout URL             │                                │
+     │──────────────────────────────────────┼───────────────────────────────>│
+     │                                      │                                │
+     │  (Cliente paga en checkout.wompi.co) │                                │
+     │                                      │                                │
+     │                                      │  POST /webhooks/wompi          │
+     │                                      │  (transaction.updated)         │
+     │                                      │<───────────────────────────────│
+     │                                      │                                │
+     │                                      │  • Verifica firma HMAC-SHA256  │
+     │                                      │  • Busca PaymentAttempt por    │
+     │                                      │    reference o payment_link_id │
+     │                                      │  • Crea/actualiza Payment      │
+     │                                      │  • Actualiza Invoice.status    │
+     │                                      │                                │
+```
+
+### Endpoints Wompi Utilizados
+
+| Endpoint | Método | Propósito |
+|----------|--------|-----------|
+| `/{env}/v1/payment_links` | `POST` | Crear link de pago |
+| `/{env}/v1/payment_links/{id}` | `GET` | Consultar estado del link |
+
+`{env}` = `sandbox.wompi.co` (desarrollo) o `api.wompi.co` (producción). Ver variable `WOMPI_API_URL`.
+
+### Formato del Body (POST /v1/payment_links)
+
+```json
+{
+  "name": "Pago factura INV-001",
+  "description": "Factura servicio internet - INV-001",
+  "single_use": true,
+  "collect_shipping": false,
+  "currency": "COP",
+  "amount_in_cents": 6500000,
+  "expires_at": "2026-07-09T00:00:00.000Z",
+  "redirect_url": "https://app.internetonline.co/invoices/xxx?wompi_attempt=yyy"
+}
+```
+
+**Notas importantes:**
+- No se envía `reference`, `customer_data`, ni `signature` (esos campos no existen en el endpoint de payment_links)
+- `amount_in_cents` es el **valor total en centavos**: $65,000 COP → 6500000
+- `expires_at` en ISO 8601
+- `redirect_url` es opcional; el cliente vuelve ahí después del pago
+- La respuesta incluye `data.id` (ej: `test_DLG4nh`) → checkout URL = `https://checkout.wompi.co/l/{id}`
+
+### Flujo de Pago Completo
+
+#### 1. Creación del Payment Link
+
+El servicio `wompi.service.js` (`createCheckout`) recibe un objeto `invoice`:
+
+1. Genera un `reference` único por intento: `PL-{clientId[:6]}-{timestamp36}-{random4byteshex}`
+2. Crea un `PaymentAttempt` en DB con estado `PENDING` (idempotencia + trazabilidad)
+3. Llama a `POST /v1/payment_links` de Wompi
+4. Actualiza `PaymentAttempt` con `checkoutUrl` y `externalId` (= wompiLinkId)
+5. Retorna `{ checkoutUrl, paymentAttemptId, wompiLinkId }`
+
+El servicio `payment-link.service.js` (`createForInvoice`) orquesta todo:
+1. Verifica invoice (existe, no pagada)
+2. Llama a `wompiService.createCheckout(invoice)`
+3. Crea un `PaymentLink` en DB asociado a la invoice + cliente
+4. Retorna el `PaymentLink` completo (incluye `checkoutUrl`)
+
+#### 2. Pago del Cliente
+
+- El frontend redirige al cliente a `https://checkout.wompi.co/l/{wompiLinkId}`
+- Wompi maneja toda la UX de pago (tarjeta, PSE, Nequi, etc.)
+- Wompi redirige al `redirect_url` después del pago (no es fuente de confirmación)
+
+#### 3. Webhook — Confirmación del Pago
+
+Wompi envía un evento `transaction.updated` a `POST /api/v1/payments/webhooks/wompi`.
+
+El handler `handleTransactionUpdate` en `wompi.service.js`:
+
+1. **Verifica firma**: HMAC-SHA256 con `WOMPI_EVENTS_KEY` sobre propiedades ordenadas del transaction + timestamp
+2. **Resuelve la factura** por dos estrategias:
+   - **Por reference**: extrae el `invoiceNumber` del reference (`INV-001-{ts}-{rand}` → `INV-001`)
+   - **Por payment_link_id**: busca `PaymentAttempt.externalId` igual al `payment_link_id` del webhook
+3. **Actualiza PaymentAttempt**: marca como APPROVED/DECLINED/ERROR según corresponda
+4. **Idempotencia**: busca `Payment` por `transactionId` (UNIQUE en schema). Si existe, actualiza estado; si no, crea registro nuevo
+5. **Crea pago**: `Payment` con método `WOMPI`, monto, status `COMPLETED`, reference del webhook
+6. **Actualiza factura**: `updateInvoiceStatus` → suma pagos, si totalPagado >= total → status = `PAID`, balanceDue = 0
+
+### Modelos de Datos Relacionados
+
+```prisma
+model PaymentAttempt {
+  id              String   @id @default(cuid())
+  invoiceId       String
+  clientId        String
+  reference       String   @unique  // PL-{clientId}-{ts}-{rand}
+  amount          Int               // en centavos
+  currency        String   @default("COP")
+  status          String   @default("PENDING") // PENDING | APPROVED | DECLINED | ERROR | FAILED
+  checkoutUrl     String?           // URL de checkout de Wompi
+  externalId      String?           // wompiLinkId (para matching por payment_link_id)
+  webhookPayload  Json?
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PaymentLink {
+  id              String   @id @default(cuid())
+  clientId        String
+  invoiceId       String
+  reference       String   @unique
+  amountInCents   Int
+  currency        String   @default("COP")
+  checkoutUrl     String
+  wompiLinkId     String?
+  status          String   @default("pending") // pending | active | expired | used
+  expiresAt       DateTime?
+  paymentAttemptId String?
+  sentAt          DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+```
+
+### Payment Links en Campañas de Notificación
+
+El campo `generatePaymentLinks` en `NotificationCampaign` permite que al ejecutar una campaña:
+
+1. Por cada cliente en la audiencia, se identifica la **factura pendiente más antigua**
+2. Se genera un payment link único via `createForInvoice`
+3. El link se inyecta en la variable `{{paymentLink}}` del template
+4. El cliente recibe el mensaje con el enlace de pago personalizado
+
+**Uso en la plantilla:**
+```
+Hola {{name}}, tienes un saldo pendiente de {{amount}} con vencimiento {{dueDate}}.
+Paga aquí: {{paymentLink}}
+```
+
+**Creación de campaña con links:**
+```json
+POST /api/v1/notifications/campaigns
+{
+  "name": "Cobro masivo marzo",
+  "templateId": "tpl_xxx",
+  "channel": "EMAIL",
+  "generatePaymentLinks": true,
+  "audience": { "overdue": true }
+}
+```
+
+### Manejo de Errores
+
+| Error | Causa | Acción del sistema |
+|-------|-------|-------------------|
+| `INVALID_ACCESS_TOKEN` | WOMPI_PRIVATE_KEY incorrecta o entorno (sandbox vs prod) no coincide | PaymentAttempt → FAILED. Se loguea el error |
+| `INPUT_VALIDATION_ERROR` | Body mal formado (falta `description`, `amount_in_cents` inválido, etc.) | PaymentAttempt → FAILED. Se loguea el error |
+| Webhook con firma inválida | Events key incorrecta o request malicioso | Se rechaza con 401 |
+| Webhook sin factura | reference no matchea ninguna factura ni payment_link_id | Se loguea warning, se ignora |
+| Timeout de API | Wompi no responde en tiempo razonable | PaymentAttempt → FAILED. Se puede reintentar |
+
+### Configuración por Entorno
+
+| Variable | Sandbox (dev) | Producción |
+|----------|--------------|------------|
+| `WOMPI_API_URL` | `https://sandbox.wompi.co/v1` | `https://api.wompi.co/v1` |
+| `WOMPI_PUBLIC_KEY` | `pub_test_*` | `pub_prod_*` |
+| `WOMPI_PRIVATE_KEY` | `prv_test_*` | `prv_prod_*` |
+| `WOMPI_EVENTS_KEY` | `evt_test_*` | `evt_prod_*` |
+
+**Importante:** Las llaves de sandbox y producción NO son intercambiables. Usar `pub_test_*` contra `api.wompi.co/v1` (o viceversa) retorna `INVALID_ACCESS_TOKEN`.
+
+### Webhooks en Wompi
+
+Para que Wompi envíe webhooks al sistema, debes registrar la URL en el dashboard de Wompi:
+
+- **Sandbox:** https://sandbox.wompi.co > Configuración > Webhooks
+- **Producción:** https://wompi.co > Configuración > Webhooks
+
+**URL a registrar:** `https://app.internetonline.co/api/v1/payments/webhooks/wompi`
+
+**Eventos a suscribir:** `transaction.updated`
+
+**Verificación de firma:** El webhook incluye un header `x-signature` que se verifica con `WOMPI_EVENTS_KEY` usando HMAC-SHA256. El algoritmo concatenan las propiedades en orden alfabético + timestamp + events key, aplica SHA256, y compara en tiempo constante.
+
+---
+
+## Portal de Cliente
+
+### Arquitectura
+
+El portal de cliente es una sección independiente dentro del mismo SPA, bajo rutas literales `/portal/*`. Usa su propio sistema de autenticación:
+
+- **Cookie:** `client_token` (separada de `token` de admin)
+- **Middleware:** `client-auth.middleware.js` (verifica JWT con `type: 'client'` y busca `ClientSession`)
+- **Alcance:** Solo datos del propio cliente (dashboard, facturas, pagos, perfil)
+
+### Modelos
+
+| Modelo | Propósito |
+|--------|-----------|
+| `ClientUser` | Usuario del portal (1:1 con `Client`, email único) |
+| `ClientSession` | Sesión JWT (revocable, mismo patrón que `Session` de admin) |
+| `ClientResetToken` | Token para registro inicial / reset de contraseña |
+
+### Flujo de Registro
+
+1. **Admin invita al cliente** → se crea `ClientUser` + `ClientResetToken` → se envía email con link
+2. **Cliente recibe link** → `GET /portal/register-password/{token}`
+3. **Cliente establece contraseña** → `POST /api/v1/client-auth/register-password` → se hashea con bcryptjs, se activa la cuenta
+4. **Cliente inicia sesión** → `POST /api/v1/client-auth/login` → JWT firmado + cookie `client_token`
+
+### Endpoints
+
+| Ruta | Método | Auth | Descripción |
+|------|--------|------|-------------|
+| `/api/v1/client-auth/login` | POST | No | Login con email + password |
+| `/api/v1/client-auth/register-password` | POST | No | Establecer contraseña (primer login) |
+| `/api/v1/client-auth/forgot-password` | POST | No | Enviar email de recuperación |
+| `/api/v1/client-auth/reset-password` | POST | No | Reset con token |
+| `/api/v1/client-auth/logout` | POST | No | Cerrar sesión |
+| `/api/v1/client-auth/me` | GET | Client | Perfil del cliente |
+| `/api/v1/portal/dashboard` | GET | Client | Resumen: cards + facturas recientes |
+| `/api/v1/portal/invoices` | GET | Client | Lista de facturas |
+| `/api/v1/portal/invoices/:id` | GET | Client | Detalle de factura |
+| `/api/v1/portal/invoices/:id/pay` | POST | Client | Generar link de pago |
+| `/api/v1/portal/payments` | GET | Client | Historial de pagos |
+| `/api/v1/portal/profile` | GET | Client | Datos personales + plan |
 
 ---
 
 ## Inventario de Funcionalidades
 
 ### Autenticación y Seguridad
-- Login con JWT + sesión en DB (revocable)
+- Login con JWT + sesión en DB (revocable) para admin y clientes
 - Logout (elimina sesión)
 - Registro de usuarios (solo ADMIN)
 - Cambio de contraseña (invalida otras sesiones)
+- Reset de contraseña (portal cliente: forgot-password + token)
 - Roles: ADMIN, OPERATOR, TECHNICIAN, VIEWER
 - Middleware de autorización por ruta (requireAdmin, requireOperational)
+- CSRF defense-in-depth (origin-guard middleware para cookie-auth)
+- Rate limiting global (express-rate-limit) + específico por ruta
 
 ### Gestión de Clientes
 - CRUD completo con búsqueda, filtros (status/plan/zone/city), paginación
@@ -176,11 +477,12 @@ isp-manager/
 
 ### Planes
 - CRUD con precio en centavos, velocidades, perfil MikroTik asociado
+- Plan gratis (isFree) para clientes sin facturación
 
 ### Zonas
 - CRUD con asignación 1:1 a router MikroTik
 - Vista en mapa de red (SvelteFlow)
-- Pesistencia de viewport por zona
+- Persistencia de viewport por zona
 
 ### MikroTik / RouterOS
 - CRUD de routers con multi-IP failover (hasta 3 rutas)
@@ -190,21 +492,45 @@ isp-manager/
 - Suspensión/activación de secrets PPPoE
 - Lista de direcciones autorizadas (firewall address-list)
 - Historial de logs del router
+- Backups programados de configuración
 
 ### Facturación
 - CRUD de facturas con items
 - Generación masiva mensual (cron)
 - PDF con PDFKit
 - Envío por email/WhatsApp
-- Checkout Wompi (pasarela de pago colombiana)
+- Ciclos de facturación configurables
+- Ventanas de cobranza
 - Estados: DRAFT, PENDING, PARTIAL, PAID, OVERDUE, CANCELLED, REFUNDED
 
-### Pagos
-- Registro manual (CASH, BANK_TRANSFER, CREDIT_CARD, WOMPI, OTHER)
-- Reembolsos parciales/totales
+### Pagos (Wompi Links de Pago)
+- Creación de links de pago individuales y masivos
+- Múltiples PaymentAttempt por factura (intentos trazables)
 - Webhook Wompi con verificación HMAC-SHA256
-- Sincronización de estado de facturas (reconciliación)
+- Reconciliación automática por reference o payment_link_id
+- Idempotencia por transactionId
+- Registro manual (CASH, BANK_TRANSFER, CREDIT_CARD, OTHER)
+- Reembolsos parciales/totales
 - Dashboard de pagos por método/mes
+
+### Portal de Cliente
+- Inicio de sesión con email + contraseña
+- Registro de contraseña (primer acceso)
+- Recuperación de contraseña
+- Dashboard con resumen de cuenta (cards de estado, facturas pendientes, último pago)
+- Lista y detalle de facturas con opción de pago
+- Historial de pagos
+- Perfil con datos personales, plan, dirección, estado del servicio
+
+### Campañas de Notificación con Links de Pago
+- Creación de campañas con generación automática de payment links
+- Variable `{{paymentLink}}` en templates
+- Variables disponibles: `{{name}}`, `{{email}}`, `{{phone}}`, `{{plan}}`, `{{zone}}`, `{{ip}}`, `{{balance}}`, `{{dueDate}}`, `{{amount}}`, `{{paymentLink}}`
+- Canales: EMAIL (SMTP), WhatsApp (Meta Cloud API), ambos (BOTH)
+- Filtros de audiencia: zona, plan, estado, solo morosos
+- Vista previa de audiencia antes de enviar
+- Historial de envíos con logs individuales
+- Reintento de fallidos
 
 ### Red / Monitoreo
 - Mapa interactivo de dispositivos de red (SvelteFlow)
@@ -215,9 +541,10 @@ isp-manager/
 - Configuración de polling (intervalo, timeout, down-count)
 
 ### Notificaciones
-- Plantillas con presets + variables {{name}}, {{plan}}, etc.
-- Campañas masivas con filtro de audiencia
+- Plantillas con presets + variables
+- Campañas masivas con filtro de audiencia + payment links
 - Canales: EMAIL (SMTP configurable desde UI), WhatsApp (Meta Cloud API), Telegram
+- Notificaciones transaccionales automáticas (factura creada, pago recibido, servicio suspendido)
 - Historial de envíos con logs
 
 ### Reportes
@@ -238,264 +565,68 @@ isp-manager/
 
 ## Bugs y Problemas Detectados
 
-### [CRÍTICO] Bug #1 — Auth middleware crea PrismaClient propio
-**Archivo:** `backend/src/middleware/auth.middleware.js:3-4`
-**Problema:** Crea `new PrismaClient()` en vez de importar la instancia compartida de `server.js`. Lo mismo ocurre en `backend/src/routes/evidence.routes.js:10`. Esto genera conexiones DB duplicadas sin el logging configurado en `server.js`.
-**Severidad:** CRÍTICO
-
 ### [CRÍTICO] Bug #2 — Schema Prisma duplicado y desactualizado
 **Archivo:** `backend/src/prisma/schema.prisma`
-**Problema:** Existe un schema antiguo con modelos diferentes (`Device.macAddress` vs `mac`, `Client.documentType` como enum, campos faltantes). Si alguien corre `prisma generate` desde `backend/src/prisma/` obtendrá un cliente incompatible.
-**Severidad:** CRÍTICO
+**Problema:** Existe un schema antiguo. Si alguien corre `prisma generate` desde esa ruta obtendrá un cliente incompatible. Ya marcado como deprecated.
 
-### [ALTO] Bug #3 — validateBody traga errores detallados de Zod
-**Archivo:** `backend/src/middleware/validate.middleware.js:17-21`
-**Problema:** En vez de dejar que el `errorMiddleware` maneje el ZodError (que devuelve detalles campo por campo), crea un `AppError` genérico. El cliente recibe "Error de validación" sin saber qué campo falló.
-**Causa:** `validateBody` captura el ZodError y lanza un AppError genérico. El `error.middleware.js` sí maneja ZodError correctamente (devuelve `error.errors` con field+message).
-**Severidad:** ALTO
-
-### [ALTO] Bug #4 — Device model: campo `macAddress` no existe
-**Archivo:** `backend/src/controllers/clients.controller.js:742, 783, 788`
-**Problema:** El controlador referencia `macAddress` como campo único del Device, pero el schema activo (`backend/prisma/schema.prisma`) define el campo como `mac`. `prisma.device.findUnique({ where: { macAddress: ... } })` arrojará Prisma error P2009 ("Unknown argument").
-**Severidad:** ALTO
-
-### [MEDIO] Bug #5 — Session TTL desincronizado con JWT_EXPIRES_IN
-**Archivo:** `backend/src/controllers/auth.controller.js:53`
-**Problema:** El `expiresAt` de la sesión en DB se hardcodea a 8h, ignorando `env.JWT_EXPIRES_IN`. Si `JWT_EXPIRES_IN=24h`, el JWT sigue siendo válido pero la sesión en DB expiró → el usuario recibe 401 aunque su token no haya expirado.
-**Causa:** `expiresAt.setHours(expiresAt.getHours() + 8)` debería usar `env.JWT_EXPIRES_IN`.
-**Severidad:** MEDIO
-
-### [MEDIO] Bug #6 — changePlan no sincroniza con MikroTik
-**Archivo:** `backend/src/controllers/clients.controller.js:1023`
-**Problema:** Al cambiar de plan, solo se actualiza `planId` en DB. El perfil PPPoE en el router MikroTik no se actualiza, por lo que el cliente sigue teniendo la velocidad/ancho de banda del plan anterior hasta sincronización manual.
-**Severidad:** MEDIO
+### [ALTO] Bug #6 — changePlan no sincroniza con MikroTik
+**Archivo:** `backend/src/controllers/clients.controller.js`
+**Problema:** Al cambiar de plan, solo se actualiza `planId` en DB. El perfil PPPoE en el router MikroTik no se actualiza.
 
 ### [MEDIO] Bug #7 — Socket.io CORS hardcodeado a localhost
 **Archivo:** `backend/src/services/socket.service.js:12`
-**Problema:** `origin: ['http://localhost:5173', 'http://localhost:5174']` no usa `FRONTEND_URL` ni comparte la config de CORS de Express. En producción (frontend por Nginx :3000), socket.io será bloqueado.
-**Severidad:** MEDIO
+**Problema:** `origin: ['http://localhost:5173', 'http://localhost:5174']` no usa `FRONTEND_URL` ni comparte la config de CORS de Express.
 
-### [MEDIO] Bug #8 — `register` sin protección de ADMIN
-**Archivo:** `backend/src/routes/auth.routes.js` (implícito en `app.js`)
-**Problema:** Las rutas de auth se montan sin middleware de auth: `app.use('/api/v1/auth', authRoutes)`. Cualquier endpoint público dentro de auth routes (como register) es accesible sin autenticación a menos que se proteja dentro del router.
-**Severidad:** MEDIO
-
-### [MEDIO] Bug #9 — Sin validación de input en login
-**Archivo:** `backend/src/controllers/auth.controller.js:10`
-**Problema:** No se valida que `email` y `password` sean strings no vacíos antes de pasarlos a Prisma. Un `email: undefined` o `email: ""` pasaría silenciosamente.
-**Severidad:** MEDIO
-
-### [BAJO] Bug #10 — confirmPayment no actualiza balanceDue
-**Archivo:** `backend/src/controllers/payments.controller.js:347-357`
-**Problema:** Al confirmar un pago, actualiza `status: 'PAID'` pero no pone `balanceDue: 0`. Comparar con `createPayment` que usa `$transaction` y actualiza ambos campos.
-**Severidad:** BAJO
-
-### [BAJO] Bug #11 — Import no utilizado en auth.controller
-**Archivo:** `backend/src/controllers/auth.controller.js:6`
-**Problema:** `import { authMiddleware } from '../middleware/auth.middleware.js'` nunca se usa en el controller (solo en las rutas).
-**Severidad:** BAJO
-
-### [BAJO] Bug #12 — notifyTechnician: WhatsApp no implementado
+### [MEDIO] Bug #12 — notifyTechnician: WhatsApp no implementado
 **Archivo:** `backend/src/services/client-update-token.service.js:355`
-**Problema:** `results.WHATSAPP = { ok: false, error: 'NO_TECH_PHONE_CONFIGURED' }` siempre falla. La funcionalidad está documentada pero no implementada.
-**Severidad:** BAJO
+**Problema:** La funcionalidad está documentada pero no implementada — siempre retorna error.
 
 ### [BAJO] Bug #13 — Invoice requiere planId pero client puede no tener plan
-**Archivo:** `backend/prisma/schema.prisma` (schema activo)
-**Problema:** `Invoice.planId` y `InvoiceItem` tienen `planId` requerido, pero `Client.planId` es opcional. Si se genera factura para cliente sin plan, falla.
-**Severidad:** BAJO
+**Archivo:** `backend/prisma/schema.prisma`
+**Problema:** `Invoice.planId` y `InvoiceItem` tienen `planId` requerido, pero `Client.planId` es opcional.
 
-### [BAJO] Bug #14 — confirmPayment no actualiza balanceDue
-**Archivo:** `backend/src/controllers/payments.controller.js:352-357`
-**Problema:** `createPayment` (registro manual) usa `$transaction` y actualiza `balanceDue + status` atómicamente. `confirmPayment` solo actualiza `status: 'PAID'`, dejando `balanceDue` sin cambios.
-**Severidad:** BAJO
+### Bugs Corregidos (de fases anteriores)
 
----
-
-## Propuestas de Fix y Mejoras
-
-### Fix #1 — Compartir instancia de PrismaClient
-**Archivo:** `backend/src/middleware/auth.middleware.js`
-```diff
-- import { PrismaClient } from '@prisma/client';
-- const prisma = new PrismaClient();
-+ import { prisma } from '../server.js';
-```
-Aplicar el mismo cambio en:
-- `backend/src/routes/evidence.routes.js:10` — importar `prisma` desde `server.js` en vez de crear instancia propia.
-
-### Fix #2 — Eliminar schema duplicado
-```bash
-rm backend/src/prisma/schema.prisma
-rm -rf backend/src/prisma/migrations   # si existe
-```
-El schema activo está en `backend/prisma/schema.prisma`. Mantener el duplicado causa confusión.
-
-### Fix #3 — validateBody debe delegar ZodError al errorMiddleware
-**Archivo:** `backend/src/middleware/validate.middleware.js`
-```diff
-export const validateBody = (schema) => {
-  return (req, res, next) => {
-    try {
-      req.body = schema.parse(req.body);
-      next();
-    } catch (error) {
-      if (error instanceof z.ZodError) {
--       console.error('[validateBody] ZodError on', ...);
--       throw new AppError('Error de validación en los datos enviados', 400, 'VALIDATION_ERROR');
-+       next(error);  // Delega al errorMiddleware que ya maneja ZodError correctamente
-+       return;
-      }
-      next(error);
-    }
-  };
-};
-```
-
-### Fix #4 — Cambiar `macAddress` por `mac` en clients.controller
-**Archivo:** `backend/src/controllers/clients.controller.js`
-```diff
-- const existingDevice = await prisma.device.findUnique({
--   where: { macAddress: deviceData.macAddress }
-- });
-+ // Nota: el campo en Prisma es "mac", no "macAddress"
-+ const existingDevice = deviceData.mac
-+   ? await prisma.device.findUnique({ where: { mac: deviceData.mac } })
-+   : null;
-```
-
-### Fix #5 — Usar JWT_EXPIRES_IN para la sesión en DB
-**Archivo:** `backend/src/controllers/auth.controller.js`
-```diff
-- const expiresAt = new Date();
-- expiresAt.setHours(expiresAt.getHours() + 8);
-+ // Calcular expiresAt desde JWT_EXPIRES_IN
-+ const match = env.JWT_EXPIRES_IN.match(/^(\d+)h$/);
-+ const ttlHours = match ? parseInt(match[1]) : 8;
-+ const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000);
-```
-
-### Fix #6 — Sincronizar perfil PPPoE al cambiar plan
-**Archivo:** `backend/src/controllers/clients.controller.js` — en `changePlan`:
-```js
-// Después de actualizar planId en DB:
-if (client.mikrotikAccount) {
-  try {
-    const { service } = await getMikrotikServiceForClient(client.id);
-    await service.updatePPPoESecret(client.mikrotikAccount.username, {
-      profile: plan.mikrotikProfile || plan.name
-    });
-  } catch (e) {
-    console.error(`Failed to sync PPPoE profile for "${client.name}":`, e.message);
-    // No hacer throw: el cambio en DB ya se aplicó
-  }
-}
-```
-
-### Fix #7 — Socket.io CORS desde variable de entorno
-**Archivo:** `backend/src/services/socket.service.js`
-```diff
-+ import { env } from '../config/env.js';
-+
-export function initSocket(httpServer) {
-  io = new Server(httpServer, {
-    cors: {
--     origin: ['http://localhost:5173', 'http://localhost:5174'],
-+     origin: [env.FRONTEND_URL, 'http://localhost:5173', 'http://localhost:5174'],
-      credentials: true
-    },
-    transports: ['websocket', 'polling']
-  });
-}
-```
-
-### Fix #8 — Proteger register con requireAdmin
-**Archivo:** `backend/src/routes/auth.routes.js`
-```diff
-+ import { requireAdmin } from '../middleware/auth.middleware.js';
-+
-// ...
-+ router.post('/register', requireAdmin, authController.register);
-```
-
-### Fix #9 — Validar login con Zod
-**Archivo:** `backend/src/controllers/auth.controller.js`
-```diff
-+ import { z } from 'zod';
-+ const loginSchema = z.object({
-+   email: z.string().email('Email inválido'),
-+   password: z.string().min(1, 'Contraseña requerida')
-+ });
-+
-login = asyncHandler(async (req, res) => {
-+ const { email, password } = loginSchema.parse(req.body);  // lanza ZodError si falla
-- const { email, password } = req.body;
-  // ... resto igual
-```
-
-### Fix #10 — confirmPayment debe actualizar balanceDue
-**Archivo:** `backend/src/controllers/payments.controller.js`
-```diff
-  if (totalPaid >= payment.invoice.amount) {
-    await prisma.invoice.update({
-      where: { id: payment.invoiceId },
--     data: { status: 'PAID' }
-+     data: { status: 'PAID', balanceDue: 0 }
-    });
-  }
-```
+| Bug ID | Severidad | Descripción | Estado |
+|--------|-----------|-------------|--------|
+| #1 | CRÍTICO | Auth middleware crea PrismaClient propio | ✅ Corregido (database.js singleton) |
+| #3 | ALTO | validateBody traga errores detallados de Zod | ✅ Corregido |
+| #4 | ALTO | Device model: campo `macAddress` no existe | ✅ Corregido |
+| #5 | MEDIO | Session TTL desincronizado con JWT_EXPIRES_IN | ✅ Corregido |
+| #8 | MEDIO | register sin protección de ADMIN | ✅ Ya corregido |
+| #9 | MEDIO | Sin validación de input en login | ✅ Validado a nivel de ruta |
+| #10 | BAJO | confirmPayment no actualiza balanceDue | ✅ Corregido |
+| #11 | BAJO | Import no utilizado en auth.controller | ✅ Corregido |
+| #14 | BAJO | confirmPayment duplicado | ✅ Corregido |
+| — | CRÍTICO | bcrypt no instalado en producción (502 backend) | ✅ Corregido (cambiado a bcryptjs) |
+| — | ALTO | schema.prisma sin modelos de portal (502 client-auth) | ✅ Corregido (schema sincronizado) |
 
 ---
 
 ## Mejoras Propuestas
 
 ### Rendimiento
-1. **Queries N+1 en reportes** — Varios reportes iteran sobre resultados y hacen queries adicionales por fila. Ej: `getClientsByPlan` (clients.controller.js:1241) hace dos queries separadas. Unificar con `groupBy` + `include`.
-2. **Falta de índices** — La tabla `payments` no tiene índice compuesto en `(clientId, status)`, lo que afecta reportes de cobranza.
-3. **Monitor ICMP in-process** — `startMonitor()` y `startRouterMonitor()` corren en el mismo proceso que Express. A 200+ dispositivos, el bloqueo de ICMP puede afectar latencia del API. Mover a worker dedicado (BullMQ).
-4. **Lazy loading de imágenes** — Las evidencias fotográficas se sirven sin compresión ni lazy loading en el frontend.
+1. **Queries N+1 en reportes** — Varios reportes iteran sobre resultados y hacen queries adicionales. Unificar con `groupBy` + `include`.
+2. **Falta de índices** — La tabla `payments` no tiene índice compuesto en `(clientId, status)`.
+3. **Monitor ICMP in-process** — `startMonitor()` corre en el mismo proceso. A 200+ dispositivos puede afectar latencia.
+4. **Lazy loading de imágenes** — Las evidencias fotográficas se sirven sin compresión ni lazy loading.
 
 ### Seguridad
-1. **Helmet no está configurado** — Express usa helmet en `dependencies` pero en `app.js` solo se importa `cors` y `morgan`, no `helmet`. No hay headers de seguridad (X-Content-Type-Options, CSP, etc.).
-2. **No hay rate limiting real** — Las variables `RATE_LIMIT_WINDOW_MS` y `RATE_LIMIT_MAX_REQUESTS` existen en env pero no se aplican en Express (express-rate-limit no está instalado). La única protección es en el router público de actualizaciones (30 req/min manual).
-3. **CORS demasiado permisivo**: `if (!origin) return cb(null, true)` permite peticiones sin origen (Postman, curl, scripts server-side).
-4. **No hay Content Security Policy** — La app SPA es vulnerable a XSS si algún input se renderiza sin escapar.
-5. **Subida de archivos sin antivirus** — Los archivos subidos se guardan directamente en disco sin escaneo de malware.
+1. **Helmet no está completamente configurado** — No hay CSP, X-Frame-Options, etc.
+2. **No hay rate limiting granular** — Solo existe el global y el específico de client-updates.
+3. **CORS demasiado permisivo**: `if (!origin) return cb(null, true)` permite peticiones sin origen.
+4. **Subida de archivos sin antivirus** — Los archivos subidos se guardan directamente en disco.
 
 ### Mantenibilidad
-1. **Schema redundante** — Eliminar `backend/src/prisma/schema.prisma` (schema antiguo).
-2. **Unificar PrismaClient** — Todas las referencias a `new PrismaClient()` deben reemplazarse por el singleton de `server.js`.
-3. **Constantes mágicas** — `MOROSO_LIST = 'Moroso'` (clients.controller.js:8), `AUTHORIZED_LIST = 'ips_autorizadas_wisphub'` (clients.controller.js:405) deberían estar en un archivo de configuración.
-4. **console.log en producción** — Múltiples `console.log` con emojis en servicios y controladores. Reemplazar por logger estructurado (pino, winston).
-5. **El frontend no tiene tests** — Ni unit, ni e2e. `svelte-check` existe pero no se corre en CI.
+1. **Schema redundante** — Eliminar `backend/src/prisma/schema.prisma`.
+2. **Constantes mágicas** — `MOROSO_LIST = 'Moroso'`, `AUTHORIZED_LIST = 'ips_autorizadas_wisphub'` deberían ir en configuración.
+3. **console.log en producción** — Reemplazar por logger estructurado (pino, winston).
+4. **El frontend no tiene tests** — Ni unit, ni e2e.
 
 ### Escalabilidad
-1. **BullMQ está cableado pero inactivo** — `queue.service.js` existe con `createQueue`/`createWorker`, `queue.bootstrap.js` está comentado. Las campañas de notificaciones y la generación de facturas corren en proceso bloqueando el event loop.
-2. **Background jobs en proceso** — Los crons de billing y overdue corren dentro del proceso del API. Escalar horizontalmente requeriría workers separados.
-3. **Redis infrautilizado** — Redis está configurado y conectado, pero solo se usa para socket.io adaptador y scaffold de BullMQ. No hay caché de queries (clientes, planes, zonas).
-
-### Experiencia de Desarrollo
-1. **Faltan scripts** — No hay `npm run lint` funcional en backend (falta eslint config). No hay `npm run typecheck`.
-2. **No hay husky/lint-staged** — Sin pre-commit hooks para formatear/verificar código.
-3. **No hay docker-compose para desarrollo sin infra** — Sería útil un perfil que solo levante postgres + redis para desarrollo local con el backend fuera del contenedor.
-4. **Variables de entorno Twilio son requeridas pero no se usan** — `env.js` exige `TWILIO_SID`, `TWILIO_AUTH`, `TWILIO_PHONE` como `optional()` pero en `notification.service.js` solo hay un placeholder. Marcar como opcionales de verdad o implementar el envío.
-
----
-
-## Resumen de Hallazgos
-
-| Tipo | Cantidad | Severidad |
-|------|----------|-----------|
-| Bugs críticos | 2 | Schema duplicado, PrismaClient singleton |
-| Bugs alto | 2 | validateBody genérico, Device.macAddress roto |
-| Bugs medio | 5 | Session TTL, changePlan sin sync, socket CORS, register público, login sin validación |
-| Bugs bajo | 4 | confirmPayment balanceDue, imports, WhatsApp notify, Invoice planId |
-| **Total bugs** | **13** | |
-| Mejoras rendimiento | 4 | |
-| Mejoras seguridad | 5 | |
-| Mejoras mantenibilidad| 5 | |
-| Mejoras escalabilidad | 3 | |
-| Mejoras DX | 4 | |
+1. **BullMQ está cableado pero inactivo** — Campañas y generación de facturas corren en proceso.
+2. **Background jobs en proceso** — Crons de billing y overdue dentro del proceso del API.
+3. **Redis infrautilizado** — Solo socket.io adaptador. No hay caché de queries.
 
 ---
 
@@ -503,150 +634,71 @@ login = asyncHandler(async (req, res) => {
 
 | Categoría | Score | Notas |
 |-----------|-------|-------|
-| Stack y Arquitectura | 7/10 | Stack moderno, bien elegido. Monolito bien organizado. |
-| Funcionalidades | 9/10 | Muy completo para un ISP pequeño-mediano. |
-| Calidad del Código | 7/10 | PrismaClient unificado, imports muertos eliminados, validateBody corrige errores. Aún hay console.log sin logger. |
-| Seguridad | 5/10 | Sin helmet, sin CSP, sin rate-limit real, CORS permisivo. |
+| Stack y Arquitectura | 7/10 | Stack moderno. Monolito bien organizado. |
+| Funcionalidades | 9/10 | Muy completo. Portal cliente + Links de Pago integrados. |
+| Calidad del Código | 7/10 | PrismaClient unificado, imports limpios. Pendiente logger. |
+| Seguridad | 5/10 | Sin helmet completo, sin CSP, rate-limit básico. |
 | Tests | 1/10 | Sin tests automatizados. |
 | Rendimiento | 5/10 | Monitor in-process, sin caché, N+1 queries en reportes. |
-| Mantenibilidad | 7/10 | Schema duplicado marcado, PrismaClient centralizado, imports limpios. Lógica mezclada aún en controllers. |
-| Documentación | 8/10 | README, design-rules, START.md. Código bien comentado + bitácora de remediación. |
-| **Overall** | **7/10** | Post-Fase 1: bugs críticos resueltos, estabilidad mejorada. Pendiente seguridad, workers, tests. |
+| Mantenibilidad | 7/10 | Schema duplicado marcado, PrismaClient centralizado. |
+| Documentación | 8/10 | README, design-rules, START.md, Leame.md actualizado. |
+| **Overall** | **7/10** | Portal + Wompi integrados y en producción. Pendiente seguridad, workers, tests. |
 
 ---
 
-## Próximos Pasos Recomendados
+## Despliegue en Producción
 
-1. **Inmediato (< 1 día):** Eliminar schema duplicado, unificar PrismaClient, corregir `macAddress` → `mac`.
-2. **Corto plazo (< 1 semana):** Agregar helmet + rate-limit, arreglar `validateBody`, sincronizar session TTL, corregir socket.io CORS.
-3. **Mediano plazo (< 1 mes):** Implementar tests (vitest + playwright), migrar workers a BullMQ, agregar caché Redis a queries frecuentes.
-4. **Largo plazo (< 3 meses):** Dashboard de monitoreo de rendimiento, CI/CD pipeline, migración a TypeScript estricto.
+### Servidores
 
----
+| Rol | IP | Servicios |
+|-----|-----|-----------|
+| Backend + DB + Redis | `10.2.3.6` | PM2 (isp-api), PostgreSQL, Redis |
+| Proxy reverso | `157.151.224.139` | Nginx → `app.internetonline.co` |
 
-## Bitácora de Remediación
+### Comandos Útiles
 
-### FASE 1 — Estabilización crítica y corrección de bugs bloqueantes ✅ COMPLETADA
+```bash
+# SSH al servidor
+ssh root@10.2.3.6
 
-### HOTFIX PRODUCCIÓN — CORS + bcrypt + error handling (2026-06-01) ✅ COMPLETADA
+# Ver estado del backend
+pm2 status
+pm2 logs --lines 50
 
-#### Contexto
-Login de usuarios creados desde Administración → Usuarios del sistema retornaba "Error interno del servidor" en producción. Causa raíz: `FRONTEND_URL=http://10.2.3.6` (IP privada del servidor, no la URL real del frontend). El navegador enviaba `Origin: http://app.internetonline.co` que no estaba en el allowlist de CORS, bloqueando la petición antes de llegar al controller.
+# Reiniciar
+pm2 restart all
 
-#### Diagnóstico
-- Logs de PM2: `Error: CORS: origin http://app.internetonline.co not allowed`
-- `.env.production` tenía `FRONTEND_URL=http://10.2.3.6` en vez de `http://app.internetonline.co`
-- Adicionalmente, `auth.controller.js` no manejaba `user.password === null` ni tenía try-catch en `bcrypt.compare`, lo que podía causar 500 en producción con hashes corruptos
-- Localmente (working tree tras FASE 1), `users.routes.js` perdió `import bcrypt from 'bcryptjs'` durante reorganización de imports
+# Aplicar migración Prisma
+cd /opt/isp-manager/backend
+npx prisma migrate deploy
+npx prisma generate
+pm2 restart all
 
-#### Cambios aplicados en producción (servidor Oracle, root@10.2.3.6)
+# Verificar health
+curl http://localhost:3001/api/health
 
-| Archivo | Cambio | Backup |
-|---------|--------|--------|
-| `/opt/isp-manager/backend/.env` | `FRONTEND_URL=http://10.2.3.6` → `http://app.internetonline.co` | `.env.backup.20260601_161742` |
-| `/opt/isp-manager/backend/.env` | Añadido `CORS_EXTRA_ORIGINS=http://internetonline.co,https://app.internetonline.co,https://internetonline.co` | — |
-| `src/controllers/auth.controller.js` | Null-password guard + try-catch en `bcrypt.compare` para login y changePassword | `auth.controller.js.bak` |
+# Nginx
+nginx -t
+systemctl reload nginx
+tail -n 100 /var/log/nginx/error.log
+```
 
-#### Validación
-- ✅ `curl -X POST http://app.internetonline.co/api/v1/auth/login -H 'Origin: http://app.internetonline.co'` → `Access-Control-Allow-Origin: http://app.internetonline.co`, status 401 (no 500 ni CORS error)
-- ✅ `curl -X POST` sin Origin → 401 (INVALID_CREDENTIALS)
-- ✅ PM2 restart exitoso
+### Despliegue de Código
 
-#### Lecciones aprendidas
-- El `FRONTEND_URL` del `.env` **debe coincidir exactamente con el origin que el navegador envía** — ni IP privada, ni localhost. Usar el nombre de dominio público.
-- CORS errors se confunden fácilmente con errores internos del servidor porque Express no devuelve un body con el error CORS (el middleware aborta antes).
-- `auth.controller.js` debe ser tolerante a fallos de bcrypt (passwords null, hashes inválidos) para no crashear el servidor ante datos corruptos.
-- `users.routes.js` local perdió `import bcrypt` en fase de refactor — programar verificación post-merge.
+```bash
+# Backend
+rsync -avz --no-owner --no-group \
+  backend/src/services/xxx.service.js \
+  root@10.2.3.6:/opt/isp-manager/backend/src/services/xxx.service.js
 
-#### Objetivo
-Eliminar inconsistencias estructurales que pueden romper la app o producir errores graves en tiempo de ejecución.
+# Schema + migración
+rsync -avz --no-owner --no-group \
+  backend/prisma/schema.prisma \
+  root@10.2.3.6:/opt/isp-manager/backend/prisma/schema.prisma
+rsync -avz --no-owner --no-group \
+  backend/prisma/migrations/YYYYMMDDHHMMSS_new_migration/ \
+  root@10.2.3.6:/opt/isp-manager/backend/prisma/migrations/YYYYMMDDHHMMSS_new_migration/
 
-#### Archivos creados
-- `backend/src/config/database.js` — Singleton de PrismaClient (fuente única de verdad)
-
-#### Archivos modificados (46 archivos)
-
-**PrismaClient singleton (33 archivos):**
-- `backend/src/server.js` — Cambia de `new PrismaClient()` a import desde `./config/database.js`
-- `backend/src/middleware/auth.middleware.js` — Elimina `new PrismaClient()`
-- `backend/src/middleware/validate.middleware.js` — Idem
-- Todos los controllers: `auth`, `clients`, `invoices`, `payments`, `reports`, `mikrotik`
-- Todos los routes: `zones`, `plans`, `routers`, `accounts`, `notifications`, `smtp`, `users`, `evidence`, `dashboard`, `network`, `telegram`, `whatsapp`, `public.client-updates`, `clients`
-- Todos los services: `mikrotik`, `network-monitor`, `router-monitor`, `notification`, `notification.campaign`, `whatsapp`, `telegram`, `invoice`, `wompi`, `client-update-token`
-- Todos los jobs: `billing`, `overdue`
-
-**Stale schema:**
-- `backend/src/prisma/schema.prisma` — Añadido header de advertencia (⚠️ DEPRECATED — DO NOT USE)
-
-**macAddress → mac (2 archivos):**
-- `backend/src/controllers/clients.controller.js` — Cambia `macAddress` a `mac` en addDevice y updateDevice
-- `backend/src/routes/clients.routes.js` — Cambia Zod schema `macAddress` a `mac`
-
-**validateBody (1 archivo):**
-- `backend/src/middleware/validate.middleware.js` — ZodError delegado a `errorMiddleware` (ahora retorna errores campo por campo). Aplicado también a `validateQuery` y `validateParams`.
-
-**Session TTL (1 archivo):**
-- `backend/src/controllers/auth.controller.js` — `expiresAt` ahora calculado desde `JWT_EXPIRES_IN`
-
-**confirmPayment balanceDue (1 archivo):**
-- `backend/src/controllers/payments.controller.js` — Ahora actualiza `balanceDue` y status atómicamente
-
-**Imports muertos (8 archivos):**
-- `backend/src/controllers/auth.controller.js` — Elimina import de `authMiddleware`
-- `routes/zones.routes.js`, `plans.routes.js`, `routers.routes.js`, `accounts.routes.js`, `notifications.routes.js`, `smtp.routes.js`, `users.routes.js` — Elimina imports de controllers que no existen y no se usaban
-
-**Pre-existing fixes (4 archivos):**
-- `routes/zones.routes.js` — Añade imports faltantes (`z`, `validateBody`)
-- `routes/notifications.routes.js` — Añade imports faltantes (`z`, `validateBody`, `validateQuery`)
-- `routes/smtp.routes.js` — Añade imports faltantes (`z`, `validateBody`)
-- `routes/users.routes.js` — Añade imports faltantes (`z`, `validateBody`)
-
-#### Bugs corregidos (de Leame.md)
-
-| Bug ID | Severidad | Descripción | Estado |
-|--------|-----------|-------------|--------|
-| #1 | CRÍTICO | Auth middleware crea PrismaClient propio | ✅ Corregido |
-| #2 | CRÍTICO | Schema Prisma duplicado y desactualizado | ✅ Marcado como deprecated |
-| #3 | ALTO | validateBody traga errores detallados de Zod | ✅ Corregido |
-| #4 | ALTO | Device model: campo `macAddress` no existe | ✅ Corregido |
-| #5 | MEDIO | Session TTL desincronizado con JWT_EXPIRES_IN | ✅ Corregido |
-| #8 | MEDIO | register sin protección de ADMIN | ✅ Ya estaba corregido en el código actual (auth.routes.js:30) |
-| #10, #14 | BAJO | confirmPayment no actualiza balanceDue | ✅ Corregido |
-| #11 | BAJO | Import no utilizado en auth.controller | ✅ Corregido |
-
-#### Bugs encontrados y corregidos adicionalmente (no listados en Leame.md)
-
-| Bug | Severidad | Descripción | Fix |
-|-----|-----------|-------------|-----|
-| N+1 PrismaClient | CRÍTICO | 9 archivos adicionales creaban `new PrismaClient()` no listados en Leame.md | Importados desde database.js singleton |
-| Imports rotos | ALTO | 7 route files importaban controllers que no existen (nunca se usaban, pero rompían startup) | Eliminados los imports |
-| Imports faltantes | ALTO | 4 route files usaban `z` y/o `validateBody` sin importarlos | Añadidos imports |
-| Device Zod schema | ALTO | clients.routes.js validaba `macAddress` pero el controller espera `mac` | Cambiado campo en Zod schema |
-
-#### Bugs pendientes (no corregidos en esta fase)
-
-| Bug ID | Severidad | Descripción | Fase esperada |
-|--------|-----------|-------------|---------------|
-| #6 | MEDIO | changePlan no sincroniza con MikroTik | FASE 3 |
-| #7 | MEDIO | Socket.io CORS hardcodeado a localhost | FASE 2 |
-| #9 | MEDIO | Sin validación de input en login | Ya validado a nivel de ruta (validateBody en auth.routes.js) |
-| #12 | BAJO | WhatsApp no implementado | FASE 2 |
-| #13 | BAJO | Invoice requiere planId pero client puede no tener plan | FASE 3 |
-
-#### Validaciones ejecutadas
-- ✅ `prisma validate` — Schema activo válido
-- ✅ `prisma generate` — Cliente generado sin errores
-- ✅ Backend startup — Servidor arranca, conecta DB + Redis + Socket.io + Monitores
-- ✅ Health endpoint — `GET /api/health` → 200
-- ✅ Login exitoso — `POST /api/v1/auth/login` → 200 + token
-- ✅ Login fallido con detalle Zod — `POST /api/v1/auth/login` con datos inválidos → 400 + errores campo por campo
-- ✅ Clients list — `GET /api/v1/clients` → 200 + 36 clientes
-- ✅ 404 handler — Endpoint inexistente → 404
-- ✅ Frontend build — `npm run build` exitoso (18s)
-- ✅ No residual `new PrismaClient()` — Solo server.js (fuente) y seed.js (standalone)
-- ✅ No residual `macAddress` — Solo stale schema (deprecated) y mikrotik.routes.js (proxy RouterOS)
-
-#### Riesgos remanentes
-- DHCP lease schema en `mikrotik.routes.js` aún usa `macAddress` (correcto para API de RouterOS)
-- Device Zod schema en `clients.routes.js` tiene `ipAddress` y `hostname` vs Prisma `ip` y `model` — inconsistencia pre-existente no cubierta en FASE 1
-- Dashboard endpoint retorna 404 (route existe pero controller/handler no implementado) — pre-existente
+# Aplicar migración y reiniciar
+ssh root@10.2.3.6 "cd /opt/isp-manager/backend && npx prisma migrate deploy && npx prisma generate && pm2 restart all"
+```

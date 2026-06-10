@@ -4,11 +4,11 @@
   import { browser } from '$app/environment';
   import { api } from '$lib/api/client.js';
   import { invoicesApi } from '$lib/api/invoices.api.js';
-  import WompiButton from '$lib/components/payments/WompiButton.svelte';
   import {
     ArrowLeft, FileText, CreditCard, Download, Send, Loader2, Receipt,
     CheckCircle2, AlertCircle, Calendar, User, MapPin, Wifi, Image as ImageIcon,
-    Upload, ImageUp, ExternalLink, Phone, Mail, Banknote, Eye, X
+    Upload, ImageUp, ExternalLink, Phone, Mail, Banknote, Eye, X,
+    Copy, Check
   } from 'lucide-svelte';
 
   // ── State ────────────────────────────────────────────────────────────
@@ -31,6 +31,16 @@
   let payFile        = null;       // single evidence file (optional)
   let payFilePreview = null;       // object URL (image only) or null for PDFs
   let payFileError   = '';         // client-side validation message
+
+  // ── Send modal state ─────────────────────────────────────────────────
+  let showSendModal  = false;
+  let sendChannels   = [];
+  let sendPdf        = true;
+  let sendPaymentLink = false;
+  let sendResults    = null;     // { results: [], paymentLinkUrl: string|null }
+  let sendRunning    = false;
+  let sendError      = '';
+  let copied         = false;    // payment link copy feedback
 
   // ── Constants ────────────────────────────────────────────────────────
   const STATUS_PT = {
@@ -155,16 +165,63 @@
     }
   }
 
-  // ── Send invoice (email / whatsapp) ──────────────────────────────────
-  async function sendInvoice(channels) {
-    sending = true;
+  // ── Send management modal ────────────────────────────────────────────
+  function openSendModal() {
+    sendChannels = [];
+    if (invoice.client?.email) sendChannels = ['email'];
+    sendPdf = true;
+    sendPaymentLink = false;
+    sendResults = null;
+    sendError = '';
+    copied = false;
+    showSendModal = true;
+  }
+  function closeSendModal() {
+    if (sendRunning) return;
+    showSendModal = false;
+    sendResults = null;
+  }
+  function toggleSendChannel(ch) {
+    if (sendChannels.includes(ch)) {
+      sendChannels = sendChannels.filter(c => c !== ch);
+    } else {
+      sendChannels = [...sendChannels, ch];
+    }
+  }
+  async function doSend() {
+    if (sendChannels.length === 0) { sendError = 'Seleccione al menos un canal'; return; }
+    sendRunning = true;
+    sendError = '';
+    sendResults = null;
     try {
-      await invoicesApi.send(invoice.id, channels);
-      showToast('success', `Factura enviada por ${channels.join(' y ')}`);
+      const res = await invoicesApi.send(invoice.id, {
+        channels: sendChannels,
+        sendPdf,
+        sendPaymentLink
+      });
+      sendResults = res;
+      showToast('success', res.message || 'Envío procesado');
     } catch (e) {
-      showToast('error', e.message || 'Envío fallido');
+      sendError = e.message || 'Envío fallido';
     } finally {
-      sending = false;
+      sendRunning = false;
+    }
+  }
+  async function copyLink(url) {
+    try {
+      await navigator.clipboard.writeText(url);
+      copied = true;
+      setTimeout(() => copied = false, 2500);
+    } catch {
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      copied = true;
+      setTimeout(() => copied = false, 2500);
     }
   }
 
@@ -345,20 +402,13 @@
     </div>
 
     <div class="flex items-center gap-2 flex-wrap">
-      <button class="btn-secondary" on:click={downloadPdf} disabled={downloading}>
-        {#if downloading}<Loader2 size={15} class="animate-spin" />{:else}<Download size={15} />{/if}
-        Descargar PDF
-      </button>
-      <button class="btn-secondary" on:click={() => sendInvoice(['email'])} disabled={sending || !invoice.client?.email}
-              title={invoice.client?.email ? 'Reenviar por email' : 'El cliente no tiene email'}>
-        {#if sending}<Loader2 size={15} class="animate-spin" />{:else}<Send size={15} />{/if}
-        Enviar
+      <button class="btn-secondary" on:click={openSendModal}>
+        <Send size={15} /> Enviar / Gestionar
       </button>
       {#if payable}
         <button class="btn-primary" on:click={openPayModal}>
           <CreditCard size={15} /> Registrar pago
         </button>
-        <WompiButton {invoice} on:paid={reload} on:failed={() => showToast('error', 'El pago con Wompi no fue completado')} />
       {/if}
       {#if invoice.status === 'PENDING' || invoice.status === 'OVERDUE'}
         <button class="btn-ghost" on:click={markAsPaid} disabled={actionBusy} title="Marcar como pagada sin registrar pago detallado">
@@ -854,6 +904,160 @@
             {#if paySubmitting}<Loader2 size={14} class="animate-spin" />{:else}<CreditCard size={14} />{/if}
             Registrar pago
           </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- ── Modal: Enviar / Gestionar factura ────────────────────────── -->
+  {#if showSendModal}
+    <div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+         on:click|self={closeSendModal}>
+      <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div class="flex items-center justify-between px-5 py-3 border-b border-slate-200">
+          <div class="flex items-center gap-2">
+            <Send size={16} class="text-slate-600" />
+            <h3 class="font-semibold text-slate-900">Enviar / Gestionar factura</h3>
+          </div>
+          <button class="btn-icon" on:click={closeSendModal} disabled={sendRunning}>
+            <X size={14} />
+          </button>
+        </div>
+
+        <div class="p-5 space-y-5">
+
+          <!-- Preview summary -->
+          <div class="bg-slate-50 rounded-lg p-3 text-sm space-y-1">
+            <div class="font-medium text-slate-900">Factura {invoice.invoiceNumber}</div>
+            <div class="text-text-secondary">{invoice.client?.name || '—'}</div>
+            <div class="text-lg font-semibold text-slate-900">{fmtMoney(invoice.total)}</div>
+            {#if invoice.client?.email}
+              <div class="text-xs text-text-secondary inline-flex items-center gap-1"><Mail size={12} /> {invoice.client.email}</div>
+            {/if}
+            {#if invoice.client?.phone}
+              <div class="text-xs text-text-secondary inline-flex items-center gap-1 ml-3"><Phone size={12} /> {invoice.client.phone}</div>
+            {/if}
+          </div>
+
+          <!-- Channel selection -->
+          <div>
+            <div class="label !mb-2">Canales de envío</div>
+            <div class="space-y-2">
+              <label class="flex items-center gap-3 px-3 py-2.5 rounded-lg border {invoice.client?.email ? 'border-slate-200 hover:border-brand-300 cursor-pointer' : 'border-slate-100 bg-slate-50 opacity-50'} transition"
+                     class:border-brand-300={sendChannels.includes('email')}>
+                <input type="checkbox" checked={sendChannels.includes('email')}
+                       on:change={() => toggleSendChannel('email')}
+                       disabled={!invoice.client?.email}
+                       class="w-4 h-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500" />
+                <div>
+                  <div class="text-sm font-medium text-slate-900">Email</div>
+                  <div class="text-xs text-text-secondary">{invoice.client?.email || 'Cliente sin email'}</div>
+                </div>
+              </label>
+              <label class="flex items-center gap-3 px-3 py-2.5 rounded-lg border {invoice.client?.phone ? 'border-slate-200 hover:border-brand-300 cursor-pointer' : 'border-slate-100 bg-slate-50 opacity-50'} transition"
+                     class:border-brand-300={sendChannels.includes('whatsapp')}>
+                <input type="checkbox" checked={sendChannels.includes('whatsapp')}
+                       on:change={() => toggleSendChannel('whatsapp')}
+                       disabled={!invoice.client?.phone}
+                       class="w-4 h-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500" />
+                <div>
+                  <div class="text-sm font-medium text-slate-900">WhatsApp</div>
+                  <div class="text-xs text-text-secondary">{invoice.client?.phone || 'Cliente sin teléfono'}</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Options -->
+          <div>
+            <div class="label !mb-2">Opciones adicionales</div>
+            <div class="space-y-2">
+              <label class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-brand-300 cursor-pointer transition"
+                     class:border-brand-300={sendPdf}>
+                <input type="checkbox" bind:checked={sendPdf}
+                       class="w-4 h-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500" />
+                <div>
+                  <div class="text-sm font-medium text-slate-900">Adjuntar factura en PDF</div>
+                  <div class="text-xs text-text-secondary">Incluye el PDF de la factura en el correo</div>
+                </div>
+              </label>
+              <label class="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-brand-300 cursor-pointer transition"
+                     class:border-brand-300={sendPaymentLink}>
+                <input type="checkbox" bind:checked={sendPaymentLink}
+                       class="w-4 h-4 rounded border-slate-300 text-brand-700 focus:ring-brand-500" />
+                <div>
+                  <div class="text-sm font-medium text-slate-900">Generar link de pago Wompi</div>
+                  <div class="text-xs text-text-secondary">Crea un enlace de pago para que el cliente pague en línea</div>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <!-- Results -->
+          {#if sendResults}
+            <div class="rounded-lg border border-slate-200 divide-y divide-slate-100">
+              {#each sendResults.results as r}
+                <div class="flex items-center justify-between px-3 py-2 text-sm">
+                  <div class="flex items-center gap-2">
+                    {#if r.status === 'sent'}
+                      <CheckCircle2 size={14} class="text-emerald-500" />
+                    {:else}
+                      <AlertCircle size={14} class="text-red-500" />
+                    {/if}
+                    <span class="capitalize">{r.channel} — {r.action === 'payment_link' ? 'Link de pago' : 'Envío'}</span>
+                  </div>
+                  <span class="text-xs {r.status === 'sent' ? 'text-emerald-600' : 'text-red-600'}">
+                    {r.status === 'sent' ? 'Enviado' : r.error || 'Fallido'}
+                  </span>
+                </div>
+              {/each}
+            </div>
+
+            {#if sendResults.paymentLinkUrl}
+              <div class="rounded-lg border border-brand-200 bg-brand-50 p-3">
+                <div class="text-xs font-medium text-brand-800 mb-1.5">Link de pago Wompi</div>
+                <div class="flex items-center gap-2">
+                  <input type="text" readonly value={sendResults.paymentLinkUrl}
+                         class="input text-xs flex-1 font-mono bg-white"
+                         on:focus={e => e.target.select()} />
+                  <button class="btn-secondary text-xs whitespace-nowrap" on:click={() => copyLink(sendResults.paymentLinkUrl)}>
+                    {#if copied}
+                      <Check size={13} class="text-emerald-600" />
+                    {:else}
+                      <Copy size={13} />
+                    {/if}
+                    {copied ? 'Copiado' : 'Copiar'}
+                  </button>
+                </div>
+                <p class="text-[11px] text-text-secondary mt-1.5">
+                  Comparta este enlace con el cliente para que pueda pagar en línea con Wompi.
+                </p>
+              </div>
+            {/if}
+          {/if}
+
+          {#if sendError}
+            <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm flex items-center gap-2">
+              <AlertCircle size={14} /> {sendError}
+            </div>
+          {/if}
+        </div>
+
+        <!-- Footer actions -->
+        <div class="flex items-center justify-between gap-2 px-5 py-3 border-t border-slate-200 bg-slate-50">
+          <button class="btn-secondary text-xs" on:click={downloadPdf} disabled={downloading}>
+            {#if downloading}<Loader2 size={13} class="animate-spin" />{:else}<Download size={13} />{/if}
+            Descargar PDF
+          </button>
+          <div class="flex items-center gap-2">
+            <button class="btn-secondary" on:click={closeSendModal} disabled={sendRunning}>Cerrar</button>
+            {#if !sendResults}
+              <button class="btn-primary" on:click={doSend} disabled={sendRunning || sendChannels.length === 0}>
+                {#if sendRunning}<Loader2 size={14} class="animate-spin" />{:else}<Send size={14} />{/if}
+                {sendRunning ? 'Enviando…' : 'Enviar'}
+              </button>
+            {/if}
+          </div>
         </div>
       </div>
     </div>

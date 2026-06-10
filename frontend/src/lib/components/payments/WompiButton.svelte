@@ -1,5 +1,4 @@
 <script>
-  import { createEventDispatcher } from 'svelte';
   import { CreditCard, Loader2 } from 'lucide-svelte';
   import { paymentsApi } from '$lib/api/payments.api.js';
   import { error as toastError } from '$lib/stores/toast.store.js';
@@ -7,53 +6,17 @@
   export let invoice;
   export let label = 'Pagar con Wompi';
 
-  const dispatch = createEventDispatcher();
   let loading = false;
-
-  // Load the Wompi Widget JS SDK once
-  function loadWompiWidget() {
-    return new Promise((resolve, reject) => {
-      if (window.Wompi) return resolve(window.Wompi);
-      const s = document.createElement('script');
-      s.src = 'https://checkout.wompi.co/widget.js';
-      s.async = true;
-      s.onload = () => resolve(window.Wompi);
-      s.onerror = () => reject(new Error('No se pudo cargar Wompi Widget'));
-      document.head.appendChild(s);
-    });
-  }
 
   async function handleClick() {
     if (loading) return;
     loading = true;
     try {
-      const config = await paymentsApi.getWompiCheckout(invoice.id);
-
-      await loadWompiWidget();
-
-      window.Wompi.open({
-        publicKey: config.publicKey,
-        amountInCents: config.amountInCents,
-        currency: config.currency,
-        reference: config.reference,
-        signature: config.signature,
-        redirectUrl: config.redirectUrl,
-        customerData: config.customerData,
-        onClose: () => {
-          dispatch('close', { invoiceId: invoice.id });
-        },
-        onComplete: (result) => {
-          if (result?.transaction?.status === 'APPROVED') {
-            dispatch('paid', { invoiceId: invoice.id, transactionId: result.transaction.id });
-          } else {
-            dispatch('failed', { invoiceId: invoice.id, status: result?.transaction?.status });
-          }
-        },
-      });
+      const { redirectUrl } = await paymentsApi.getWompiCheckout(invoice.id);
+      window.location.href = redirectUrl;
     } catch (e) {
-      toastError(e.message || 'Error al iniciar pago con Wompi');
-    } finally {
       loading = false;
+      toastError(e.message || 'Error al iniciar pago con Wompi');
     }
   }
 </script>

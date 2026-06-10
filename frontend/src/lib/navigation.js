@@ -172,6 +172,11 @@ export const NAV_ITEMS = [
     href: '/notifications', roles: ADMIN_TIER,
     match: ['/notifications', under('/notifications')] },
 
+  { id: 'payment-links', type: 'item', parentId: 'group-admin',
+    label: 'Trazabilidad Wompi', title: 'Trazabilidad Wompi',
+    href: '/payment-links', roles: ADMIN_TIER,
+    match: ['/payment-links', under('/payment-links')] },
+
   { id: 'reports', type: 'item', parentId: 'group-admin',
     label: 'Reportes', title: 'Reportes',
     href: '/reports', roles: ADMIN_TIER,

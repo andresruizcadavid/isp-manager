@@ -54,6 +54,7 @@ function bodyToHtml(body) {
  * @param {string}   opts.title           Title text shown under the icon.
  * @param {string}   opts.body            Plain-text body (newlines turned into <br>/paragraphs).
  * @param {Array}    [opts.fields]        Optional list of {label, value, link?} bullets after the body.
+ * @param {object}   [opts.cta]           Optional call-to-action button { text, url }.
  * @param {string}   [opts.companyName]   Footer company name (defaults to env.COMPANY_NAME).
  * @param {string}   [opts.companyDomain] Footer domain (defaults to internetonline.co fallback).
  * @returns {string} Full HTML document ready for nodemailer's `html` field.
@@ -63,6 +64,7 @@ export function renderEmailTemplate({
   title,
   body,
   fields = [],
+  cta,
   companyName,
   companyDomain
 }) {
@@ -126,6 +128,17 @@ export function renderEmailTemplate({
             <td style="padding:32px;color:#0f172a;">
               ${bodyToHtml(body)}
               ${fieldsHtml}
+              ${cta && cta.text && cta.url ? `<table cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 0;width:100%;">
+                <tr>
+                  <td align="center" style="border-radius:8px;background:linear-gradient(135deg,#1e3a8a,#3b82f6);padding:0;">
+                    <a href="${escapeHtml(cta.url)}"
+                       target="_blank"
+                       style="display:inline-block;padding:14px 40px;font-size:16px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;letter-spacing:0.01em;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+                      ${escapeHtml(cta.text)}
+                    </a>
+                  </td>
+                </tr>
+              </table>` : ''}
             </td>
           </tr>
 

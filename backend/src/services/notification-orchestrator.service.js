@@ -53,6 +53,7 @@ function renderEmail({ type, client, payload }) {
     style: 'currency', currency: 'COP', maximumFractionDigits: 0
   }).format((cents || 0) / 100);
 
+  const cta = payload.cta || null;
   switch (type) {
     case 'INVOICE_CREATED':
       return {
@@ -62,7 +63,8 @@ function renderEmail({ type, client, payload }) {
 
 Tu factura ${payload.invoice.invoiceNumber} por ${money(payload.invoice.total)} ya está disponible. Vence el ${new Date(payload.invoice.dueDate).toLocaleDateString('es-CO')}.
 
-Gracias por estar con ${company}.`
+Gracias por estar con ${company}.`,
+        cta
       };
     case 'PAYMENT_RECEIVED':
       return {
@@ -70,7 +72,8 @@ Gracias por estar con ${company}.`
         body:
 `Hola ${client.name?.split(/\s+/)[0] || ''},
 
-Hemos recibido tu pago de ${money(payload.payment.amount)} para la factura ${payload.invoice.invoiceNumber}. ¡Gracias!`
+Hemos recibido tu pago de ${money(payload.payment.amount)} para la factura ${payload.invoice.invoiceNumber}. ¡Gracias!`,
+        cta
       };
     case 'PAYMENT_FAILED':
       return {
@@ -78,7 +81,8 @@ Hemos recibido tu pago de ${money(payload.payment.amount)} para la factura ${pay
         body:
 `Hola ${client.name?.split(/\s+/)[0] || ''},
 
-El último intento de pago de la factura ${payload.invoice.invoiceNumber} no se completó. Puedes intentarlo nuevamente en cualquier momento.`
+El último intento de pago de la factura ${payload.invoice.invoiceNumber} no se completó. Puedes intentarlo nuevamente en cualquier momento.`,
+        cta
       };
     case 'SERVICE_SUSPENDED':
       return {
@@ -86,7 +90,8 @@ El último intento de pago de la factura ${payload.invoice.invoiceNumber} no se 
         body:
 `Hola ${client.name?.split(/\s+/)[0] || ''},
 
-Tu servicio de internet ha sido suspendido por mora en el pago. Para reactivarlo, regulariza tus facturas pendientes lo antes posible.`
+Tu servicio de internet ha sido suspendido por mora en el pago. Para reactivarlo, regulariza tus facturas pendientes lo antes posible.`,
+        cta
       };
     case 'SERVICE_ACTIVATED':
       return {
@@ -94,7 +99,8 @@ Tu servicio de internet ha sido suspendido por mora en el pago. Para reactivarlo
         body:
 `Hola ${client.name?.split(/\s+/)[0] || ''},
 
-Tu servicio de internet ha sido reactivado. ¡Gracias por tu pago!`
+Tu servicio de internet ha sido reactivado. ¡Gracias por tu pago!`,
+        cta
       };
     case 'INSTALLATION_SCHEDULED':
       return {
@@ -102,12 +108,14 @@ Tu servicio de internet ha sido reactivado. ¡Gracias por tu pago!`
         body:
 `Hola ${client.name?.split(/\s+/)[0] || ''},
 
-Tu instalación está agendada para ${new Date(payload.installationDate).toLocaleDateString('es-CO')}. Asegúrate de tener a alguien en sitio.`
+Tu instalación está agendada para ${new Date(payload.installationDate).toLocaleDateString('es-CO')}. Asegúrate de tener a alguien en sitio.`,
+        cta
       };
     case 'GENERAL_ANNOUNCEMENT':
       return {
         subject: payload.subject || `Aviso — ${company}`,
-        body:   payload.message || ''
+        body:   payload.message || '',
+        cta
       };
     default:
       throw Object.assign(new Error(`Unknown notification type: ${type}`), { permanent: true });
@@ -141,6 +149,7 @@ async function sendEmailChannel(client, rendered) {
     to:      client.email,
     subject: rendered.subject,
     body:    rendered.body,
+    cta:     rendered.cta || undefined,
     preset:  'general_announcement'
   });
   return { externalId: null }; // SMTP doesn't return a tracking id

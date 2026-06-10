@@ -3,13 +3,14 @@
 // emits "device:update" and "device:event" — the frontend subscribes via
 // socket.io-client to keep the map and history live without polling.
 import { Server } from 'socket.io';
+import { env } from '../config/env.js';
 
 let io = null;
 
 export function initSocket(httpServer) {
   io = new Server(httpServer, {
     cors: {
-      origin: ['http://localhost:5173', 'http://localhost:5174'],
+      origin: [env.FRONTEND_URL],
       credentials: true
     },
     transports: ['websocket', 'polling']

@@ -16,11 +16,11 @@ router.post('/sync-status', requireOperatorOrAdmin, paymentController.syncInvoic
 // Validation schemas
 const createInvoiceSchema = z.object({
   clientId: z.string().min(1, 'Cliente es requerido'),
-  planId: z.string().min(1, 'Plan es requerido'),
   amount: z.number().positive('Monto debe ser positivo'),
-  dueDate: z.string().datetime('Fecha de vencimiento inválida'),
-  periodStart: z.string().datetime('Fecha de inicio inválida'),
-  periodEnd: z.string().datetime('Fecha de fin inválida')
+  dueDate: z.string().min(1, 'Fecha de vencimiento es requerida'),
+  description: z.string().optional(),
+  periodStart: z.string().optional(),
+  periodEnd: z.string().optional()
 });
 
 const updateInvoiceSchema = createInvoiceSchema.partial();
@@ -75,6 +75,14 @@ router.get('/stats/by-plan', invoiceController.getInvoicesByPlan);
 router.get('/export/excel', invoiceController.exportToExcel);
 router.get('/export/pdf', invoiceController.exportToPDF);
 router.get('/:id/pdf', validateParams(commonSchemas.idParam), invoiceController.generateInvoicePDF);
+
+// Send invoice via specified channels
+const sendInvoiceSchema = z.object({
+  channels: z.array(z.enum(['email', 'whatsapp'])).min(1, 'Seleccione al menos un canal'),
+  sendPdf: z.boolean().optional().default(true),
+  sendPaymentLink: z.boolean().optional().default(false)
+});
+router.post('/:id/send', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(sendInvoiceSchema), invoiceController.sendInvoice);
 
 // Reminders
 router.post('/send-reminders', requireOperatorOrAdmin, invoiceController.sendPaymentReminders);

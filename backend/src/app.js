@@ -29,6 +29,9 @@ import networkRoutes from './routes/network.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
 import whatsappRoutes, { webhookRouter as whatsappWebhookRouter } from './routes/whatsapp.routes.js';
 import publicClientUpdatesRoutes from './routes/public.client-updates.routes.js';
+import clientAuthRoutes from './routes/client-auth.routes.js';
+import portalRoutes from './routes/portal.routes.js';
+import paymentLinksRoutes, { pixelRouter as paymentLinksPixelRouter } from './routes/payment-links.routes.js';
 import { makeOriginGuard } from './middleware/origin-guard.middleware.js';
 
 const app = express();
@@ -71,6 +74,13 @@ app.use(morgan('dev'));
 // by the global limit (e.g. heavy API usage) can still log in.
 app.use('/api/v1/auth',              authRoutes);
 
+// Client Portal auth — public endpoints (login, forgot-password, etc.)
+// and protected /me endpoint (middleware applied inline in the route).
+app.use('/api/v1/client-auth',       clientAuthRoutes);
+
+// Client Portal protected routes (auth middleware is in the router)
+app.use('/api/v1/portal',            portalRoutes);
+
 // PUBLIC — customer self-service update flow. No auth: the random token in
 // the URL is the credential. Has its own per-token rate limiter.
 app.use('/api/v1/public/client-updates', publicClientUpdatesRoutes);
@@ -86,6 +96,10 @@ app.use('/api/', makeOriginGuard(corsAllowlist));
 
 // Global rate limiter for all remaining API routes
 app.use('/api/', globalRateLimiter);
+
+// PUBLIC — pixel tracker for payment-link email opens. No auth: the email
+// client loads a 1×1 transparent GIF; auth headers are never sent.
+app.use('/api/v1', paymentLinksPixelRouter);
 
 // ── Auth middleware imported from middleware/auth.middleware.js ──
 
@@ -116,6 +130,7 @@ app.use('/api/v1/telegram',          authMiddleware, requireAdmin,       telegra
 // Mount it BEFORE the admin router so the path matches first.
 app.use('/api/v1/whatsapp/webhook',                                     whatsappWebhookRouter);
 app.use('/api/v1/whatsapp',          authMiddleware, requireAdmin,       whatsappRoutes);
+app.use('/api/v1/payment-links',     authMiddleware, requireAdmin,       paymentLinksRoutes);
 
 // ── Static serving of uploaded files ──────────────────────
 // Files are saved under <UPLOADS_PATH> by routes that use multer; expose

@@ -164,7 +164,7 @@
   }
   // Find invoice number for a given invoiceId (for payment history rows).
   function invoiceNumberFor(invoiceId) {
-    return client?.invoices?.find(i => i.id === invoiceId)?.number || null;
+    return client?.invoices?.find(i => i.id === invoiceId)?.invoiceNumber || null;
   }
   // Collect payments associated with an invoice. Prefer inv.payments (eager-loaded),
   // fall back to scanning client.payments by invoiceId.
@@ -992,7 +992,7 @@
             <tbody>
               {#each client.invoices.slice(0, 8) as inv}
                 <tr>
-                  <td class="font-mono text-xs text-slate-600">{inv.number}</td>
+                  <td class="font-mono text-xs text-slate-600">{inv.invoiceNumber}</td>
                   <td class="text-right font-mono font-medium tabular-nums">{fmtMoney(inv.total)}</td>
                   <td class="{isOverdueInvoice(inv) ? 'text-red-600 font-medium' : 'text-slate-600'}">
                     {fmtDate(inv.dueDate)}
@@ -1015,7 +1015,7 @@
                                 on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
                           Pagar
                         </button>
-                        <WompiButton {invoice} on:paid={() => onPaymentDone()} on:failed={() => showToast('error', 'El pago con Wompi no fue completado')} />
+                        <WompiButton invoice={inv} />
                       </div>
                     {/if}
                   </td>
@@ -1030,7 +1030,7 @@
             <div class="px-4 py-3 flex items-center justify-between gap-3">
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2 mb-1">
-                  <span class="font-mono text-xs text-slate-600">#{inv.number}</span>
+                  <span class="font-mono text-xs text-slate-600">#{inv.invoiceNumber}</span>
                   <span class="badge {INVOICE_CLS[inv.status] || 'bg-slate-100 text-slate-600'}">
                     {inv.status}
                   </span>
@@ -1051,7 +1051,7 @@
                             on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
                       Pagar
                     </button>
-                    <WompiButton {invoice} on:paid={() => onPaymentDone()} on:failed={() => showToast('error', 'El pago con Wompi no fue completado')} />
+                    <WompiButton invoice={inv} />
                   </div>
                 {/if}
               </div>
@@ -1452,7 +1452,7 @@
         <div class="bg-slate-50 rounded-lg p-3 border border-slate-100 grid grid-cols-2 gap-3">
           <div>
             <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Factura</div>
-            <div class="text-sm font-mono font-medium text-slate-900">{paymentDetailsInvoice?.number || '—'}</div>
+            <div class="text-sm font-mono font-medium text-slate-900">{paymentDetailsInvoice?.invoiceNumber || '—'}</div>
           </div>
           <div>
             <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Estado</div>

@@ -1,7 +1,9 @@
 import { prisma } from '../config/database.js';
+import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { invoiceService } from '../services/invoice.service.js';
 import { notificationService } from '../services/notification.service.js';
+import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
 
 class InvoicesController {
   getInvoices = asyncHandler(async (req, res) => {
@@ -136,36 +138,38 @@ class InvoicesController {
 
     // Verify client exists
     const client = await prisma.client.findUnique({
-      where: { id: invoiceData.clientId },
-      include: { plan: true }
+      where: { id: invoiceData.clientId }
     });
 
     if (!client) {
       throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
     }
 
-    // Verify plan exists
-    const plan = await prisma.plan.findUnique({
-      where: { id: invoiceData.planId }
-    });
-
-    if (!plan) {
-      throw new AppError('Plan no encontrado', 404, 'PLAN_NOT_FOUND');
-    }
-
     // Generate invoice number
     const invoiceNumber = await invoiceService.generateInvoiceNumber();
+
+    const amountInCents = Math.round(invoiceData.amount * 100);
 
     const invoice = await prisma.invoice.create({
       data: {
         invoiceNumber,
         clientId: invoiceData.clientId,
-        planId: invoiceData.planId,
-        amount: invoiceData.amount * 100, // Convert to cents
+        amount: amountInCents,
+        total: amountInCents,
+        balanceDue: amountInCents,
+        status: 'PENDING',
         dueDate: new Date(invoiceData.dueDate),
-        periodStart: new Date(invoiceData.periodStart),
-        periodEnd: new Date(invoiceData.periodEnd),
-        createdBy: userId
+        issueDate: new Date(),
+        ...(invoiceData.periodStart && { periodStart: new Date(invoiceData.periodStart) }),
+        ...(invoiceData.periodEnd && { periodEnd: new Date(invoiceData.periodEnd) }),
+        items: invoiceData.description ? {
+          create: {
+            description: invoiceData.description,
+            quantity: 1,
+            price: amountInCents,
+            total: amountInCents
+          }
+        } : undefined
       },
       include: {
         client: {
@@ -176,18 +180,9 @@ class InvoicesController {
             phone: true
           }
         },
-        plan: {
-          select: {
-            id: true,
-            name: true,
-            price: true
-          }
-        }
+        items: true
       }
     });
-
-    // Send invoice notification
-    await notificationService.sendInvoiceNotification(invoice);
 
     res.status(201).json({
       success: true,
@@ -736,9 +731,7 @@ class InvoicesController {
 
     const invoice = await prisma.invoice.findUnique({
       where: { id },
-      include: {
-        client: true
-      }
+      include: { client: true }
     });
 
     if (!invoice) {
@@ -750,6 +743,155 @@ class InvoicesController {
     res.json({
       success: true,
       message: 'Recordatorio enviado exitosamente'
+    });
+  });
+
+  sendInvoice = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { channels, sendPdf, sendPaymentLink } = req.body;
+
+    const invoice = await prisma.invoice.findUnique({
+      where: { id },
+      include: { client: true }
+    });
+
+    if (!invoice) {
+      throw new AppError('Factura no encontrada', 404, 'INVOICE_NOT_FOUND');
+    }
+
+    const results = [];
+
+    // Generate Wompi payment link if requested
+    let paymentLinkUrl = null;
+    if (sendPaymentLink) {
+      try {
+        const { default: wompiService } = await import('../services/wompi.service.js');
+        const checkout = await wompiService.createCheckout(invoice);
+        paymentLinkUrl = checkout.checkoutUrl || checkout.url;
+      } catch (e) {
+        results.push({ action: 'payment_link', channel: 'wompi', status: 'failed', error: e.message });
+      }
+    }
+
+    // Build company info for templates
+    const company = {
+      name: env.COMPANY_NAME,
+      nit: env.COMPANY_NIT,
+      city: env.COMPANY_CITY,
+      address: env.COMPANY_ADDRESS,
+      phone: env.COMPANY_PHONE,
+      email: env.COMPANY_EMAIL
+    };
+
+    for (const ch of channels) {
+      try {
+        if (ch === 'email') {
+          if (!invoice.client?.email) {
+            results.push({ action: 'send', channel: 'email', status: 'failed', error: 'Cliente sin email registrado' });
+            continue;
+          }
+
+          // Send invoice notification via reusable template
+          await notificationService.sendEmail({
+            to: invoice.client.email,
+            subject: `Factura ${invoice.invoiceNumber} - ${env.COMPANY_NAME}`,
+            template: 'invoice',
+            data: { invoice, client: invoice.client, company }
+          });
+
+          await notificationService.logNotification(
+            invoice.clientId, 'GENERAL_ANNOUNCEMENT', 'EMAIL',
+            `Factura ${invoice.invoiceNumber} enviada por email`
+          );
+
+          results.push({ action: 'send', channel: 'email', status: 'sent' });
+
+          // Send separate email with PDF attachment if requested
+          if (sendPdf) {
+            try {
+              const pdfBuffer = await invoiceService.generateInvoicePDF(invoice);
+              const { transporter, from } = await notificationService.getTransporter();
+
+              // Build HTML content with branded template
+              const built = notificationService.buildEmailTemplate('invoice', { invoice, client: invoice.client, company });
+              const subject = `PDF adjunto - Factura ${invoice.invoiceNumber}`;
+              const html = renderEmailTemplate({
+                icon: EMAIL_PRESETS.invoice?.icon || '📄',
+                title: built.title || subject,
+                body: `Adjuntamos el PDF de la factura ${invoice.invoiceNumber}.`,
+                fields: built.fields || [],
+                companyName: from.fromName,
+                companyDomain: from.fromEmail?.split('@')[1]
+              });
+
+              await transporter.sendMail({
+                from: `"${from.fromName}" <${from.fromEmail}>`,
+                to: invoice.client.email,
+                subject,
+                text: `Adjuntamos el PDF de la factura ${invoice.invoiceNumber}.`,
+                html,
+                attachments: [{ filename: `factura-${invoice.invoiceNumber}.pdf`, content: pdfBuffer }]
+              });
+            } catch (pdfErr) {
+              results.push({ action: 'send_pdf', channel: 'email', status: 'failed', error: pdfErr.message });
+            }
+          }
+
+          // Send payment link email if requested
+          if (paymentLinkUrl) {
+            await notificationService.sendEmailRaw({
+              to: invoice.client.email,
+              subject: `Link de Pago - Factura ${invoice.invoiceNumber}`,
+              body: `Estimado(a) ${invoice.client.name || 'cliente'},\n\nPuede realizar el pago de su factura ${invoice.invoiceNumber} por $${(invoice.amount / 100).toLocaleString('es-CO')} COP a través del siguiente enlace de pago seguro:\n\n${paymentLinkUrl}`,
+              cta: { text: 'Pagar Ahora', url: paymentLinkUrl },
+              preset: 'invoice'
+            });
+
+            await notificationService.logNotification(
+              invoice.clientId, 'GENERAL_ANNOUNCEMENT', 'EMAIL',
+              `Link de pago factura ${invoice.invoiceNumber} enviado`
+            );
+          }
+        } else if (ch === 'whatsapp') {
+          if (!invoice.client?.phone) {
+            results.push({ action: 'send', channel: 'whatsapp', status: 'failed', error: 'Cliente sin teléfono registrado' });
+            continue;
+          }
+
+          const amountFormatted = `$${(invoice.amount / 100).toLocaleString('es-CO')} COP`;
+          const dueFormatted = invoice.dueDate
+            ? new Date(invoice.dueDate).toLocaleDateString('es-CO')
+            : '—';
+
+          let msg = `📄 *Factura ${invoice.invoiceNumber}* - ${env.COMPANY_NAME}\n\n`;
+          msg += `💰 *Valor:* ${amountFormatted}\n`;
+          msg += `📅 *Vence:* ${dueFormatted}\n`;
+          msg += `📋 *Estado:* ${invoice.status === 'PAID' ? '✅ Pagada' : invoice.status === 'OVERDUE' ? '⚠️ Vencida' : '⏳ Pendiente'}\n\n`;
+          if (paymentLinkUrl) {
+            msg += `🔗 *Link de pago:* ${paymentLinkUrl}\n\n`;
+          }
+
+          await notificationService.sendWhatsApp({ to: invoice.client.phone, message: msg });
+
+          await notificationService.logNotification(
+            invoice.clientId, 'GENERAL_ANNOUNCEMENT', 'WHATSAPP',
+            `Factura ${invoice.invoiceNumber} enviada por WhatsApp`
+          );
+
+          results.push({ action: 'send', channel: 'whatsapp', status: 'sent' });
+        }
+      } catch (e) {
+        results.push({ action: 'send', channel: ch, status: 'failed', error: e.message });
+      }
+    }
+
+    const allOk = results.every(r => r.status === 'sent');
+    res.status(allOk ? 200 : 207).json({
+      success: allOk,
+      data: { results, paymentLinkUrl: paymentLinkUrl || null },
+      message: allOk
+        ? `Factura enviada correctamente por ${channels.join(' y ')}`
+        : `Algunos envíos fallaron (${results.filter(r => r.status === 'failed').length} de ${results.length})`
     });
   });
 }

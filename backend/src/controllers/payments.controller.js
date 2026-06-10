@@ -179,8 +179,8 @@ class PaymentsController {
       throw new AppError('La factura ya está pagada', 400, 'INVOICE_ALREADY_PAID');
     }
 
-    const config = wompiService.generateWidgetConfig(invoice);
-    res.json({ success: true, data: config });
+    const result = await wompiService.createCheckout(invoice);
+    res.json({ success: true, data: { redirectUrl: result.checkoutUrl } });
   });
 
   backfillMissingPayments = asyncHandler(async (req, res) => {

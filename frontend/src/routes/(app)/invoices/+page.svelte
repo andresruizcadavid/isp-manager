@@ -109,6 +109,10 @@
       {#if hasFilters}<span class="text-amber-700 font-medium">· filtros activos</span>{:else}<span>en el sistema</span>{/if}
     </p>
   </div>
+  <a href="/invoices/new" class="btn-primary btn-sm flex items-center gap-1.5">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    Nueva Factura
+  </a>
 </div>
 
 <!-- KPI strip — values are SERVER aggregates over the filtered set,

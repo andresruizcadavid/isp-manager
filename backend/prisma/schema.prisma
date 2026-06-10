@@ -90,6 +90,7 @@ model User {
   collectionWindows CollectionWindow[]
   routerBackups     RouterBackup[]
   billingCycles     BillingCycle[]
+  paymentLinkCampaigns PaymentLinkCampaign[]
 
   @@map("users")
 }
@@ -163,9 +164,13 @@ model Client {
   devices         Device[]
   invoices        Invoice[]
   payments        Payment[]
+  paymentAttempts PaymentAttempt[]
   mikrotikAccount MikrotikAccount?
   evidencePhotos  ClientEvidencePhoto[]
   updateTokens    ClientUpdateToken[]
+  clientUser          ClientUser?
+  paymentLinks        PaymentLink[]
+  clientNotifications ClientNotification[]
 
   @@map("clients")
 }
@@ -303,9 +308,11 @@ model Invoice {
   updatedAt  DateTime      @updatedAt
 
   // Relations
-  client   Client        @relation(fields: [clientId], references: [id])
+  client   Client          @relation(fields: [clientId], references: [id])
   payments Payment[]
   items    InvoiceItem[]
+  paymentAttempts PaymentAttempt[]
+  paymentLinks PaymentLink[]
 
   @@unique([clientId, periodYear, periodMonth])
   @@map("invoices")
@@ -349,6 +356,34 @@ model Payment {
 
   @@index([createdByUserId])
   @@map("payments")
+}
+
+// Tracks every Wompi checkout session / payment link generated from the
+// backend. One row per `POST /checkout/sessions` call. The webhook handler
+// updates status + webhookPayload when Wompi notifies us of the outcome,
+// giving full traceability from link creation through to settlement.
+model PaymentAttempt {
+  id             String   @id @default(cuid())
+  invoiceId      String
+  clientId       String
+  provider       String   @default("WOMPI")
+  reference      String   @unique
+  amount         Int // in cents
+  status         String   @default("PENDING") // PENDING | COMPLETED | FAILED | EXPIRED
+  checkoutUrl    String?  // The Wompi checkout URL the user is redirected to
+  externalId     String?  // Wompi session ID (e.g. "sess_01h...")
+  webhookPayload Json?    // Raw webhook payload from the transaction.updated event
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id])
+  client  Client  @relation(fields: [clientId], references: [id])
+
+  @@index([invoiceId])
+  @@index([clientId])
+  @@index([reference])
+  @@map("payment_attempts")
 }
 
 model Router {
@@ -562,6 +597,7 @@ model NotificationTemplate {
   updatedAt            DateTime @updatedAt
 
   campaigns NotificationCampaign[]
+  paymentLinkCampaigns PaymentLinkCampaign[]
 
   @@index([channel])
   @@map("notification_templates")
@@ -576,6 +612,7 @@ model NotificationCampaign {
   channel      String // "EMAIL" | "WHATSAPP" | "BOTH"
   audienceJson String? // serialized filter: { zoneId, status, planId, overdue }
   status       String    @default("draft") // draft | running | completed | failed
+  generatePaymentLinks Boolean @default(false)
   totalCount   Int       @default(0)
   sentCount    Int       @default(0)
   failedCount  Int       @default(0)
@@ -902,4 +939,151 @@ model BillingCycle {
   @@unique([year, month])
   @@index([status, year, month])
   @@map("billing_cycles")
+}
+
+// ── Portal de Cliente ──────────────────────────────────────────────
+
+// ClientUser — 1:1 con Client. Almacena la contraseña (bcrypt) para
+// que el cliente acceda a su portal de autoservicio. Se crea la primera
+// vez que el cliente establece su contraseña (vía link de bienvenida o
+// manualmente desde el admin).
+model ClientUser {
+  id             String   @id @default(cuid())
+  clientId       String   @unique
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  email          String   @unique // denormalizado de Client para login rápido
+  passwordHash   String
+  isActive       Boolean  @default(true)
+  lastLoginAt    DateTime?
+  lastIp         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sessions    ClientSession[]
+  resetTokens ClientResetToken[]
+
+  @@map("client_users")
+}
+
+// ClientSession — sesión JWT para clientes. Mismo patrón que Session
+// (admin): el token JWT se persiste en DB para revocación inmediata.
+model ClientSession {
+  id           String      @id @default(cuid())
+  clientUserId String
+  clientUser   ClientUser  @relation(fields: [clientUserId], references: [id], onDelete: Cascade)
+  token        String      @unique
+  expiresAt    DateTime
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime    @default(now())
+
+  @@index([clientUserId])
+  @@map("client_sessions")
+}
+
+// ClientResetToken — token de un solo uso para restablecer contraseña.
+model ClientResetToken {
+  id           String      @id @default(cuid())
+  clientUserId String
+  clientUser   ClientUser  @relation(fields: [clientUserId], references: [id], onDelete: Cascade)
+  token        String      @unique
+  expiresAt    DateTime
+  usedAt       DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([clientUserId])
+  @@index([token])
+  @@map("client_reset_tokens")
+}
+
+// ── Enlaces de Pago ────────────────────────────────────────────────
+
+// PaymentLink — un enlace de pago generado para un cliente. Puede
+// asociarse a una factura específica o ser genérico. Se envía al
+// cliente por Email/WhatsApp y se rastrea su estado hasta el pago.
+model PaymentLink {
+  id             String   @id @default(cuid())
+  clientId       String
+  client         Client   @relation(fields: [clientId], references: [id])
+  invoiceId      String?
+  invoice        Invoice? @relation(fields: [invoiceId], references: [id])
+  campaignId     String?
+  campaign       PaymentLinkCampaign? @relation(fields: [campaignId], references: [id])
+  reference      String   @unique
+  amountInCents  Int
+  currency       String   @default("COP")
+  wompiLinkId    String?  // ID from Wompi payment_links response
+  checkoutUrl    String?  // https://checkout.wompi.co/l/{id}
+  status         String   @default("pending") // pending | sent | opened | paid | expired | cancelled
+  expiresAt      DateTime?
+  sentAt         DateTime?
+  openedAt       DateTime?
+  paidAt         DateTime?
+  paymentAttemptId String? // link al PaymentAttempt cuando se genera
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([invoiceId])
+  @@index([status])
+  @@map("payment_links")
+}
+
+// PaymentLinkCampaign — campaña de envío masivo de enlaces de pago.
+// Agrupa múltiples PaymentLink y rastrea métricas agregadas.
+model PaymentLinkCampaign {
+  id             String   @id @default(cuid())
+  name           String
+  description    String?
+  templateId     String?
+  template       NotificationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  channel        String   @default("EMAIL") // EMAIL | WHATSAPP | BOTH
+  status         String   @default("draft") // draft | scheduled | sending | sent | partial | cancelled
+  scheduledAt    DateTime?
+  sentAt         DateTime?
+  totalCount     Int      @default(0)
+  sentCount      Int      @default(0)
+  openedCount    Int      @default(0)
+  paidCount      Int      @default(0)
+  createdById    String?
+  createdBy      User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  paymentLinks   PaymentLink[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("payment_link_campaigns")
+}
+
+// ── Auditoría de Notificaciones al Cliente ─────────────────────────
+
+// ClientNotification — registro individual de cada notificación enviada
+// a un cliente. Complementa NotificationLog con trazabilidad específica
+// del enlace de pago (apertura, pago). Cada fila representa un envío
+// por un canal a un cliente.
+model ClientNotification {
+  id             String   @id @default(cuid())
+  clientId       String
+  client         Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  campaignId     String?  // PaymentLinkCampaign.id si aplica
+  paymentLinkId  String?  // PaymentLink.id si aplica
+  type           String   // payment_link | reminder | announcement
+  channel        String   // EMAIL | WHATSAPP | SMS | TELEGRAM
+  recipient      String   // email o teléfono
+  subject        String?
+  content        String   @db.Text
+  linkUrl        String?  // URL del enlace de pago
+  status         String   @default("pending") // pending | sent | delivered | opened | failed
+  externalId     String?  // ID del proveedor (ej. message_id de WhatsApp)
+  error          String?
+  sentAt         DateTime?
+  openedAt       DateTime?
+  createdAt      DateTime @default(now())
+
+  @@index([clientId])
+  @@index([campaignId])
+  @@index([paymentLinkId])
+  @@index([status])
+  @@map("client_notifications")
 }

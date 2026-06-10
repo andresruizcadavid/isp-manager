@@ -1,0 +1,30 @@
+{
+  "version": "5.22.0",
+  "steps": [
+    {
+      "tag": "CreateTable",
+      "table": "client_users"
+    },
+    {
+      "tag": "CreateTable",
+      "table": "client_sessions"
+    },
+    {
+      "tag": "CreateTable",
+      "table": "client_reset_tokens"
+    },
+    {
+      "tag": "CreateTable",
+      "table": "payment_links"
+    },
+    {
+      "tag": "CreateTable",
+      "table": "payment_link_campaigns"
+    },
+    {
+      "tag": "CreateTable",
+      "table": "client_notifications"
+    }
+  ],
+  "datamodel": "ClientUser ClientSession ClientResetToken PaymentLink PaymentLinkCampaign ClientNotification"
+}
