@@ -161,7 +161,16 @@ class NotificationService {
       if (invoice.client.phone) {
         await this.sendWhatsApp({
           to: invoice.client.phone,
-          message: this.buildWhatsAppPaymentReminder(invoice, daysOverdue)
+          message: this.buildWhatsAppPaymentReminder(invoice, daysOverdue),
+          event: 'PAYMENT_REMINDER',
+          // Orden: nombre, n° factura, monto, vencimiento, link de pago
+          buildParams: async () => [
+            invoice.client?.name || 'cliente',
+            invoice.invoiceNumber,
+            this._waMoney(invoice.total ?? invoice.amount),
+            this._waDate(invoice.dueDate),
+            await this._waPayLink(invoice.id)
+          ]
         });
 
         await this.logNotification(invoice.clientId, reminderType, 'WHATSAPP', `Recordatorio factura ${invoice.invoiceNumber}`);
@@ -213,7 +222,14 @@ class NotificationService {
       if (invoice.client.phone) {
         await this.sendWhatsApp({
           to: invoice.client.phone,
-          message: this.buildWhatsAppPaymentConfirmation(invoice, payment)
+          message: this.buildWhatsAppPaymentConfirmation(invoice, payment),
+          event: 'PAYMENT_CONFIRMATION',
+          // Orden: nombre, monto pagado, n° factura
+          buildParams: async () => [
+            invoice.client?.name || 'cliente',
+            this._waMoney(payment.amount),
+            invoice.invoiceNumber
+          ]
         });
 
         await this.logNotification(invoice.clientId, 'PAYMENT_CONFIRMATION', 'WHATSAPP', `Confirmación pago factura ${invoice.invoiceNumber}`);
@@ -263,7 +279,14 @@ class NotificationService {
       if (client.phone) {
         await this.sendWhatsApp({
           to: client.phone,
-          message: this.buildWhatsAppServiceSuspension(client)
+          message: this.buildWhatsAppServiceSuspension(client),
+          event: 'SERVICE_SUSPENSION',
+          // Orden: nombre, saldo pendiente, link de pago
+          buildParams: async () => [
+            client.name,
+            this._waMoney(client.balance),
+            await this._waPayLinkForClient(client.id)
+          ]
         });
 
         await this.logNotification(client.id, 'SERVICE_SUSPENSION', 'WHATSAPP', 'Servicio suspendido');
@@ -313,7 +336,10 @@ class NotificationService {
       if (client.phone) {
         await this.sendWhatsApp({
           to: client.phone,
-          message: this.buildWhatsAppServiceActivation(client)
+          message: this.buildWhatsAppServiceActivation(client),
+          event: 'SERVICE_ACTIVATION',
+          // Orden: nombre
+          buildParams: async () => [client.name]
         });
 
         await this.logNotification(client.id, 'SERVICE_ACTIVATION', 'WHATSAPP', 'Servicio reactivo');
@@ -511,18 +537,41 @@ class NotificationService {
   }
 
   async sendWhatsApp(options) {
-    const { to, message, templateName, templateParams, language } = options;
+    const { to, message, event, buildParams, language } = options;
 
     // Lazy-import to avoid a circular dependency with prisma at module load.
     const wa = await import('./whatsapp.service.js');
 
-    // Two paths: if templateName is provided we send a Meta-approved
-    // template (the only way to reach a client outside the 24h window).
-    // Otherwise we send free text — works only inside that window; Meta
-    // rejects with error 131047 outside and we log it.
-    const result = templateName
-      ? await wa.sendTemplate(to, templateName, templateParams || [], { language })
-      : await wa.sendText(to, message);
+    // Resolve the Meta template mapped to this event in the WhatsApp config
+    // (Notificaciones → WhatsApp → templateMap). A template is the ONLY thing
+    // Meta delivers outside the 24h customer-service window (free text is
+    // rejected there with 131047). When a template is mapped AND every
+    // positional parameter resolves, send it; otherwise fall back to free
+    // text — which only reaches clients inside the window, but never crashes.
+    let templateName = null;
+    let lang = language;
+    if (event) {
+      const cfg = await prisma.whatsAppConfig.findFirst({
+        where: { isActive: true },
+        select: { templateMap: true, defaultLanguage: true }
+      });
+      templateName = cfg?.templateMap?.[event] || null;
+      lang = lang || cfg?.defaultLanguage || undefined;
+    }
+
+    let result;
+    if (templateName) {
+      // Build params lazily — only when a template is actually mapped — so the
+      // free-text path stays side-effect free (no Wompi pay-link calls etc.).
+      const params = buildParams ? await buildParams() : [];
+      const allPresent = params.length > 0 &&
+        params.every(p => p != null && String(p).trim().length > 0);
+      result = allPresent
+        ? await wa.sendTemplate(to, templateName, params, { language: lang })
+        : await wa.sendText(to, message);
+    } else {
+      result = await wa.sendText(to, message);
+    }
 
     if (!result.ok) {
       console.warn(`[whatsapp] ${to} failed: ${result.error}`);
@@ -610,6 +659,44 @@ class NotificationService {
         payment.transactionId && { label: 'Referencia', value: payment.transactionId },
         company.phone && { label: 'Contacto', value: company.phone }
       ].filter(Boolean)
+  // ── WhatsApp template helpers ───────────────────────────────────
+  // Plain "55.000" (no symbol) — the template body carries the "$" literal.
+  _waMoney(cents) { return Math.round((cents || 0) / 100).toLocaleString('es-CO'); }
+  _waDate(d) { return d ? new Date(d).toLocaleDateString('es-CO') : ''; }
+
+  // Pay link for a template parameter: reuse a valid pending link for the
+  // invoice, else create one (best-effort, via Wompi). Returns the checkout
+  // URL or null. Only invoked from the template path (buildParams), so the
+  // free-text flow never touches Wompi. Any failure → null → caller falls
+  // back to free text instead of sending a template with a missing variable.
+  async _waPayLink(invoiceId) {
+    try {
+      const existing = await prisma.paymentLink.findFirst({
+        where: { invoiceId, status: 'pending', expiresAt: { gt: new Date() } },
+        orderBy: { createdAt: 'desc' },
+        select: { checkoutUrl: true }
+      });
+      if (existing?.checkoutUrl) return existing.checkoutUrl;
+      const { paymentLinkService } = await import('./payment-link.service.js');
+      const link = await paymentLinkService.createForInvoice(invoiceId);
+      return link?.checkoutUrl || null;
+    } catch (e) {
+      console.warn(`[whatsapp] pay link failed for invoice ${invoiceId}: ${e.message}`);
+      return null;
+    }
+  }
+
+  // Pay link for a client when there's no single invoice in hand (suspension):
+  // pick the oldest open invoice and resolve its link.
+  async _waPayLinkForClient(clientId) {
+    const inv = await prisma.invoice.findFirst({
+      where: { clientId, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
+      orderBy: { dueDate: 'asc' },
+      select: { id: true }
+    });
+    return inv ? this._waPayLink(inv.id) : null;
+  }
+
     };
   }
 
@@ -758,7 +845,7 @@ Si experimenta algún problema técnico, contáctenos de inmediato.
 📞 Contáctenos: ${env.COMPANY_PHONE}`;
   }
 
-  async logNotification(clientId, type, channel, content, status = 'SENT', error = null) {
+  async logNotification(clientId, type, channel, content, status = 'SENT', error = null, recipient = null) {
     try {
       await prisma.notificationLog.create({
         data: {
@@ -848,3 +935,17 @@ Si experimenta algún problema técnico, contáctenos de inmediato.
 }
 
 export const notificationService = new NotificationService();
+      // `recipient` is required by the schema, but callers rarely have it
+      // handy. Derive it from the client's contact for the channel when not
+      // passed explicitly (EMAIL → email, otherwise phone). Falls back to "—"
+      // so a missing contact never crashes the logging (which would otherwise
+      // throw "Argument `recipient` is missing" and abort the send).
+      let to = recipient;
+      if (!to && clientId) {
+        const client = await prisma.client.findUnique({
+          where: { id: clientId },
+          select: { email: true, phone: true }
+        });
+        to = channel === 'EMAIL' ? client?.email : client?.phone;
+      }
+          recipient: to || '—',

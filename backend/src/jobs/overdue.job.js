@@ -291,6 +291,7 @@ Estimado/a ${invoice.client.name},
           clientId,
           type: 'SERVICE_SUSPENSION',
           channel: 'SYSTEM',
+          recipient: '—', // internal audit event, no contact recipient
           content: `Client suspended: ${reason} - ${details}`,
           status: 'SENT',
           sentAt: new Date()
@@ -308,6 +309,7 @@ Estimado/a ${invoice.client.name},
           clientId,
           type: 'SERVICE_ACTIVATION',
           channel: 'SYSTEM',
+          recipient: '—', // internal audit event, no contact recipient
           content: `Client reactivated: ${reason} - ${details}`,
           status: 'SENT',
           sentAt: new Date()

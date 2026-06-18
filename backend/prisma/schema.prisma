@@ -70,6 +70,9 @@ enum NotificationChannel {
   SMS
   WHATSAPP
   TELEGRAM
+  // Internal audit events (suspensión/reactivación) that aren't sent to a
+  // contact — logged for the Historial, not delivered to a recipient.
+  SYSTEM
 }
 
 model User {
