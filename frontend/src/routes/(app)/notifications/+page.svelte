@@ -644,6 +644,16 @@ Email: contacto@internetonline.co
 
   // Lazy-load SMTP only when the operator opens that tab. We track `smtpLoaded`
   // ── WhatsApp config ─────────────────────────────────────
+  // Transactional events that can be mapped to an approved Meta template.
+  // Outside the 24h customer-service window Meta only delivers TEMPLATE
+  // messages (free text → error 131047), so each automated notification
+  // needs the operator to point it at a template approved in WhatsApp Manager.
+  const WA_TEMPLATE_EVENTS = [
+    { key: 'PAYMENT_REMINDER',      label: 'Recordatorio de pago',  suggested: 'recordatorio_pago',   hint: 'Factura por vencer / vencida' },
+    { key: 'PAYMENT_CONFIRMATION',  label: 'Pago confirmado',       suggested: 'pago_confirmado',      hint: 'Tras registrar un pago' },
+    { key: 'SERVICE_SUSPENSION',    label: 'Servicio suspendido',   suggested: 'servicio_suspendido',  hint: 'Al suspender por mora' },
+    { key: 'SERVICE_ACTIVATION',    label: 'Servicio reactivado',   suggested: 'servicio_reactivado',  hint: 'Al reactivar el servicio' }
+  ];
   let waForm = {
     id: null,
     token: '',
@@ -651,6 +661,7 @@ Email: contacto@internetonline.co
     businessAccountId: '',
     displayName: '',
     defaultLanguage: 'es_CO',
+    templateMap: { PAYMENT_REMINDER: '', PAYMENT_CONFIRMATION: '', SERVICE_SUSPENSION: '', SERVICE_ACTIVATION: '' },
     isActive: true,
     isVerified: false,
     lastTestedAt: null,
@@ -668,7 +679,12 @@ Email: contacto@internetonline.co
     waLoading = true;
     try {
       const data = await whatsappApi.get();
-      if (data) waForm = { ...waForm, ...data };
+      if (data) {
+        // Merge templateMap onto the defaults so every event key stays bound,
+        // even if the stored map only has a subset (or is null).
+        const templateMap = { ...waForm.templateMap, ...(data.templateMap || {}) };
+        waForm = { ...waForm, ...data, templateMap };
+      }
     } catch (e) {
       waMsg = { type: 'error', text: e.message };
     } finally {
@@ -686,6 +702,7 @@ Email: contacto@internetonline.co
         businessAccountId: waForm.businessAccountId || null,
         displayName: waForm.displayName || null,
         defaultLanguage: waForm.defaultLanguage || 'es_CO',
+        templateMap: waForm.templateMap,
         isActive: !!waForm.isActive
       });
       waForm = { ...waForm, ...saved };
@@ -1407,6 +1424,27 @@ Email: contacto@internetonline.co
               <input type="checkbox" bind:checked={waForm.isActive} class="rounded" />
               Activo (se usa para enviar mensajes)
             </label>
+
+            <!-- Plantillas de Meta por evento -->
+            <div class="border-t border-slate-100 pt-4 mt-4">
+              <h3 class="text-sm font-semibold text-slate-900">Plantillas de Meta por evento</h3>
+              <p class="text-[11px] text-slate-500 mt-1 mb-3">
+                Escribe el nombre exacto de la plantilla aprobada en WhatsApp Manager para cada evento.
+                Sin plantilla, el mensaje solo llega si el cliente te escribió en las últimas 24h (Meta rechaza el resto con error 131047).
+              </p>
+              <div class="space-y-2.5">
+                {#each WA_TEMPLATE_EVENTS as ev}
+                  <label class="block">
+                    <span class="text-xs font-semibold text-slate-700">{ev.label}</span>
+                    <span class="text-[11px] text-slate-400 font-normal"> — {ev.hint}</span>
+                    <input
+                      bind:value={waForm.templateMap[ev.key]}
+                      placeholder={ev.suggested}
+                      class="mt-1 w-full text-sm border border-slate-200 rounded-lg px-3 py-2 font-mono focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 outline-none" />
+                  </label>
+                {/each}
+              </div>
+            </div>
 
             <div class="flex justify-end pt-2">
               <button type="submit" disabled={waSaving}

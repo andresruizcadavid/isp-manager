@@ -28,10 +28,18 @@ async function loadActive() {
 
 // Strip a phone number to E.164-without-plus form (e.g. "573001234567").
 // WhatsApp Cloud API rejects "+", spaces, dashes.
+//
+// Colombian default: numbers are stored inconsistently (with "+57", with a
+// bare "57", or just the 10-digit mobile starting with 3). WhatsApp needs the
+// full international digits, so a bare 10-digit mobile gets "57" prepended —
+// otherwise "3157729890" is sent verbatim and reaches the wrong number / is
+// rejected. Anything already carrying a country code is left untouched.
+const CO_COUNTRY_CODE = '57';
 function normalizeRecipient(raw) {
   if (!raw) return null;
-  const s = String(raw).replace(/[^\d]/g, '');
+  let s = String(raw).replace(/[^\d]/g, '');
   if (!s) return null;
+  if (s.length === 10 && s.startsWith('3')) s = CO_COUNTRY_CODE + s;
   return s;
 }
 

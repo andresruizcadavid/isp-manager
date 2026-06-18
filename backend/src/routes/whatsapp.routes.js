@@ -28,6 +28,11 @@ const configSchema = z.object({
   businessAccountId: z.string().nullish(),
   displayName:       z.string().nullish(),
   defaultLanguage:   z.string().default('es_CO'),
+  // Event → approved Meta template name. Keys are notification event codes
+  // (PAYMENT_REMINDER, PAYMENT_CONFIRMATION, SERVICE_SUSPENSION,
+  // SERVICE_ACTIVATION); values the exact template name. Blank values are
+  // dropped (below) so an unmapped event falls back to free text.
+  templateMap:       z.record(z.string(), z.string()).nullish(),
   isActive:          z.boolean().default(true)
 });
 
@@ -40,7 +45,15 @@ router.get('/', async (_req, res) => {
 router.put('/', validateBody(configSchema), async (req, res) => {
   try {
     const existing = await prisma.whatsAppConfig.findFirst();
-    const data = req.body;
+    const data = { ...req.body };
+    // Drop blank template names so the consumer can treat "no key" === "no
+    // mapping"; persist null instead of an empty object.
+    if (data.templateMap && typeof data.templateMap === 'object') {
+      const cleaned = Object.fromEntries(
+        Object.entries(data.templateMap).filter(([, v]) => v && String(v).trim())
+      );
+      data.templateMap = Object.keys(cleaned).length ? cleaned : null;
+    }
     const saved = existing
       ? await prisma.whatsAppConfig.update({ where: { id: existing.id }, data })
       : await prisma.whatsAppConfig.create({ data });

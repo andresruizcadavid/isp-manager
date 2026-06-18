@@ -759,6 +759,13 @@ model WhatsAppConfig {
   businessAccountId String? // WABA ID, informational
   displayName       String? // What shows in WhatsApp Manager (read-only mirror)
   defaultLanguage   String    @default("es_CO")
+  // Maps each transactional event to the exact name of an approved Meta
+  // template, so outbound notifications can be sent OUTSIDE the 24h window
+  // (free text is rejected there with error 131047). Shape:
+  //   { "PAYMENT_REMINDER": "recordatorio_pago", "PAYMENT_CONFIRMATION": "pago_confirmado", ... }
+  // Events with no mapping fall back to free text (only reaches clients
+  // inside the 24h window). Edited from Notificaciones → WhatsApp.
+  templateMap       Json?
   isActive          Boolean   @default(true)
   isVerified        Boolean   @default(false)
   lastTestedAt      DateTime?
