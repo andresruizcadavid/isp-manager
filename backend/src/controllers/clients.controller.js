@@ -718,19 +718,26 @@ class ClientsController {
       }
     }
 
-    // If the client lands on a free plan (trueque), any open invoice loses
-    // its right to be collected — cancel PENDING/OVERDUE/PARTIAL and zero
-    // out balanceDue in the same transaction. Idempotent: a re-save on a
-    // client already on a free plan with no open invoices is a no-op.
-    // We use the post-update plan: `targetPlan` if we just switched, else
-    // the existing plan loaded earlier.
+    // When the client lands on a free plan (trueque/cortesía), only the
+    // RECURRING MONTHLY service loses its right to be collected — cancel the
+    // open monthly invoices (those carrying a billing period) and zero their
+    // balanceDue in the same transaction. One-off / manual charges
+    // (instalación, equipos, otros conceptos) have no period (periodMonth =
+    // null) and are PRESERVED: a free plan means "no se cobra el internet
+    // mensual", NOT "se perdona toda la deuda". Idempotent: re-saving a
+    // free-plan client with no open monthly invoices is a no-op. Uses the
+    // post-update plan: `targetPlan` if we just switched, else the existing.
     const effectivePlan = (planIdChanged && targetPlan)
       ? targetPlan
       : existingClient.plan;
     let cancelledInvoiceCount = 0;
     if (effectivePlan?.isFree) {
       const openInvoices = await prisma.invoice.findMany({
-        where: { clientId: id, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
+        where: {
+          clientId: id,
+          status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] },
+          periodMonth: { not: null } // servicio mensual únicamente; conserva las manuales
+        },
         select: { id: true }
       });
       cancelledInvoiceCount = openInvoices.length;
@@ -751,7 +758,7 @@ class ClientsController {
       if (result.warning) warnings.push(result.warning);
     }
     if (cancelledInvoiceCount > 0) {
-      warnings.push(`${cancelledInvoiceCount} factura(s) pendiente(s) fueron canceladas porque el cliente pasa a un plan gratuito.`);
+      warnings.push(`${cancelledInvoiceCount} factura(s) de servicio mensual fueron canceladas porque el cliente pasa a un plan gratuito. Las facturas de otros conceptos (instalación, equipos, etc.) se conservan.`);
     }
 
     // Re-fetch client so returned data includes any profileName update
