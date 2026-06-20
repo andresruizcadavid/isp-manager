@@ -5,6 +5,7 @@ import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
 import { validateBody, validateQuery } from '../middleware/validate.middleware.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
 import { runCampaign, retryFailed, sendToClient, loadClientForSend } from '../services/notification.campaign.service.js';
+import { notificationSettings, NOTIFY_DEFAULTS } from '../services/notification-settings.service.js';
 
 const router = Router();
 
@@ -499,6 +500,56 @@ router.delete('/campaigns/:id', async (req, res) => {
     }
     await prisma.notificationCampaign.delete({ where: { id: req.params.id } });
     res.json({ success: true });
+  } catch (e) { res.status(400).json({ success: false, error: e.message }); }
+});
+
+// ════════════════════════════════════════════════════════════
+// SETTINGS — periodicidad / on-off de notificaciones a clientes
+// ════════════════════════════════════════════════════════════
+
+// Lista todos los tipos con su estado (merge defaults + DB) para la UI.
+router.get('/settings', async (req, res) => {
+  try {
+    const items = await notificationSettings.listForUi();
+    res.json({ success: true, data: items });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+const settingUpdateSchema = z.object({
+  enabled:  z.boolean().optional(),
+  email:    z.boolean().optional(),
+  whatsapp: z.boolean().optional(),
+  // periodicidad libre por tipo: { times:[...], daysBeforeDue, dayOfMonthFrom }
+  schedule: z.union([z.record(z.any()), z.null()]).optional()
+});
+
+// Actualiza un tipo. type debe existir en el catálogo (no se crean tipos libres).
+router.put('/settings/:type', validateBody(settingUpdateSchema), async (req, res) => {
+  try {
+    const type = req.params.type;
+    if (!NOTIFY_DEFAULTS[type]) {
+      return res.status(400).json({ success: false, error: `Tipo de notificación desconocido: ${type}` });
+    }
+    const data = {};
+    for (const k of ['enabled', 'email', 'whatsapp']) {
+      if (req.body[k] !== undefined) data[k] = req.body[k];
+    }
+    if (req.body.schedule !== undefined) data.schedule = req.body.schedule ?? null;
+
+    const d = NOTIFY_DEFAULTS[type];
+    const updated = await prisma.notificationSetting.upsert({
+      where: { type },
+      update: data,
+      create: {
+        type,
+        enabled:  data.enabled  ?? d.enabled,
+        email:    data.email    ?? d.email,
+        whatsapp: data.whatsapp ?? d.whatsapp,
+        schedule: (data.schedule ?? d.schedule) ?? undefined
+      }
+    });
+    notificationSettings.invalidate();
+    res.json({ success: true, data: updated });
   } catch (e) { res.status(400).json({ success: false, error: e.message }); }
 });
 

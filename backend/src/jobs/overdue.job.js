@@ -215,6 +215,7 @@ class OverdueJob {
     // Send email with final warning
     await notificationService.sendEmail({
       to: invoice.client.email,
+      notifyType: 'OVERDUE_WARNING',
       subject: `⚠️ ÚLTIMO AVISO - Suspensión Inminente - ${invoice.invoiceNumber}`,
       template: 'final_warning',
       data: {
@@ -242,6 +243,7 @@ class OverdueJob {
     if (invoice.client.phone) {
       await notificationService.sendWhatsApp({
         to: invoice.client.phone,
+        notifyType: 'OVERDUE_WARNING',
         message: this.buildFinalWarningMessage(invoice, daysOverdue)
       });
     }

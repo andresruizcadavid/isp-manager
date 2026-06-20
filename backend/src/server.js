@@ -6,6 +6,7 @@ import { createRedisClient } from './services/redis.service.js';
 import { initSocket } from './services/socket.service.js';
 import { startMonitor } from './services/network-monitor.service.js';
 import { startRouterMonitor } from './services/router-monitor.service.js';
+import { notificationSettings } from './services/notification-settings.service.js';
 
 // ── Scheduled jobs ──────────────────────────────────────────
 // Each import instantiates its singleton, which calls setupSchedules() in the
@@ -45,6 +46,16 @@ const server = httpServer.listen(env.PORT, async () => {
     }
   } catch (e) {
     console.warn('Could not run campaign orphan cleanup:', e.message);
+  }
+
+  // Seed notification settings (one row per client-facing type) with defaults
+  // that replicate current behavior. Idempotent + create-only: never clobbers
+  // operator changes, never touches other tables.
+  try {
+    await notificationSettings.seedDefaults();
+    console.log('🔔 Notification settings seeded/verified.');
+  } catch (e) {
+    console.warn('Could not seed notification settings:', e.message);
   }
 
   // Self-healing sweep: a campaign can also hang WITHIN a live process (e.g. a

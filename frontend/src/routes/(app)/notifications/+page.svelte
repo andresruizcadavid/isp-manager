@@ -985,6 +985,39 @@ Email: contacto@internetonline.co
   // there is no config in DB yet (id stays null → reactive refires forever).
   $: if (tab === 'smtp' && !smtpLoaded && !smtpLoading) loadSmtp();
 
+  // ── Ajustes de notificaciones (periodicidad / on-off) ──────────
+  let settings = [];
+  let settingsLoading = false;
+  let settingsLoaded = false;
+  let settingsSaving = '';   // type actualmente guardándose
+  async function loadSettings() {
+    settingsLoading = true;
+    try { settings = await notificationsApi.listSettings(); }
+    catch (e) { console.error(e); }
+    finally { settingsLoading = false; settingsLoaded = true; }
+  }
+  $: if (tab === 'settings' && !settingsLoaded && !settingsLoading) loadSettings();
+
+  async function patchSetting(s, patch) {
+    settingsSaving = s.type;
+    try {
+      const updated = await notificationsApi.updateSetting(s.type, patch);
+      settings = settings.map(x => x.type === s.type ? { ...x, ...updated } : x);
+    } catch (e) {
+      alert(e.message || 'No se pudo guardar el ajuste.');
+      loadSettings(); // revertir al estado real
+    } finally { settingsSaving = ''; }
+  }
+  // Resumen legible de la periodicidad para mostrar.
+  function scheduleSummary(sc) {
+    if (!sc) return 'Por evento (inmediato)';
+    const parts = [];
+    if (Array.isArray(sc.times) && sc.times.length) parts.push(`Horas: ${sc.times.join(', ')}`);
+    if (sc.daysBeforeDue != null) parts.push(`${sc.daysBeforeDue} días antes de vencer`);
+    if (sc.dayOfMonthFrom != null) parts.push(`desde el día ${sc.dayOfMonthFrom} del mes`);
+    return parts.length ? parts.join(' · ') : 'Programado';
+  }
+
   // ── Helpers ────────────────────────────────────────────
   const CHANNEL_LABEL = { EMAIL: 'Email', WHATSAPP: 'WhatsApp', BOTH: 'Email + WhatsApp' };
   const CHANNEL_ICON  = { EMAIL: Mail, WHATSAPP: MessageSquare, BOTH: Send };
@@ -1071,6 +1104,7 @@ Email: contacto@internetonline.co
       { id: 'campaigns', label: 'Campañas',    icon: Send },
       { id: 'templates', label: 'Plantillas',  icon: FileText },
       { id: 'history',   label: 'Historial',   icon: HistoryIcon },
+      { id: 'settings',  label: 'Ajustes',     icon: Filter },
       { id: 'smtp',      label: 'Correo SMTP', icon: Server },
       { id: 'whatsapp',  label: 'WhatsApp',    icon: MessageCircle },
     ] as t}
@@ -1392,6 +1426,79 @@ Email: contacto@internetonline.co
         </table>
       </div>
     {/if}
+  </div>
+
+<!-- ─── AJUSTES / PERIODICIDAD ───────────────────────── -->
+{:else if tab === 'settings'}
+  <div class="card">
+    <div class="card-header">
+      <div>
+        <h2 class="font-semibold text-slate-900 flex items-center gap-2"><Filter size={16} class="text-brand-600" /> Ajustes de notificaciones a clientes</h2>
+        <p class="text-xs text-slate-500 mt-0.5">
+          Controla qué correos/mensajes reciben los clientes y por qué canal. Si apagas un tipo,
+          <strong>ningún</strong> envío de ese tipo sale (venga de un cron, un evento o la UI). Lo masivo (campañas)
+          y los envíos manuales puntuales no dependen de aquí.
+        </p>
+      </div>
+    </div>
+    <div class="card-body">
+      {#if settingsLoading}
+        <div class="flex items-center justify-center gap-2 py-12 text-slate-500 text-sm">
+          <Loader2 size={14} class="animate-spin" /> Cargando ajustes...
+        </div>
+      {:else if settings.length === 0}
+        <div class="text-center py-12 text-sm text-slate-500">No hay ajustes para mostrar.</div>
+      {:else}
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-xs text-slate-500 border-b border-slate-200">
+                <th class="py-2 pr-3">Tipo</th>
+                <th class="py-2 px-2 text-center">Activo</th>
+                <th class="py-2 px-2 text-center">Email</th>
+                <th class="py-2 px-2 text-center">WhatsApp</th>
+                <th class="py-2 pl-3">Periodicidad</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each settings as s (s.type)}
+                <tr class="border-b border-slate-100 align-top {s.enabled ? '' : 'opacity-60'}">
+                  <td class="py-3 pr-3">
+                    <div class="font-medium text-slate-900 flex items-center gap-1.5">
+                      {s.label}
+                      {#if settingsSaving === s.type}<Loader2 size={12} class="animate-spin text-slate-400" />{/if}
+                    </div>
+                    <div class="text-[11px] {s.security ? 'text-amber-700' : 'text-slate-500'} max-w-md">{s.desc}</div>
+                  </td>
+                  <td class="py-3 px-2 text-center">
+                    <input type="checkbox" class="w-4 h-4" checked={s.enabled}
+                           disabled={settingsSaving === s.type}
+                           on:change={(e) => patchSetting(s, { enabled: e.currentTarget.checked })} />
+                  </td>
+                  <td class="py-3 px-2 text-center">
+                    <input type="checkbox" class="w-4 h-4" checked={s.email}
+                           disabled={settingsSaving === s.type || !s.enabled}
+                           on:change={(e) => patchSetting(s, { email: e.currentTarget.checked })} />
+                  </td>
+                  <td class="py-3 px-2 text-center">
+                    <input type="checkbox" class="w-4 h-4" checked={s.whatsapp}
+                           disabled={settingsSaving === s.type || !s.enabled}
+                           on:change={(e) => patchSetting(s, { whatsapp: e.currentTarget.checked })} />
+                  </td>
+                  <td class="py-3 pl-3 text-xs text-slate-600">
+                    {scheduleSummary(s.schedule)}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+        <p class="text-[11px] text-slate-400 mt-3">
+          El encendido/apagado y los canales se aplican de inmediato. La columna “Periodicidad”
+          muestra el horario actual de cada envío programado (de momento fijo).
+        </p>
+      {/if}
+    </div>
   </div>
 
 <!-- ─── SMTP CONFIG ──────────────────────────────────── -->

@@ -158,6 +158,7 @@ class ClientAuthService {
     try {
       await notificationService.sendEmailRaw({
         to: clientUser.email,
+        notifyType: 'PASSWORD_RESET',
         subject: 'Restablece tu contraseña — Internet Online',
         preset: 'general_announcement',
         title: 'Restablece tu contraseña',

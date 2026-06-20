@@ -4,6 +4,7 @@ import { AppError } from '../middleware/error.middleware.js';
 import { prisma } from '../config/database.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from './email-base.template.js';
 import { BRAND } from '../config/brand.js';
+import { notificationSettings } from './notification-settings.service.js';
 
 class NotificationService {
   constructor() {
@@ -32,59 +33,41 @@ class NotificationService {
       return { transporter: this._cachedTransporter, from: this._cachedFrom };
     }
 
+    // SMTP es OFICIAL y GLOBAL: la única fuente de verdad es la fila activa de
+    // SmtpConfig (gestionada desde Centro de Notificaciones → Correo SMTP).
+    // NO se cae al .env: hacerlo enviaba con credenciales viejas/rotas de forma
+    // silenciosa. Si no hay configuración activa, fallamos con un error claro.
     let cfg = null;
     try {
       cfg = await prisma.smtpConfig.findFirst({
         where: { isActive: true },
         orderBy: { createdAt: 'desc' }
       });
-    } catch { /* table may not exist on first run — fall back to env */ }
-
-    // Audit log — makes it explicit in backend logs which SMTP source is
-    // actually being used. Useful when debugging "did the campaign use the
-    // SMTP I configured in the UI, or the legacy .env one?".
-    if (cfg) {
-      console.log(`[notification.smtp] source=DB host=${cfg.host}:${cfg.port} secure=${cfg.secure} user=${cfg.username} from="${cfg.fromName} <${cfg.fromEmail}>"`);
-    } else {
-      console.log(`[notification.smtp] source=ENV host=${env.SMTP_HOST}:${env.SMTP_PORT} user=${env.SMTP_USER} (no SmtpConfig row found)`);
+    } catch (e) {
+      throw new Error(`No se pudo leer la configuración SMTP de la base de datos: ${e.message}`);
     }
 
-    const transporter = nodemailer.createTransport(cfg ? {
+    if (!cfg) {
+      console.error('[notification.smtp] No hay SmtpConfig activa — envío de correo deshabilitado hasta configurarla en Centro de Notificaciones → Correo SMTP.');
+      throw new Error('No hay configuración SMTP activa. Configúrala en Centro de Notificaciones → Correo SMTP antes de enviar correos.');
+    }
+
+    console.log(`[notification.smtp] source=DB host=${cfg.host}:${cfg.port} secure=${cfg.secure} user=${cfg.username} from="${cfg.fromName} <${cfg.fromEmail}>"`);
+
+    const transporter = nodemailer.createTransport({
       host:   cfg.host,
       port:   cfg.port,
       secure: cfg.secure,
       auth:   { user: cfg.username, pass: cfg.password },
       tls:    { rejectUnauthorized: false }
-    } : {
-      host:   env.SMTP_HOST,
-      port:   env.SMTP_PORT,
-      secure: env.SMTP_PORT === 465,
-      auth:   { user: env.SMTP_USER, pass: env.SMTP_PASS }
     });
 
-    const from = cfg
-      ? { fromEmail: cfg.fromEmail, fromName: cfg.fromName || env.COMPANY_NAME }
-      : { fromEmail: env.SMTP_USER,  fromName: env.COMPANY_NAME };
+    const from = { fromEmail: cfg.fromEmail, fromName: cfg.fromName || env.COMPANY_NAME };
 
     this._cachedTransporter = transporter;
     this._cachedFrom = from;
     this._cachedAt = Date.now();
     return { transporter, from };
-  }
-
-  /** Backwards-compat alias — keep this so existing references don't break. */
-  get emailTransporter() {
-    // Legacy callers used `this.emailTransporter.sendMail(...)`. Lazy-init
-    // synchronously with env-based values for that one call; the new flow
-    // should `await this.getTransporter()` instead.
-    if (!this._legacyTransporter) {
-      this._legacyTransporter = nodemailer.createTransport({
-        host: env.SMTP_HOST, port: env.SMTP_PORT,
-        secure: env.SMTP_PORT === 465,
-        auth: { user: env.SMTP_USER, pass: env.SMTP_PASS }
-      });
-    }
-    return this._legacyTransporter;
   }
 
   // Welcome email — fired (best-effort) when a new client is created with an
@@ -96,6 +79,7 @@ class NotificationService {
         to: client.email,
         subject: '¡Bienvenido a Internet Online!',
         template: 'welcome',
+        notifyType: 'WELCOME',
         data: { client, company: this._companyInfo() }
       });
       await this.logNotification(client.id, 'GENERAL_ANNOUNCEMENT', 'EMAIL', 'Correo de bienvenida');
@@ -114,6 +98,7 @@ class NotificationService {
         to: invoice.client.email,
         subject: `Nueva Factura - ${invoice.invoiceNumber}`,
         template: 'invoice',
+        notifyType: 'INVOICE_GENERATED',
         data: {
           invoice,
           client: invoice.client,
@@ -139,7 +124,7 @@ class NotificationService {
     }
   }
 
-  async sendPaymentReminder(invoice) {
+  async sendPaymentReminder(invoice, notifyType = 'PAYMENT_REMINDER') {
     try {
       const daysOverdue = Math.floor((new Date() - invoice.dueDate) / (1000 * 60 * 60 * 24));
       const reminderType = daysOverdue > 0 ? 'PAYMENT_OVERDUE' : 'PAYMENT_DUE';
@@ -147,7 +132,8 @@ class NotificationService {
       // Send email
       await this.sendEmail({
         to: invoice.client.email,
-        subject: daysOverdue > 0 
+        notifyType,
+        subject: daysOverdue > 0
           ? `Recordatorio de Pago Vencido - ${invoice.invoiceNumber}`
           : `Recordatorio de Pago - ${invoice.invoiceNumber}`,
         template: 'payment_reminder',
@@ -214,6 +200,7 @@ class NotificationService {
         to: invoice.client.email,
         subject: `Confirmación de Pago - ${invoice.invoiceNumber}`,
         template: 'payment_confirmation',
+        notifyType: 'PAYMENT_CONFIRMATION',
         data: {
           invoice,
           payment,
@@ -273,6 +260,7 @@ class NotificationService {
         to: client.email,
         subject: 'Servicio Suspendido',
         template: 'service_suspension',
+        notifyType: 'SERVICE_SUSPENSION',
         data: {
           client,
           company: {
@@ -330,6 +318,7 @@ class NotificationService {
         to: client.email,
         subject: 'Servicio Reactivado',
         template: 'service_activation',
+        notifyType: 'SERVICE_ACTIVATION',
         data: {
           client,
           company: {
@@ -513,7 +502,14 @@ class NotificationService {
   }
 
   async sendEmail(options) {
-    const { to, subject, template, data } = options;
+    const { to, subject, template, data, notifyType } = options;
+
+    // Gate central de notificaciones a clientes: si el tipo está deshabilitado
+    // (o su canal email apagado) en los ajustes, NO se envía.
+    if (notifyType && !(await notificationSettings.isEnabled(notifyType, 'EMAIL'))) {
+      console.log(`[notif-gate] EMAIL ${notifyType} → ${to} omitido (deshabilitado en ajustes de notificaciones)`);
+      return { skipped: true };
+    }
 
     // Resolve the built-in branded shape ({ preset, title, body, fields }).
     const built = this.buildEmailTemplate(template, data);
@@ -570,8 +566,14 @@ class NotificationService {
    * @param {object}   [opts.cta]           Optional call-to-action button { text, url }.
    * @param {string}   [opts.preset]        Pull icon+title from EMAIL_PRESETS by name.
    */
-  async sendEmailRaw({ to, subject, body, icon, title, fields, cta, preset }) {
+  async sendEmailRaw({ to, subject, body, icon, title, fields, cta, preset, notifyType }) {
     if (!to) throw new Error('sendEmailRaw: to requerido');
+    // Gate central — ver sendEmail. notifyType es opcional: los envíos de
+    // campañas/operador no lo pasan y por tanto no se filtran aquí.
+    if (notifyType && !(await notificationSettings.isEnabled(notifyType, 'EMAIL'))) {
+      console.log(`[notif-gate] EMAIL ${notifyType} → ${to} omitido (deshabilitado en ajustes de notificaciones)`);
+      return { skipped: true };
+    }
     const { transporter, from } = await this.getTransporter();
 
     // Resolve icon + title:
@@ -617,7 +619,14 @@ class NotificationService {
   }
 
   async sendWhatsApp(options) {
-    const { to, message, event, buildParams, language } = options;
+    const { to, message, event, buildParams, language, notifyType } = options;
+
+    // Gate central — canal WHATSAPP. Los envíos de campañas/operador no pasan
+    // notifyType y por tanto no se filtran aquí.
+    if (notifyType && !(await notificationSettings.isEnabled(notifyType, 'WHATSAPP'))) {
+      console.log(`[notif-gate] WHATSAPP ${notifyType} → ${to} omitido (deshabilitado en ajustes de notificaciones)`);
+      return { skipped: true, success: false };
+    }
 
     // Lazy-import to avoid a circular dependency with prisma at module load.
     const wa = await import('./whatsapp.service.js');

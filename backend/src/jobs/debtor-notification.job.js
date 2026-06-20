@@ -92,7 +92,7 @@ class DebtorNotificationJob {
             continue;
           }
 
-          const success = await notificationService.sendPaymentReminder(invoice);
+          const success = await notificationService.sendPaymentReminder(invoice, 'DEBTOR');
           if (success) {
             sentCount++;
           } else {

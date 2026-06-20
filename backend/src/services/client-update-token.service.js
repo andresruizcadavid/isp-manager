@@ -268,6 +268,7 @@ export async function dispatchLinkToClient(tokenRow, client) {
         if (!client.email) throw new Error('Cliente sin email');
         await notificationService.sendEmailRaw({
           to:      client.email,
+          notifyType: 'SELF_SERVICE_LINK',
           subject: 'Actualiza tus datos — ISP Manager',
           preset:  'general_announcement',
           title:   'Actualiza tus datos',

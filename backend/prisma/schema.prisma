@@ -682,6 +682,25 @@ model NotificationCampaign {
   @@map("notification_campaigns")
 }
 
+// Ajustes de notificaciones a clientes — una fila por TIPO de mensaje
+// cliente-facing. Es el ÚNICO gobernador de los envíos a clientes: si un tipo
+// está deshabilitado (o su canal apagado), NINGÚN envío de ese tipo sale,
+// venga de un cron, de un evento transaccional o de la UI. `schedule` guarda la
+// periodicidad (JSON) para los tipos basados en cron (horas, días, rango del
+// mes). Ver notification-settings.service.js. Tabla puramente aditiva.
+model NotificationSetting {
+  id        String   @id @default(cuid())
+  type      String   @unique // WELCOME | INVOICE_GENERATED | PAYMENT_REMINDER | DEBTOR | OVERDUE_WARNING | PAYMENT_CONFIRMATION | SERVICE_SUSPENSION | SERVICE_ACTIVATION | PAYMENT_LINK_RESEND | PASSWORD_RESET | PORTAL_LINK | SELF_SERVICE_LINK
+  enabled   Boolean  @default(true)
+  email     Boolean  @default(true) // permitir canal EMAIL
+  whatsapp  Boolean  @default(true) // permitir canal WHATSAPP
+  schedule  Json? // periodicidad para tipos cron: { times:["09:00","18:00"], daysBeforeDue:3, dayOfMonthFrom:25 }
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("notification_settings")
+}
+
 // SMTP credentials managed from the UI (Notification Center → Correo SMTP).
 // Only the row with isActive=true is used by notification.service when
 // creating the email transporter. Falls back to .env if no row is active.

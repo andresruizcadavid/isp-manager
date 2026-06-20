@@ -21,6 +21,10 @@ export const notificationsApi = {
   retryCampaign:   (id)       => api.post(`/notifications/campaigns/${id}/retry`),
   removeCampaign:  (id)       => api.delete(`/notifications/campaigns/${id}`),
 
+  // Settings (periodicidad / on-off de notificaciones a clientes)
+  listSettings:    ()           => api.get('/notifications/settings'),
+  updateSetting:   (type, data) => api.put(`/notifications/settings/${type}`, data),
+
   // History
   listHistory:     (params)   => {
     const q = new URLSearchParams(params || {}).toString();
