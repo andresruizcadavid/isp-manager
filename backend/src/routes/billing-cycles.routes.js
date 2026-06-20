@@ -35,6 +35,7 @@ router.get('/:id/impact',      validateParams(commonSchemas.idParam), billingCyc
 router.post('/',               validateBody(createSchema), billingCyclesController.create);
 router.put('/:id',             validateParams(commonSchemas.idParam), validateBody(updateSchema), billingCyclesController.update);
 router.post('/:id/activate',   validateParams(commonSchemas.idParam), billingCyclesController.activate);
+router.post('/:id/generate-invoices', validateParams(commonSchemas.idParam), billingCyclesController.generateInvoices);
 router.post('/:id/close',      validateParams(commonSchemas.idParam), billingCyclesController.close);
 router.delete('/:id',          validateParams(commonSchemas.idParam), billingCyclesController.delete);
 

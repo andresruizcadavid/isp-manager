@@ -3,6 +3,7 @@ import {
   listCycles, getCycle, findActive, createCycle, updateCycle,
   activateCycle, closeCycle, deleteCycle, classifyClients
 } from '../services/billing-cycle.service.js';
+import { invoiceService } from '../services/invoice.service.js';
 
 export const billingCyclesController = {
   list: asyncHandler(async (_req, res) => {
@@ -52,6 +53,28 @@ export const billingCyclesController = {
   delete: asyncHandler(async (req, res) => {
     await deleteCycle(req.params.id);
     res.json({ success: true });
+  }),
+
+  // Manual trigger: generate the invoices for this cycle on demand. Same
+  // idempotent path the daily scheduler uses (clients with an invoice already
+  // for the period are skipped). Lets the operator emit early or re-run safely.
+  generateInvoices: asyncHandler(async (req, res) => {
+    const cycle = await getCycle(req.params.id);
+    if (!cycle) throw new AppError('Ciclo no encontrado', 404, 'CYCLE_NOT_FOUND');
+
+    const results = await invoiceService.generateInvoicesForCycle(cycle);
+    const skipped = results.failed.filter(f => /already exists/i.test(f.reason || '')).length;
+    res.json({
+      success: true,
+      data: {
+        period:  { year: cycle.year, month: cycle.month },
+        created: results.successful.length,
+        skipped,                                   // ya tenían factura del período
+        failed:  results.failed.length - skipped,  // sin plan / monto inválido / error
+        total:   results.total,
+        details: results
+      }
+    });
   }),
 
   impact: asyncHandler(async (req, res) => {

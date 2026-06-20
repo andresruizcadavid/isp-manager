@@ -10,6 +10,7 @@ export const routersApi = {
   testRoutes:    (id)       => api.post(`/mikrotik/routers/${id}/test-routes`),
   testCredentials: (creds)  => api.post('/mikrotik/routers/test', creds),
   availableIps:  (id)       => api.get(`/mikrotik/routers/${id}/available-ips`),
+  pppSecretLookup: (id, username) => api.get(`/mikrotik/routers/${id}/ppp-secret-lookup?username=${encodeURIComponent(username)}`),
   pppoeProfiles:        (id)       => api.get(`/mikrotik/routers/${id}/profiles`),
   pppProfiles:          (id)       => api.get(`/mikrotik/routers/${id}/ppp-profiles`),
   orphanPppProfiles:    (id)       => api.get(`/mikrotik/routers/${id}/ppp-profiles/orphans`),

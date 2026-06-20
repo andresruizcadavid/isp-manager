@@ -5,13 +5,14 @@ import { notificationService } from '../services/notification.service.js';
 import { getMikrotikService, getMikrotikServiceForClient } from '../services/mikrotik.service.js';
 import { generateToken as generateUpdateToken, dispatchLinkToClient } from '../services/client-update-token.service.js';
 import { bulkChangePlan } from '../services/bulk-plan-change.service.js';
-import { bulkBill } from '../services/bulk-bill.service.js';
+import { paymentLinkService } from '../services/payment-link.service.js';
+import { sendToClient, loadClientForSend } from '../services/notification.campaign.service.js';
 
 const MOROSO_LIST = 'Moroso';
 
 class ClientsController {
   getClients = asyncHandler(async (req, res) => {
-    const { page = 1, limit = 10, search, sortBy = 'createdAt', sortOrder = 'desc', status, planId, zoneId, city, debtors } = req.query;
+    const { page = 1, limit = 10, search, sortBy = 'createdAt', sortOrder = 'desc', status, planId, zoneId, city, debtors, connectionType } = req.query;
     const pageNum = Number(page);
     const limitNum = Number(limit);
     const skip = (pageNum - 1) * limitNum;
@@ -40,6 +41,7 @@ class ClientsController {
       ...(status && { status }),
       ...(planId && { planId }),
       ...(zoneId && { zoneId: Number(zoneId) }),
+      ...(connectionType && { connectionType }),
       ...(city && { city: { contains: city, mode: 'insensitive' } }),
       ...debtorsFilter
     };
@@ -214,9 +216,10 @@ class ClientsController {
       neighborhood: clientData.neighborhood || null,
       // City: trust the form, fall back to the company's home city, then to
       // a hard default so the NOT-NULL constraint never trips.
-      city: clientData.city?.trim() || env.COMPANY_CITY || 'Cali',
+      city: clientData.city?.trim() || env.COMPANY_CITY || 'Jamundí',
       documentType: clientData.documentType,
       documentNumber: clientData.documentNumber || null,
+      connectionType: clientData.connectionType === 'WIRELESS' ? 'WIRELESS' : 'FIBER',
       status: initialClientStatus,
       planId: clientData.planId || null,
       zoneId: clientData.zoneId ? Number(clientData.zoneId) : null,
@@ -319,15 +322,24 @@ class ClientsController {
     }
 
     // 1b. Duplicate check — MikroTik device
+    // Friendly hint for the most common operational failures so the operator
+    // knows WHERE to look (the router of the zone) and WHAT to do.
+    const routerHint = (e) => {
+      const msg = String(e?.message || '');
+      if (/401|credenciales|unauthorized/i.test(msg)) {
+        return `El router de la zona "${zone.name}" rechazó las credenciales (usuario/contraseña incorrectos). Corrígelas en Sistema → Routers/NOC → editar router.`;
+      }
+      if (/timeout|no respond|ECONN|unreachable|fetch failed/i.test(msg)) {
+        return `El router de la zona "${zone.name}" no respondió. Verifica que esté en línea y que la API REST esté habilitada.`;
+      }
+      return `Problema con el router de la zona "${zone.name}": ${msg}`;
+    };
+
     let mkService;
     try {
       mkService = await getMikrotikService(resolvedRouterId);
     } catch (e) {
-      throw new AppError(
-        `No se pudo contactar el router de la zona: ${e.message}`,
-        502,
-        'MIKROTIK_UNREACHABLE'
-      );
+      throw new AppError(routerHint(e), 502, 'MIKROTIK_UNREACHABLE');
     }
 
     let existingOnDevice = null;
@@ -335,15 +347,17 @@ class ClientsController {
       existingOnDevice = await mkService.findPPPoESecretByName(pppoeUsername);
     } catch (e) {
       // If we can't query the device we shouldn't blindly proceed — abort.
-      throw new AppError(
-        `No se pudo verificar credenciales en el router: ${e.message}`,
-        502,
-        'MIKROTIK_VERIFY_FAILED'
-      );
+      throw new AppError(routerHint(e), 502, 'MIKROTIK_VERIFY_FAILED');
     }
-    if (existingOnDevice) {
+    // Adopt flow: when the form confirms the secret already exists on the
+    // router (client installed in the field, never registered), we ADOPT it —
+    // link it to the new client WITHOUT creating/modifying anything on the
+    // device, so the live service is never touched. Without the explicit
+    // reuseExisting confirmation, an existing secret is still a hard 409.
+    const adoptExisting = !!mk.reuseExisting && !!existingOnDevice;
+    if (existingOnDevice && !adoptExisting) {
       throw new AppError(
-        'No se puede crear el cliente: ya existe un usuario PPPoE con esas credenciales en el router.',
+        'No se puede crear el cliente: ya existe un usuario PPPoE con esas credenciales en el router. Si es un cliente ya instalado, usa "Verificar en el router" para adoptar la cuenta existente.',
         409,
         'PPPOE_USERNAME_EXISTS_ON_DEVICE'
       );
@@ -406,23 +420,26 @@ class ClientsController {
       );
     }
 
-    // 2. Create the secret on the device first.
+    // 2. Create the secret on the device first — UNLESS we're adopting an
+    // existing one, in which case the device is left completely untouched.
     let createdSecret = null;
-    try {
-      createdSecret = await mkService.createPPPoESecret({
-        name:          pppoeUsername,
-        password:      mk.password,
-        profile:       validatedProfile, // undefined → device uses default profile
-        remoteAddress: remoteAddress,
-        comment:       `${mappedData.name}${mappedData.documentNumber ? ` · CC ${mappedData.documentNumber}` : ''}`,
-        disabled:      (mk.status || 'ACTIVE') !== 'ACTIVE'
-      });
-    } catch (e) {
-      throw new AppError(
-        `No se pudo crear el usuario en MikroTik: ${e.message}`,
-        502,
-        'MIKROTIK_CREATE_FAILED'
-      );
+    if (!adoptExisting) {
+      try {
+        createdSecret = await mkService.createPPPoESecret({
+          name:          pppoeUsername,
+          password:      mk.password,
+          profile:       validatedProfile, // undefined → device uses default profile
+          remoteAddress: remoteAddress,
+          comment:       `${mappedData.name}${mappedData.documentNumber ? ` · CC ${mappedData.documentNumber}` : ''}`,
+          disabled:      (mk.status || 'ACTIVE') !== 'ACTIVE'
+        });
+      } catch (e) {
+        throw new AppError(
+          `No se pudo crear el usuario en MikroTik: ${e.message}`,
+          502,
+          'MIKROTIK_CREATE_FAILED'
+        );
+      }
     }
 
     // 3. Authorize the IP in the firewall address-list. addToAddressList is
@@ -437,16 +454,20 @@ class ClientsController {
         comment: `${mappedData.name}${mappedData.documentNumber ? ` · CC ${mappedData.documentNumber}` : ''} · ${pppoeUsername}`
       });
     } catch (e) {
-      // Roll back the secret we just created so we never leave half-state.
-      try {
-        const secretId = createdSecret?.['.id'] || createdSecret?.id;
-        if (secretId) await mkService.deletePPPoESecretById(secretId);
-        else          await mkService.deletePPPoESecretByName(pppoeUsername);
-      } catch (cleanupErr) {
-        console.error(
-          `[clients.create] address-list failed AND PPPoE rollback failed for "${pppoeUsername}":`,
-          cleanupErr.message
-        );
+      // Roll back the secret ONLY if we created it in this request. An
+      // ADOPTED secret pre-existed and belongs to a live service — deleting
+      // it would cut the client's internet, so it must never be rolled back.
+      if (!adoptExisting) {
+        try {
+          const secretId = createdSecret?.['.id'] || createdSecret?.id;
+          if (secretId) await mkService.deletePPPoESecretById(secretId);
+          else          await mkService.deletePPPoESecretByName(pppoeUsername);
+        } catch (cleanupErr) {
+          console.error(
+            `[clients.create] address-list failed AND PPPoE rollback failed for "${pppoeUsername}":`,
+            cleanupErr.message
+          );
+        }
       }
       throw new AppError(
         `No se pudo autorizar la IP en el firewall del router: ${e.message}`,
@@ -487,17 +508,21 @@ class ClientsController {
         }
       });
     } catch (e) {
-      // 5. DB write failed AFTER both MikroTik ops succeeded. Best-effort
-      // cleanup BOTH so we never leave phantom state on the router.
-      try {
-        const secretId = createdSecret?.['.id'] || createdSecret?.id;
-        if (secretId) await mkService.deletePPPoESecretById(secretId);
-        else          await mkService.deletePPPoESecretByName(pppoeUsername);
-      } catch (cleanupErr) {
-        console.error(
-          `[clients.create] DB write failed AND PPPoE cleanup failed for "${pppoeUsername}":`,
-          cleanupErr.message
-        );
+      // 5. DB write failed AFTER the MikroTik ops succeeded. Best-effort
+      // cleanup so we never leave phantom state on the router — but ONLY for
+      // a secret we created here; an ADOPTED secret is a live service and is
+      // never deleted.
+      if (!adoptExisting) {
+        try {
+          const secretId = createdSecret?.['.id'] || createdSecret?.id;
+          if (secretId) await mkService.deletePPPoESecretById(secretId);
+          else          await mkService.deletePPPoESecretByName(pppoeUsername);
+        } catch (cleanupErr) {
+          console.error(
+            `[clients.create] DB write failed AND PPPoE cleanup failed for "${pppoeUsername}":`,
+            cleanupErr.message
+          );
+        }
       }
       // Only remove the address-list entry if WE created it. If it already
       // existed (addressListResult.updated === true) we shouldn't delete
@@ -522,11 +547,142 @@ class ClientsController {
       );
     }
 
+    // Welcome email — best-effort, fire-and-forget so it never delays or
+    // fails the creation response. Only for active clients with an email.
+    if (client.email && client.status === 'ACTIVE') {
+      notificationService.sendWelcome(client).catch(err =>
+        console.error('[clients.create] welcome email failed:', err.message)
+      );
+    }
+
     res.status(201).json({
       success: true,
       data: client,
       message: 'Cliente creado y IP autorizada correctamente en MikroTik'
     });
+  });
+
+  // Notification history for one client (Centro de Notificaciones ↔ Clientes).
+  // Powers the "Notificaciones" panel in the client detail page so every
+  // email/WhatsApp the system sent to this client is visible in context.
+  getClientNotifications = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const logs = await prisma.notificationLog.findMany({
+      where: { clientId: id },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        id: true, type: true, channel: true, status: true,
+        subject: true, recipient: true, error: true, sentAt: true, createdAt: true
+      }
+    });
+    // Summary so the UI can show "cuántas recibió / cuántas vio". `read`/
+    // `opened`/`delivered` come from channel callbacks (WhatsApp webhook, open
+    // pixel) when available; email opens are only counted where a provider
+    // reports them. Failed sends are excluded from "recibidas".
+    const norm = (s) => String(s || '').toLowerCase();
+    const delivered = logs.filter(l => ['sent', 'delivered', 'read', 'opened', 'received'].includes(norm(l.status)));
+    const opened    = logs.filter(l => ['read', 'opened'].includes(norm(l.status)));
+    const failed    = logs.filter(l => norm(l.status) === 'failed');
+    res.json({
+      success: true,
+      data: logs,
+      summary: {
+        total:    logs.length,
+        received: delivered.length,
+        opened:   opened.length,
+        failed:   failed.length
+      }
+    });
+  });
+
+  // Envío manual de una notificación a UN cliente desde su ficha. El operador
+  // elige plantilla + canal y reutilizamos el pipeline de campañas (sendToClient)
+  // para enviar solo a este cliente. Se registra con campaignId=null para no
+  // afectar contadores de campañas. Lo masivo vive en el Centro de Notificaciones.
+  notifyClient = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { templateId, channel, generatePaymentLinks = false } = req.body || {};
+
+    const tpl = await prisma.notificationTemplate.findUnique({ where: { id: templateId } });
+    if (!tpl) throw new AppError('Plantilla no encontrada', 404, 'TEMPLATE_NOT_FOUND');
+    if (!tpl.isActive) throw new AppError('La plantilla está inactiva', 400, 'TEMPLATE_INACTIVE');
+    const ch = channel || tpl.channel;
+    if (ch !== 'BOTH' && ch !== tpl.channel) {
+      throw new AppError(
+        `La plantilla "${tpl.name}" es para ${tpl.channel}; no puedes enviarla por ${ch}.`,
+        400, 'CHANNEL_MISMATCH'
+      );
+    }
+
+    const client = await loadClientForSend(id);
+    if (!client) throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
+
+    const result = await sendToClient({
+      client, template: tpl, channel: ch,
+      generatePaymentLinks: !!generatePaymentLinks, campaignId: null
+    });
+    res.json({ success: true, data: result });
+  });
+
+  // Reenviar cobro: genera (o reusa) el link de pago Wompi de una factura y se
+  // lo envía al cliente por email (si tiene), devolviendo además un waUrl listo
+  // para WhatsApp. Operacional — el staff (admin/técnico) lo dispara; el cliente
+  // es quien paga. NO modifica la factura ni el servicio.
+  resendCharge = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { invoiceId } = req.body || {};
+    if (!invoiceId) throw new AppError('invoiceId requerido', 400, 'INVOICE_REQUIRED');
+
+    const invoice = await prisma.invoice.findUnique({
+      where: { id: invoiceId },
+      include: { client: true }
+    });
+    if (!invoice || invoice.clientId !== id) throw new AppError('Factura no encontrada para este cliente', 404, 'INVOICE_NOT_FOUND');
+    if (invoice.status === 'PAID') throw new AppError('La factura ya está pagada', 400, 'ALREADY_PAID');
+
+    const client = invoice.client;
+
+    // Reuse a still-valid pending link, else create one.
+    let link = await prisma.paymentLink.findFirst({
+      where: { invoiceId, status: 'pending', checkoutUrl: { not: null }, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' }
+    });
+    if (!link) link = await paymentLinkService.createForInvoice(invoiceId);
+    const checkoutUrl = link.checkoutUrl;
+
+    const amount = `$${Math.round((invoice.balanceDue > 0 ? invoice.balanceDue : invoice.total) / 100).toLocaleString('es-CO')}`;
+    const firstName = (client.name || '').split(' ')[0] || 'vecino(a)';
+
+    // Email (only if the client has one).
+    let emailSent = false;
+    if (client.email) {
+      try {
+        await notificationService.sendEmailRaw({
+          to: client.email,
+          subject: `Pago de tu factura ${invoice.invoiceNumber} — Internet Online`,
+          title: 'Paga tu internet en un clic',
+          body: `Hola ${firstName},\n\nTe reenviamos el cobro de tu factura ${invoice.invoiceNumber} por ${amount} COP. Paga en línea de forma segura tocando el botón.`,
+          cta: { text: 'Pagar ahora', url: checkoutUrl },
+          preset: 'reminder'
+        });
+        await notificationService.logNotification(id, 'PAYMENT_REMINDER', 'EMAIL', `Reenvío de cobro factura ${invoice.invoiceNumber}`);
+        emailSent = true;
+      } catch (e) {
+        await notificationService.logNotification(id, 'PAYMENT_REMINDER', 'EMAIL', `Reenvío de cobro factura ${invoice.invoiceNumber}`, 'FAILED', e.message);
+      }
+    }
+
+    // WhatsApp deep-link (operator taps to send from their device).
+    let waUrl = null;
+    const phone = (client.phone || '').replace(/\D/g, '');
+    if (phone) {
+      const msg = `Hola ${firstName}, te recordamos tu factura ${invoice.invoiceNumber} por ${amount} COP de Internet Online. Paga aquí de forma segura: ${checkoutUrl}`;
+      const e164 = phone.startsWith('57') ? phone : `57${phone}`;
+      waUrl = `https://wa.me/${e164}?text=${encodeURIComponent(msg)}`;
+    }
+
+    res.json({ success: true, data: { checkoutUrl, waUrl, emailSent, hasEmail: !!client.email } });
   });
 
   /** ─── helpers ────────────────────────────────────────── */
@@ -651,6 +807,7 @@ class ClientsController {
     const m = updateData.mikrotik;
     const clientFields = {
       ...(updateData.fullName       !== undefined && { name: updateData.fullName }),
+      ...(updateData.connectionType !== undefined && { connectionType: updateData.connectionType === 'WIRELESS' ? 'WIRELESS' : 'FIBER' }),
       ...(updateData.email          !== undefined && { email: updateData.email || null }),
       ...(updateData.phone          !== undefined && { phone: updateData.phone || '' }),
       ...(updateData.address        !== undefined && { address: updateData.address || '' }),
@@ -1427,43 +1584,6 @@ class ClientsController {
     res.json({ success: true, data: result });
   });
 
-  // ── Bulk billing ────────────────────────────────────────────────────
-  // Generate (or reuse) invoices for many clients × many months at once.
-  // Idempotent via Invoice.@@unique(clientId, periodYear, periodMonth).
-  // Writes a BulkOperationLog row of type 'BULK_BILL' for audit.
-  bulkBill = asyncHandler(async (req, res) => {
-    const payload = {
-      clientIds: req.body.clientIds || [],
-      months:    req.body.months    || []
-    };
-    let result;
-    try {
-      result = await bulkBill({ ...payload, currentUserId: req.user?.id || null });
-    } catch (e) {
-      const status = Number.isInteger(e.status) ? e.status : 500;
-      return res.status(status).json({
-        success: false,
-        error: { code: e.code || 'BULK_BILL_FAILED', message: e.message }
-      });
-    }
-
-    await prisma.bulkOperationLog.create({
-      data: {
-        type:        'BULK_BILL',
-        operatorId:  req.user?.id || null,
-        payload,
-        results:     result.results,
-        totalCount:  result.summary.total,
-        okCount:     (result.summary.ok || 0) +
-                     (result.summary.allReused || 0) +
-                     (result.summary.mixed || 0) +
-                     (result.summary.paidSkipped || 0),
-        failedCount: result.summary.failed || 0
-      }
-    }).catch(err => console.error('[bulk-bill] audit log failed:', err.message));
-
-    res.json({ success: true, data: result });
-  });
 
   // ── Bulk operation history ──────────────────────────────────────────
   // Returns the most recent BulkOperationLog rows, optionally filtered by

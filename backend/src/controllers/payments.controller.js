@@ -42,12 +42,16 @@ class PaymentsController {
       (sum, p) => sum + (p.status === 'COMPLETED' ? p.amount : 0),
       0
     );
-    if (previousPaid + amountCents > invoice.amount) {
+    // Use `total` (amount + tax − discount), NOT `amount`, so the balance math
+    // is correct on invoices with IVA/descuento. This matches the canonical
+    // logic in wompi.service.updateInvoiceStatus and avoids under-collecting.
+    const invoiceTotal = invoice.total ?? invoice.amount;
+    if (previousPaid + amountCents > invoiceTotal) {
       throw new AppError('El monto del pago excede el saldo de la factura', 400, 'PAYMENT_EXCEEDS_INVOICE');
     }
 
     const newTotalPaid = previousPaid + amountCents;
-    const remaining    = Math.max(0, invoice.amount - newTotalPaid);
+    const remaining    = Math.max(0, invoiceTotal - newTotalPaid);
     const newStatus    = remaining === 0 ? 'PAID' : 'PARTIAL';
 
     // Atomic: create payment + sync invoice status + balanceDue.
@@ -105,10 +109,13 @@ class PaymentsController {
         (sum, p) => sum + (p.status === 'COMPLETED' ? p.amount : 0),
         0
       );
-      const remaining = Math.max(0, inv.amount - paid);
+      // Compare against `total` (amount + tax − discount) to stay consistent
+      // with the manual-payment and Wompi paths.
+      const invTotal = inv.total ?? inv.amount;
+      const remaining = Math.max(0, invTotal - paid);
       let nextStatus = inv.status;
-      if (paid >= inv.amount) nextStatus = 'PAID';
-      else if (paid > 0)      nextStatus = 'PARTIAL';
+      if (paid >= invTotal) nextStatus = 'PAID';
+      else if (paid > 0)    nextStatus = 'PARTIAL';
 
       const needsUpdate = inv.status !== nextStatus || (inv.balanceDue ?? 0) !== remaining;
       if (needsUpdate) {

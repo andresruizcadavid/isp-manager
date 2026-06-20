@@ -61,7 +61,12 @@ const mikrotikSubSchema = z.object({
   localAddress:  optionalString(),
   profileName:   optionalString(),
   coordinates:   optionalString(),
-  status:        z.enum(['ACTIVE', 'SUSPENDED']).optional()
+  status:        z.enum(['ACTIVE', 'SUSPENDED']).optional(),
+  // Adopt flow: the PPPoE secret already exists on the router (client was
+  // installed in the field before being registered). When true, provisioning
+  // ADOPTS the existing secret instead of failing with 409 — and never
+  // creates/modifies/deletes it on the device.
+  reuseExisting: z.boolean().optional()
 }).partial();
 
 const createClientSchema = z.object({
@@ -80,6 +85,7 @@ const createClientSchema = z.object({
   // the plan's monthly price applies. Coerced from string so number inputs
   // from the form (which arrive as strings via JSON) still validate.
   monthlyFee:     z.coerce.number().int().nonnegative().optional(),
+  connectionType: z.enum(['FIBER', 'WIRELESS']).optional(),
   notes:          optionalString(),
   planId:         optionalString(),
   mikrotik:       mikrotikSubSchema.optional()
@@ -92,6 +98,7 @@ const clientQuerySchema = commonSchemas.pagination.extend({
   planId: z.string().optional(),
   zoneId: z.string().optional(),                 // was already being read by the controller
   city:   z.string().optional(),
+  connectionType: z.enum(['FIBER', 'WIRELESS']).optional(),
   // Fase 1 (cobranzas): "?debtors=true" filters to clients with at least
   // one unpaid invoice with positive balanceDue. Coerced from string.
   debtors: z.enum(['true', 'false']).optional()
@@ -116,20 +123,37 @@ router.get('/next-pppoe-number', clientController.getNextPppoeNumber);
 router.get('/bulk-history', requireOperatorOrAdmin, clientController.getBulkHistory);
 
 router.get('/:id', validateParams(commonSchemas.idParam), clientController.getClient);
-router.post('/', requireOperatorOrAdmin, validateBody(createClientSchema), clientController.createClient);
-router.put('/:id', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(updateClientSchema), clientController.updateClient);
+// Create/update are `requireOperational`: field TECHNICIANs provision new
+// clients and fix their data/IPs on site. Destructive ops (delete, suspend,
+// bulk) remain operator/admin below.
+router.post('/', requireOperational, validateBody(createClientSchema), clientController.createClient);
+router.put('/:id', requireOperational, validateParams(commonSchemas.idParam), validateBody(updateClientSchema), clientController.updateClient);
 router.delete('/:id', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.deleteClient);
 
 // Device management
 router.get('/:id/devices', validateParams(commonSchemas.idParam), clientController.getClientDevices);
-router.post('/:id/devices', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(deviceSchema), clientController.addDevice);
-router.put('/:id/devices/:deviceId', requireOperatorOrAdmin, validateParams(z.object({ id: z.string(), deviceId: z.string() })), validateBody(deviceSchema.partial()), clientController.updateDevice);
+router.post('/:id/devices', requireOperational, validateParams(commonSchemas.idParam), validateBody(deviceSchema), clientController.addDevice);
+router.put('/:id/devices/:deviceId', requireOperational, validateParams(z.object({ id: z.string(), deviceId: z.string() })), validateBody(deviceSchema.partial()), clientController.updateDevice);
 router.delete('/:id/devices/:deviceId', requireOperatorOrAdmin, validateParams(z.object({ id: z.string(), deviceId: z.string() })), clientController.removeDevice);
 
 // Service management
 router.post('/:id/suspend', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.suspendService);
 router.post('/:id/activate', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.activateService);
 router.post('/:id/change-plan', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(z.object({ planId: z.string() })), clientController.changePlan);
+
+// Notification history for this client (Centro de Notificaciones ↔ Clientes).
+router.get('/:id/notifications', validateParams(commonSchemas.idParam), clientController.getClientNotifications);
+// Reenviar cobro de una factura al cliente (operacional — staff dispara, cliente paga).
+router.post('/:id/resend-charge', requireOperational, validateParams(commonSchemas.idParam), clientController.resendCharge);
+
+// Envío manual de una notificación (plantilla) a ESTE cliente. Operacional —
+// el staff decide enviarle algo puntual; lo masivo va por el Centro de Notif.
+const clientNotifySchema = z.object({
+  templateId: z.string().min(1, 'Selecciona una plantilla'),
+  channel:    z.enum(['EMAIL', 'WHATSAPP', 'BOTH']),
+  generatePaymentLinks: z.boolean().optional()
+});
+router.post('/:id/notify', requireOperational, validateParams(commonSchemas.idParam), validateBody(clientNotifySchema), clientController.notifyClient);
 
 // Bulk plan change — operator-driven mass assignment of a plan to N clients.
 // Per-router connection pooling + per-client transaction in the service.
@@ -147,22 +171,6 @@ router.post(
   clientController.bulkChangePlan
 );
 
-// Bulk billing — generate (or reuse) invoices for many clients × many months.
-// Idempotent via Invoice.@@unique(clientId, periodYear, periodMonth).
-const bulkBillSchema = z.object({
-  clientIds: z.array(z.string().min(1)).min(1).max(500),
-  months: z.array(z.object({
-    year:  z.number().int().min(2020).max(2100),
-    month: z.number().int().min(1).max(12)
-  })).min(1).max(24)
-});
-router.post(
-  '/bulk-bill',
-  requireOperatorOrAdmin,
-  validateBody(bulkBillSchema),
-  clientController.bulkBill
-);
-
 // (the `/bulk-history` route was moved above /:id to avoid greedy matching.)
 
 // Self-service update token generation. The public-facing GET/PUT/POST
@@ -172,9 +180,11 @@ const updateTokenSchema = z.object({
   sendChannels:   z.array(channelEnum).max(3).default([]),
   notifyChannels: z.array(channelEnum).max(3).default([])
 });
+// `requireOperational`: field TECHNICIANs send this link on site so the client
+// completes their own data — non-destructive (token + dispatch only).
 router.post(
   '/:id/update-tokens',
-  requireOperatorOrAdmin,
+  requireOperational,
   validateParams(commonSchemas.idParam),
   validateBody(updateTokenSchema),
   clientController.createUpdateToken

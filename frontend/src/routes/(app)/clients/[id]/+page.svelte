@@ -2,18 +2,19 @@
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { api } from '$lib/api/client.js';
+  import { notificationsApi } from '$lib/api/notifications.api.js';
   import { evidenceApi } from '$lib/api/evidence.api.js';
+  import { inventoryApi } from '$lib/api/inventory.api.js';
   import { goto } from '$app/navigation';
   import {
     ArrowLeft, User, Wifi, CreditCard, FileText, AlertCircle, CheckCircle2,
     Eye, EyeOff, PauseCircle, PlayCircle, Loader2, Trash2, Edit3, X,
     Calendar, FileCheck, Phone, Mail, MessageSquare, Copy, Check,
     MapPin, Receipt, ExternalLink, Camera, ImageUp, Image as ImageIcon,
-    Send, Link2, Share2
+    Send, Link2, Share2, Bell, Boxes, Package, Plus
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import CashierWizard from '$lib/components/cashier/CashierWizard.svelte';
-  import WompiButton from '$lib/components/payments/WompiButton.svelte';
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
 
@@ -102,6 +103,7 @@
       city:           client?.city           || '',
       zoneId:         client?.zoneId         || null,
       planId:         client?.planId         || '',
+      connectionType: client?.connectionType || 'FIBER',
       monthlyFee:     client?.monthlyFee
                         ? Math.round(client.monthlyFee / 100)
                         : '',
@@ -186,6 +188,51 @@
     else success = message;
     setTimeout(() => { error = ''; success = ''; }, 4000);
   }
+  // ── Reenviar cobro: el staff reenvía al CLIENTE el cobro con link de pago ──
+  // (correo si tiene; si no, abre WhatsApp). El cliente es quien paga.
+  let resendBusyId = null;
+  async function resendCharge(invId) {
+    if (resendBusyId) return;
+    resendBusyId = invId;
+    try {
+      const r = await api.post(`/clients/${client.id}/resend-charge`, { invoiceId: invId });
+      if (r?.emailSent) {
+        showToast('success', 'Cobro reenviado al correo del cliente ✓');
+        if (r?.waUrl) window.open(r.waUrl, '_blank'); // además, ofrecer WhatsApp
+      } else if (r?.waUrl) {
+        showToast('success', 'Cliente sin correo — abriendo WhatsApp para enviar el cobro');
+        window.open(r.waUrl, '_blank');
+      } else {
+        showToast('error', 'El cliente no tiene correo ni teléfono registrado');
+      }
+      loadNotifications(); notifLoaded = false; // refresca el contador de notificaciones
+    } catch (e) {
+      showToast('error', e.message || 'No se pudo reenviar el cobro');
+    } finally { resendBusyId = null; }
+  }
+
+  // ── Wompi: generar/reusar link y copiar o compartir por WhatsApp ──────
+  let linkBusyId = null;
+  async function genLink(invId, mode) {
+    if (linkBusyId) return;
+    linkBusyId = invId;
+    try {
+      const r = await api.post(`/payment-links/generate/${invId}`);
+      const checkoutUrl = r?.checkoutUrl;
+      const waUrl = r?.waUrl;
+      if (mode === 'whatsapp') {
+        if (waUrl) window.open(waUrl, '_blank');
+        else { if (checkoutUrl) await navigator.clipboard.writeText(checkoutUrl); showToast('error', 'Cliente sin teléfono — link copiado'); }
+      } else {
+        await navigator.clipboard.writeText(checkoutUrl);
+        showToast('success', 'Link de pago Wompi copiado ✓');
+      }
+    } catch (e) {
+      showToast('error', e.message || 'No se pudo generar el link');
+    } finally {
+      linkBusyId = null;
+    }
+  }
 
   // Phone helpers (digits-only for tel:/wa.me)
   function digitsOnly(p) { return (p || '').replace(/\D/g, ''); }
@@ -213,48 +260,93 @@
     } finally { loadingAction = false; }
   }
 
+  function buildPersonalPayload() {
+    return {
+      fullName:       formPersonal.fullName,
+      documentType:   formPersonal.documentType,
+      documentNumber: formPersonal.documentNumber,
+      email:          formPersonal.email,
+      phone:          formPersonal.phone,
+      address:        formPersonal.address,
+      neighborhood:   formPersonal.neighborhood,
+      city:           formPersonal.city,
+      zoneId:         formPersonal.zoneId,
+      planId:         formPersonal.planId || null,
+      contractDate:     formPersonal.contractDate     || null,
+      installationDate: formPersonal.installationDate || null,
+      connectionType: formPersonal.connectionType || 'FIBER',
+      monthlyFee:     formPersonal.monthlyFee !== '' && Number(formPersonal.monthlyFee) >= 0
+                        ? Math.round(Number(formPersonal.monthlyFee) * 100)
+                        : 0,
+      notes:          formPersonal.notes,
+      mikrotik: {
+        ...(formPersonal.mikrotik.password      && { password:      formPersonal.mikrotik.password }),
+        ...(formPersonal.mikrotik.remoteAddress && { remoteAddress: formPersonal.mikrotik.remoteAddress }),
+        ...(formPersonal.mikrotik.localAddress  && { localAddress:  formPersonal.mikrotik.localAddress }),
+        ...(formPersonal.mikrotik.profileName   && { profileName:   formPersonal.mikrotik.profileName }),
+        ...(formPersonal.mikrotik.coordinates   && { coordinates:   formPersonal.mikrotik.coordinates }),
+      }
+    };
+  }
+
   async function savePersonal() {
     loadingAction = true;
+    clearTimeout(autoSaveTimer);   // a manual save supersedes any pending autosave
     try {
-      const payload = {
-        fullName:       formPersonal.fullName,
-        documentType:   formPersonal.documentType,
-        documentNumber: formPersonal.documentNumber,
-        email:          formPersonal.email,
-        phone:          formPersonal.phone,
-        address:        formPersonal.address,
-        neighborhood:   formPersonal.neighborhood,
-        city:           formPersonal.city,
-        zoneId:         formPersonal.zoneId,
-        planId:         formPersonal.planId || null,
-        contractDate:     formPersonal.contractDate     || null,
-        installationDate: formPersonal.installationDate || null,
-        monthlyFee:     formPersonal.monthlyFee !== '' && Number(formPersonal.monthlyFee) >= 0
-                          ? Math.round(Number(formPersonal.monthlyFee) * 100)
-                          : 0,
-        notes:          formPersonal.notes,
-        mikrotik: {
-          ...(formPersonal.mikrotik.password      && { password:      formPersonal.mikrotik.password }),
-          ...(formPersonal.mikrotik.remoteAddress && { remoteAddress: formPersonal.mikrotik.remoteAddress }),
-          ...(formPersonal.mikrotik.localAddress  && { localAddress:  formPersonal.mikrotik.localAddress }),
-          ...(formPersonal.mikrotik.profileName   && { profileName:   formPersonal.mikrotik.profileName }),
-          ...(formPersonal.mikrotik.coordinates   && { coordinates:   formPersonal.mikrotik.coordinates }),
-        }
-      };
-      await api.put(`/clients/${client.id}`, payload);
+      await api.put(`/clients/${client.id}`, buildPersonalPayload());
       // Full reload: re-fetch everything from the API so no relation is stale
       client = await api.get(`/clients/${client.id}`);
       resetForm();
       editPersonal = false;
+      autoSaveState = '';
       showToast('success', 'Datos actualizados');
     } catch (e) {
       showToast('error', e.message || 'Error al guardar');
     } finally { loadingAction = false; }
   }
 
+  // ── Autosave ──────────────────────────────────────────────────────
+  // While the edit panel is open, changes persist automatically 1.5s after
+  // the last keystroke (debounced + dirty-tracked). The manual "Guardar"
+  // button remains the explicit way to close the panel; autosave never
+  // closes it nor resets the form mid-typing.
+  let autoSaveTimer = null;
+  let autoSaveState = '';        // '' | 'pending' | 'saving' | 'saved' | 'error'
+  let autoSaveError = '';
+  let autoSaveAt    = null;      // Date of last successful autosave
+  let autoSnapshot  = '';        // serialized form at last save (dirty tracking)
+
+  async function runAutoSave() {
+    const snap = JSON.stringify(formPersonal);
+    if (snap === autoSnapshot) { autoSaveState = autoSaveAt ? 'saved' : ''; return; }
+    autoSaveState = 'saving';
+    try {
+      await api.put(`/clients/${client.id}`, buildPersonalPayload());
+      autoSnapshot  = snap;
+      autoSaveAt    = new Date();
+      autoSaveState = 'saved';
+      // Refresh the read panels silently (no resetForm — typing is sacred).
+      api.get(`/clients/${client.id}`).then(c => { client = c; }).catch(() => {});
+    } catch (e) {
+      autoSaveState = 'error';
+      autoSaveError = e.message || 'No se pudo autoguardar';
+    }
+  }
+
+  // Debounce: any change to the form while editing schedules an autosave.
+  $: if (editPersonal && autoSnapshot && JSON.stringify(formPersonal) !== autoSnapshot) {
+    autoSaveState = 'pending';
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(runAutoSave, 1500);
+  }
+
   function openPersonalEdit() {
     ensurePlansLoaded();
     editPersonal = true;
+    autoSnapshot  = JSON.stringify(formPersonal);
+    autoSaveState = '';
+    autoSaveError = '';
+    autoSaveAt    = null;
   }
 
   // ── Sheet: solicitar actualización pública de datos ─────────────────
@@ -367,6 +459,12 @@
     if (!inv.dueDate) return false;
     return new Date(inv.dueDate) < now && inv.status !== 'PAID';
   }
+  // MORA REAL: solo facturas vencidas (no las pendientes que aún no vencen).
+  // El aviso rojo solo debe encenderse aquí — un cobro abierto sin vencer no
+  // es "deuda". (Los pendientes-no-vencidos se ven en KPI + histórico.)
+  $: overdueInvoices = isFreeClient ? [] : pendingInvoices.filter(isOverdueInvoice);
+  $: overdueAmount   = overdueInvoices.reduce(
+       (sum, inv) => sum + (inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0)), 0);
 
   // ── Payment modal ───────────────────────────────────
   let payInvoiceId = '';
@@ -436,6 +534,150 @@
   }
   // Load when client becomes available.
   $: if (client?.id && evidence.length === 0 && !evidenceLoading && !evidenceError) loadEvidence();
+
+  // ── Notificaciones (Centro de Notificaciones ↔ Clientes) ──────────
+  let notifications = [];
+  let notifLoading = false;
+  let notifError = '';
+  let notifLoaded = false;
+  async function loadNotifications() {
+    if (!client?.id) return;
+    notifLoading = true; notifError = '';
+    try { notifications = await api.get(`/clients/${client.id}/notifications`); }
+    catch (e) { notifError = e.message || 'No se pudieron cargar las notificaciones'; }
+    finally { notifLoading = false; notifLoaded = true; }
+  }
+  $: if (client?.id && !notifLoaded && !notifLoading) loadNotifications();
+
+  // ── Envío manual de una notificación a ESTE cliente ───────────────
+  // El operador elige una plantilla + canal y se envía solo a este cliente
+  // (lo masivo vive en el Centro de Notificaciones). Reusa el pipeline de
+  // campañas en el backend (POST /clients/:id/notify).
+  let notifTemplates = [];
+  let notifTplLoaded = false;
+  let sendOpen = false;            // toggle del mini-formulario
+  let sendForm = { templateId: '', channel: 'EMAIL', generatePaymentLinks: false };
+  let sending = false;
+  let sendMsg = null;              // { type: 'success'|'error', text }
+
+  async function loadNotifTemplates() {
+    if (notifTplLoaded) return;
+    try {
+      const list = await notificationsApi.listTemplates();
+      notifTemplates = (list || []).filter(t => t.isActive);
+    } catch (e) { /* no bloquea la ficha */ }
+    finally { notifTplLoaded = true; }
+  }
+  function toggleSend() {
+    sendOpen = !sendOpen;
+    sendMsg = null;
+    if (sendOpen) loadNotifTemplates();
+  }
+  // Al elegir plantilla, alinear el canal con el de la plantilla.
+  $: selectedNotifTpl = notifTemplates.find(t => t.id === sendForm.templateId) || null;
+  function onNotifTplChange() {
+    if (selectedNotifTpl && sendForm.channel !== 'BOTH' && sendForm.channel !== selectedNotifTpl.channel) {
+      sendForm.channel = selectedNotifTpl.channel;
+    }
+  }
+
+  async function sendNotification() {
+    if (!sendForm.templateId) { sendMsg = { type: 'error', text: 'Selecciona una plantilla.' }; return; }
+    sending = true; sendMsg = null;
+    try {
+      const r = await api.post(`/clients/${client.id}/notify`, {
+        templateId: sendForm.templateId,
+        channel: sendForm.channel,
+        generatePaymentLinks: sendForm.generatePaymentLinks
+      });
+      if ((r?.sent ?? 0) > 0) {
+        sendMsg = { type: 'success', text: 'Notificación enviada.' };
+        sendForm.templateId = '';
+        notifLoaded = false; loadNotifications();   // refresca el historial
+      } else {
+        const missing = sendForm.channel === 'WHATSAPP' ? 'teléfono' : 'email';
+        sendMsg = { type: 'error', text: `No se pudo enviar. Verifica que el cliente tenga ${missing} válido.` };
+      }
+    } catch (e) { sendMsg = { type: 'error', text: e.message || 'No se pudo enviar la notificación.' }; }
+    finally { sending = false; }
+  }
+  const NOTIF_CHANNEL_LABEL = { EMAIL: 'Email', WHATSAPP: 'WhatsApp', BOTH: 'Email + WhatsApp' };
+
+  // Resumen de notificaciones: recibidas (no fallidas) / vistas (leído/abierto).
+  const _ns = (s) => String(s || '').toLowerCase();
+  $: notifReceived = notifications.filter(n => _ns(n.status) !== 'failed' && _ns(n.status) !== 'pending').length;
+  $: notifOpened   = notifications.filter(n => ['read', 'opened'].includes(_ns(n.status))).length;
+  $: notifFailed   = notifications.filter(n => _ns(n.status) === 'failed').length;
+
+  const NOTIF_TYPE_LABELS = {
+    INVOICE_GENERATED: 'Factura generada', PAYMENT_REMINDER: 'Recordatorio de pago',
+    PAYMENT_DUE: 'Recordatorio de pago', PAYMENT_OVERDUE: 'Pago vencido',
+    PAYMENT_CONFIRMATION: 'Pago confirmado', SERVICE_SUSPENSION: 'Servicio suspendido',
+    SERVICE_ACTIVATION: 'Servicio reactivado', INSTALLATION_SCHEDULED: 'Instalación programada',
+    GENERAL_ANNOUNCEMENT: 'Notificación'
+  };
+  const notifTypeLabel  = (t) => NOTIF_TYPE_LABELS[t] || 'Notificación';
+  const fmtNotifDate    = (d) => d ? new Date(d).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+  const notifStatusLabel = (s) => ({ sent: 'Enviado', delivered: 'Entregado', read: 'Leído', failed: 'Falló', pending: 'Pendiente', received: 'Recibido' }[String(s).toLowerCase()] || s);
+  const notifStatusClass = (s) => {
+    const ss = String(s).toLowerCase();
+    if (ss === 'failed') return 'bg-red-50 text-red-600';
+    if (ss === 'pending') return 'bg-amber-50 text-amber-700';
+    return 'bg-emerald-50 text-emerald-700';
+  };
+
+  // ── Inventario / equipos del cliente ──────────────────────────────
+  const INV_BASE = import.meta.env.PUBLIC_API_URL || '';
+  const invImg = (u) => u ? (u.startsWith('http') ? u : `${INV_BASE}${u}`) : '';
+  let invItems = [];
+  let invProducts = [];
+  let invLoading = false;
+  let invLoaded = false;
+  let invModalOpen = false;
+  let invSaving = false;
+  let invError = '';
+  let invForm = { productId: '', serial: '', notes: '' };
+  async function loadInventory() {
+    if (!client?.id) return;
+    invLoading = true;
+    try {
+      const [its, prods] = await Promise.all([
+        inventoryApi.listItems({ clientId: client.id }),
+        invProducts.length ? Promise.resolve(invProducts) : inventoryApi.listProducts()
+      ]);
+      invItems = its || [];
+      invProducts = prods || [];
+    } catch (e) { /* silent — panel just shows empty */ }
+    finally { invLoading = false; invLoaded = true; }
+  }
+  $: if (client?.id && !invLoaded && !invLoading) loadInventory();
+
+  function openInvModal() { invForm = { productId: '', serial: '', notes: '' }; invError = ''; invModalOpen = true; }
+  async function saveInvItem() {
+    if (!invForm.productId) { invError = 'Selecciona un producto.'; return; }
+    invSaving = true; invError = '';
+    try {
+      await inventoryApi.createItem({
+        productId: invForm.productId,
+        serial:    invForm.serial.trim() || null,
+        clientId:  client.id,
+        status:    'ASSIGNED',
+        notes:     invForm.notes || null
+      });
+      invModalOpen = false;
+      invItems = await inventoryApi.listItems({ clientId: client.id });
+      showToast('success', 'Equipo asignado al cliente');
+    } catch (e) { invError = e.message || 'No se pudo asignar el equipo'; }
+    finally { invSaving = false; }
+  }
+  async function removeInvItem(it) {
+    if (!confirm(`¿Quitar "${it.product?.name}" (${it.serial || 'sin serial'}) de este cliente?`)) return;
+    try {
+      await inventoryApi.unassign(it.id);
+      invItems = await inventoryApi.listItems({ clientId: client.id });
+      showToast('success', 'Equipo devuelto a bodega');
+    } catch (e) { showToast('error', e.message); }
+  }
 
   function onPickFiles(e) {
     const list = Array.from(e.target.files || []);
@@ -566,6 +808,11 @@
           {#if client.zone?.name}
             <span class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">{client.zone.name}</span>
           {/if}
+          {#if client.connectionType === 'WIRELESS'}
+            <span class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-cyan-50 text-cyan-700">📡 Inalámbrico</span>
+          {:else}
+            <span class="px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">🔵 Fibra óptica</span>
+          {/if}
         </div>
       </div>
     {:else}
@@ -631,70 +878,27 @@
   </div>
 {:else}
 
-<!-- Debt banner — only when the client owes something. Red, prominent,
-     lists every unpaid period so the operator can decide what to charge. -->
-{#if pendingAmount > 0}
-  {@const MONTHS = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']}
-  <div class="mb-4 sm:mb-6 rounded-xl border border-red-200 bg-gradient-to-r from-red-50 to-red-50/40 overflow-hidden">
-    <div class="px-4 sm:px-5 py-3 sm:py-4 flex flex-wrap items-start gap-3 sm:gap-4 justify-between">
-      <div class="min-w-0 flex-1">
-        <div class="flex items-center gap-2 flex-wrap">
-          <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
-          <h3 class="text-sm sm:text-base font-bold text-red-800 uppercase tracking-wider">
-            Cliente en deuda
-          </h3>
-          <span class="text-xs sm:text-sm text-red-900 font-mono tabular-nums">
-            · {fmtMoney(pendingAmount)} pendientes
-          </span>
-        </div>
-        <div class="text-xs sm:text-[13px] text-red-700/90 mt-1.5">
-          {pendingInvoices.length} {pendingInvoices.length === 1 ? 'factura' : 'facturas'} sin pagar
-          {#if pendingInvoices.some(i => i.status === 'OVERDUE')}
-            · {pendingInvoices.filter(i => i.status === 'OVERDUE').length} vencida{pendingInvoices.filter(i => i.status === 'OVERDUE').length === 1 ? '' : 's'}
-          {/if}
-        </div>
-      </div>
-      {#if pendingInvoices.length > 0}
-        <button on:click={openPayment}
-                class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg
-                       bg-red-600 hover:bg-red-700 text-white text-xs font-semibold
-                       shadow-sm transition-colors">
-          <CreditCard size={14} /> Registrar pago
-        </button>
+<!-- Alerta de MORA — franja delgada, solo cuando hay facturas VENCIDAS.
+     Los cobros abiertos que aún no vencen NO encienden esto (se ven en las
+     tarjetas KPI + el histórico de Facturas). El detalle por mes vive abajo. -->
+{#if overdueInvoices.length > 0}
+  <div class="mb-4 sm:mb-6 rounded-xl border border-red-200 bg-red-50 px-4 sm:px-5 py-3
+              flex flex-wrap items-center gap-x-3 gap-y-2 justify-between">
+    <div class="flex items-center gap-2 flex-wrap text-sm">
+      <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
+      <span class="font-bold text-red-800">
+        {overdueInvoices.length} {overdueInvoices.length === 1 ? 'factura vencida' : 'facturas vencidas'}
+      </span>
+      <span class="text-red-900 font-mono tabular-nums">· {fmtMoney(overdueAmount)} en mora</span>
+      {#if nextDue}
+        <span class="text-xs text-red-700/80">· la más antigua venció el {fmtDate(overdueInvoices.slice().sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate))[0]?.dueDate)}</span>
       {/if}
     </div>
-    <!-- Per-month detail. Ordered by periodYear+periodMonth from the API include. -->
-    <div class="px-4 sm:px-5 pb-3 sm:pb-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-      {#each pendingInvoices as inv}
-        {@const labelMonth = inv.periodMonth ? MONTHS[inv.periodMonth - 1] : null}
-        {@const isOverdue  = inv.status === 'OVERDUE'}
-        {@const isPartial  = inv.status === 'PARTIAL'}
-        <a href="/invoices/{inv.id}"
-           class="flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg border bg-white/70 hover:bg-white transition-colors
-                  {isOverdue ? 'border-red-300' : 'border-red-100'}"
-           title="Factura {inv.invoiceNumber || ''} — clic para ver detalle">
-          <div class="min-w-0">
-            <div class="text-[11px] sm:text-xs font-semibold text-red-900 uppercase tracking-wider">
-              {#if labelMonth}{labelMonth} {inv.periodYear}
-              {:else}{fmtDate(inv.dueDate)}{/if}
-            </div>
-            <div class="text-[10px] sm:text-[11px] mt-0.5 inline-flex items-center gap-1">
-              <span class="px-1.5 py-0.5 rounded font-medium
-                           {isOverdue ? 'bg-red-200 text-red-800'
-                            : isPartial ? 'bg-amber-100 text-amber-700'
-                            : 'bg-red-100 text-red-700'}">
-                {#if isOverdue}vencida
-                {:else if isPartial}parcial
-                {:else}pendiente{/if}
-              </span>
-            </div>
-          </div>
-          <div class="text-right tabular-nums font-mono text-xs sm:text-sm font-semibold text-red-900">
-            {fmtMoney(inv.balanceDue > 0 ? inv.balanceDue : (inv.total || inv.amount))}
-          </div>
-        </a>
-      {/each}
-    </div>
+    <button on:click={openPayment}
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                   bg-red-600 hover:bg-red-700 text-white text-xs font-semibold shadow-sm transition-colors">
+      <CreditCard size={14} /> Registrar pago
+    </button>
   </div>
 {/if}
 
@@ -844,6 +1048,14 @@
               </div>
             </div>
 
+            <div>
+              <label class="label" for="ed-conn">Tecnología de conexión</label>
+              <select id="ed-conn" class="input" bind:value={formPersonal.connectionType}>
+                <option value="FIBER">🔵 Fibra óptica</option>
+                <option value="WIRELESS">📡 Inalámbrico</option>
+              </select>
+            </div>
+
             <div class="md:col-span-2">
               <label class="label" for="ed-notes">Notas</label>
               <textarea id="ed-notes" rows="2" class="input resize-none"
@@ -899,12 +1111,26 @@
                      placeholder="3.850149,-76.492356" />
             </div>
 
-            <div class="md:col-span-2 flex gap-2 pt-2">
+            <div class="md:col-span-2 flex items-center gap-2 pt-2">
               <button class="btn-primary" on:click={savePersonal} disabled={loadingAction}>
                 {#if loadingAction}<Loader2 size={14} class="animate-spin" />{/if}
-                Guardar
+                Guardar y cerrar
               </button>
-              <button class="btn-ghost" on:click={() => editPersonal = false}>Cancelar</button>
+              <button class="btn-ghost" on:click={() => { clearTimeout(autoSaveTimer); editPersonal = false; resetForm(); }}>Cerrar</button>
+              <!-- Autosave status -->
+              <span class="ml-auto text-[11px] inline-flex items-center gap-1.5">
+                {#if autoSaveState === 'pending'}
+                  <span class="text-slate-400">Cambios sin guardar…</span>
+                {:else if autoSaveState === 'saving'}
+                  <Loader2 size={11} class="animate-spin text-slate-400" />
+                  <span class="text-slate-500">Guardando…</span>
+                {:else if autoSaveState === 'saved'}
+                  <span class="text-emerald-600 font-medium">✓ Guardado automáticamente
+                    {autoSaveAt ? autoSaveAt.toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                {:else if autoSaveState === 'error'}
+                  <span class="text-red-600" title={autoSaveError}>⚠ No se pudo autoguardar — revisa los datos</span>
+                {/if}
+              </span>
             </div>
           </div>
         {:else}
@@ -1015,7 +1241,14 @@
                                 on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
                           Pagar
                         </button>
-                        <WompiButton invoice={inv} />
+                        <button class="text-xs text-brand-700 hover:underline font-semibold" title="Reenviar el cobro al cliente (correo + WhatsApp)"
+                                on:click={() => resendCharge(inv.id)} disabled={resendBusyId === inv.id}>
+                          {resendBusyId === inv.id ? 'Enviando…' : 'Reenviar cobro'}
+                        </button>
+                        <button class="text-xs text-violet-700 hover:underline font-medium" title="Copiar link de pago"
+                                on:click={() => genLink(inv.id, 'copy')} disabled={linkBusyId === inv.id}>Copiar</button>
+                        <button class="text-xs text-violet-700 hover:underline font-medium" title="Enviar por WhatsApp"
+                                on:click={() => genLink(inv.id, 'whatsapp')} disabled={linkBusyId === inv.id}>WhatsApp</button>
                       </div>
                     {/if}
                   </td>
@@ -1051,7 +1284,14 @@
                             on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
                       Pagar
                     </button>
-                    <WompiButton invoice={inv} />
+                    <button class="btn-ghost text-xs text-brand-700 font-semibold" title="Reenviar el cobro al cliente"
+                            on:click={() => resendCharge(inv.id)} disabled={resendBusyId === inv.id}>
+                      {resendBusyId === inv.id ? 'Enviando…' : 'Reenviar cobro'}
+                    </button>
+                    <button class="btn-ghost text-xs text-violet-700" title="Copiar link de pago"
+                            on:click={() => genLink(inv.id, 'copy')} disabled={linkBusyId === inv.id}>Copiar</button>
+                    <button class="btn-ghost text-xs text-violet-700" title="Enviar por WhatsApp"
+                            on:click={() => genLink(inv.id, 'whatsapp')} disabled={linkBusyId === inv.id}>WhatsApp</button>
                   </div>
                 {/if}
               </div>
@@ -1140,6 +1380,134 @@
           {/each}
         </div>
       {/if}
+    </div>
+
+    <!-- Notificaciones (Centro de Notificaciones ↔ Clientes) -->
+    <div class="bg-white rounded-2xl border border-slate-200/70 shadow-sm p-4 sm:p-5">
+      <div class="flex items-center gap-2 mb-3">
+        <Bell size={18} class="text-brand-600" />
+        <h2 class="font-semibold text-slate-900">Notificaciones</h2>
+        <button class="btn-secondary btn-sm ml-auto" on:click={toggleSend}>
+          <Send size={14} /> Enviar notificación
+        </button>
+        <a href="/notifications" class="text-xs text-brand-600 hover:underline">Centro</a>
+      </div>
+
+      {#if sendOpen}
+        <!-- Mini-formulario: enviar una plantilla a ESTE cliente. Lo masivo va
+             por el Centro de Notificaciones. -->
+        <div class="mb-4 rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-3">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label for="notif-tpl" class="label">Plantilla</label>
+              <select id="notif-tpl" bind:value={sendForm.templateId} on:change={onNotifTplChange} class="select text-sm">
+                <option value="">Seleccionar…</option>
+                {#each notifTemplates as t (t.id)}
+                  <option value={t.id}>{t.name} — {NOTIF_CHANNEL_LABEL[t.channel] ?? t.channel}</option>
+                {/each}
+              </select>
+              {#if notifTplLoaded && notifTemplates.length === 0}
+                <p class="text-[11px] text-amber-700 mt-1">No hay plantillas activas. Créalas en el Centro de Notificaciones.</p>
+              {/if}
+            </div>
+            <div>
+              <label for="notif-channel" class="label">Canal</label>
+              <select id="notif-channel" bind:value={sendForm.channel} class="select text-sm">
+                {#each ['EMAIL', 'WHATSAPP', 'BOTH'] as ch}
+                  {@const enabled = !selectedNotifTpl || selectedNotifTpl.channel === ch || ch === 'BOTH'}
+                  <option value={ch} disabled={!enabled}>{NOTIF_CHANNEL_LABEL[ch]}</option>
+                {/each}
+              </select>
+            </div>
+          </div>
+          <label class="inline-flex items-center gap-2 text-xs text-slate-700">
+            <input type="checkbox" bind:checked={sendForm.generatePaymentLinks} class="w-4 h-4" />
+            Generar link de pago (factura pendiente más antigua)
+          </label>
+          {#if sendMsg}
+            <p class="text-[11px] inline-flex items-center gap-1 {sendMsg.type === 'success' ? 'text-emerald-700' : 'text-red-600'}">
+              {#if sendMsg.type === 'success'}<CheckCircle2 size={12} />{:else}<AlertCircle size={12} />{/if}
+              {sendMsg.text}
+            </p>
+          {/if}
+          <div class="flex items-center gap-2">
+            <button class="btn-primary btn-sm" on:click={sendNotification} disabled={sending || !sendForm.templateId}>
+              {#if sending}<Loader2 size={14} class="animate-spin" /> Enviando…{:else}<Send size={14} /> Enviar a este cliente{/if}
+            </button>
+            <button class="btn-secondary btn-sm" on:click={() => sendOpen = false} disabled={sending}>Cancelar</button>
+          </div>
+        </div>
+      {/if}
+      {#if !notifLoading && !notifError && notifications.length > 0}
+        <!-- Resumen: cuántas recibió y cuántas vio -->
+        <div class="flex flex-wrap items-center gap-2 mb-3 text-xs">
+          <span class="px-2.5 py-1 rounded-lg bg-brand-50 text-brand-700 font-semibold">{notifReceived} recibida{notifReceived === 1 ? '' : 's'}</span>
+          <span class="px-2.5 py-1 rounded-lg {notifOpened > 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'} font-medium">
+            {notifOpened} vista{notifOpened === 1 ? '' : 's'}
+          </span>
+          {#if notifFailed > 0}<span class="px-2.5 py-1 rounded-lg bg-red-50 text-red-600 font-medium">{notifFailed} fallida{notifFailed === 1 ? '' : 's'}</span>{/if}
+          <span class="text-[11px] text-slate-400" title="La apertura se detecta en WhatsApp (leído) y en correos con seguimiento; algunos correos pueden no reportarla.">ⓘ</span>
+        </div>
+      {/if}
+      {#if notifLoading}
+        <div class="text-sm text-slate-400 py-4 flex items-center gap-2"><Loader2 size={14} class="animate-spin" /> Cargando…</div>
+      {:else if notifError}
+        <div class="text-sm text-red-600 py-2">{notifError}</div>
+      {:else if notifications.length === 0}
+        <div class="text-sm text-slate-400 py-4">Aún no se han enviado notificaciones a este cliente.</div>
+      {:else}
+        <ul class="divide-y divide-slate-100">
+          {#each notifications as n (n.id)}
+            <li class="py-2.5 flex items-start gap-3">
+              <div class="mt-0.5">
+                {#if n.channel === 'WHATSAPP'}<MessageSquare size={15} class="text-emerald-600" />
+                {:else}<Mail size={15} class="text-brand-600" />{/if}
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-sm text-slate-800 truncate">{n.subject || notifTypeLabel(n.type)}</div>
+                <div class="text-xs text-slate-400">{fmtNotifDate(n.sentAt || n.createdAt)}{n.recipient ? ' · ' + n.recipient : ''}</div>
+                {#if n.error}<div class="text-xs text-red-500 truncate mt-0.5">{n.error}</div>{/if}
+              </div>
+              <span class="text-[11px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap {notifStatusClass(n.status)}">{notifStatusLabel(n.status)}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    </div>
+
+    <!-- Equipos / Inventario del cliente -->
+    <div class="card mt-4">
+      <div class="card-header flex items-center justify-between">
+        <h2 class="font-semibold text-slate-900 flex items-center gap-2"><Boxes size={16} class="text-brand-600" /> Equipos asignados</h2>
+        <button class="btn-secondary btn-sm" on:click={openInvModal}><Plus size={14} /> Asignar equipo</button>
+      </div>
+      <div class="card-body">
+        {#if invLoading}
+          <div class="flex items-center gap-2 text-sm text-slate-500 py-4"><Loader2 size={14} class="animate-spin" /> Cargando equipos…</div>
+        {:else if invItems.length === 0}
+          <div class="text-center py-6 text-slate-400 text-sm">
+            <Package size={28} class="mx-auto mb-2 text-slate-300" />
+            Este cliente no tiene equipos asignados.
+          </div>
+        {:else}
+          <ul class="divide-y divide-slate-100">
+            {#each invItems as it (it.id)}
+              <li class="flex items-center gap-3 py-2.5">
+                <div class="w-10 h-10 rounded-lg bg-slate-100 overflow-hidden flex items-center justify-center shrink-0">
+                  {#if it.product?.imageUrl}<img src={invImg(it.product.imageUrl)} alt="" class="w-full h-full object-cover" />{:else}<Package size={16} class="text-slate-400" />{/if}
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="font-medium text-slate-900 text-sm truncate">{it.product?.name || '—'}</div>
+                  <div class="text-[11px] text-slate-500 font-mono truncate">
+                    {it.serial ? `S/N ${it.serial}` : 'Sin serial'}{it.product?.category ? ` · ${it.product.category}` : ''}
+                  </div>
+                </div>
+                <button class="btn-icon hover:!text-red-600 shrink-0" title="Devolver a bodega" on:click={() => removeInvItem(it)}><Trash2 size={14} /></button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -1699,6 +2067,38 @@
       </button>
     </div>
   {/if}
+</Sheet>
+
+<!-- ░░ Asignar equipo del inventario ░░ -->
+<Sheet bind:open={invModalOpen} title="Asignar equipo al cliente" maxWidth="max-w-md">
+  <form id="inv-assign-form" class="space-y-4" on:submit|preventDefault={saveInvItem}>
+    {#if invError}<div class="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2.5 text-sm"><AlertCircle size={14} class="mt-0.5" /> {invError}</div>{/if}
+    {#if invProducts.filter(p => p.isActive).length === 0}
+      <p class="text-sm text-slate-500">No hay productos en el catálogo. Crea uno primero en <a href="/clients/inventory" class="text-brand-700 hover:underline">Inventario</a>.</p>
+    {/if}
+    <div>
+      <label for="inv-prod" class="label">Producto *</label>
+      <select id="inv-prod" class="select" bind:value={invForm.productId}>
+        <option value="">— Selecciona un producto —</option>
+        {#each invProducts.filter(p => p.isActive) as p}<option value={p.id}>{p.name}{p.category ? ` (${p.category})` : ''}</option>{/each}
+      </select>
+    </div>
+    <div>
+      <label for="inv-serial" class="label">Serial</label>
+      <input id="inv-serial" class="input font-mono" bind:value={invForm.serial} placeholder="Ej: 48575443XXXXXXXX" />
+      <p class="text-[11px] text-slate-400 mt-1">Opcional, pero debe ser único si lo registras.</p>
+    </div>
+    <div>
+      <label for="inv-notes" class="label">Notas</label>
+      <textarea id="inv-notes" rows="2" class="input" bind:value={invForm.notes} placeholder="Opcional"></textarea>
+    </div>
+  </form>
+  <svelte:fragment slot="footer">
+    <button type="button" class="btn-secondary" on:click={() => invModalOpen = false} disabled={invSaving}>Cancelar</button>
+    <button type="submit" form="inv-assign-form" class="btn-primary" disabled={invSaving}>
+      {#if invSaving}<Loader2 size={15} class="animate-spin" />{/if} Asignar
+    </button>
+  </svelte:fragment>
 </Sheet>
 
 {/if}

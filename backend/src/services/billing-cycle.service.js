@@ -77,7 +77,30 @@ export async function updateCycle(id, patch) {
   if (patch.autoSuspendEnabled !== undefined) data.autoSuspendEnabled = !!patch.autoSuspendEnabled;
   if (patch.notes              !== undefined) data.notes              = patch.notes;
   // status changes go through dedicated handlers below to enforce invariants.
-  return prisma.billingCycle.update({ where: { id }, data });
+  const updated = await prisma.billingCycle.update({ where: { id }, data });
+
+  // Keep invoices in sync with the cycle: when the operator changes the
+  // collection dates, the period's OPEN invoices (not PAID/CANCELLED) follow —
+  // dueDate ← collectionEnd, issueDate ← collectionStart. This is what makes
+  // "Próximo vencimiento" on every client match the Ciclos de cobro config.
+  // Paid invoices are history and are never touched.
+  if (data.collectionEnd || data.collectionStart) {
+    const sync = {};
+    if (data.collectionEnd)   sync.dueDate   = data.collectionEnd;
+    if (data.collectionStart) sync.issueDate = data.collectionStart;
+    const r = await prisma.invoice.updateMany({
+      where: {
+        periodYear:  updated.year,
+        periodMonth: updated.month,
+        status:      { in: ['PENDING', 'OVERDUE', 'PARTIAL'] }
+      },
+      data: sync
+    });
+    updated.syncedInvoices = r.count;
+    console.log(`[billing-cycle ${updated.year}-${updated.month}] fechas propagadas a ${r.count} factura(s) abierta(s) del período`);
+  }
+
+  return updated;
 }
 
 /** Activate a cycle. Demotes any other 'active' cycle to 'closed' first. */

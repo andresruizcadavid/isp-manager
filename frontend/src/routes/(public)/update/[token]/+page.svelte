@@ -147,7 +147,7 @@
 </script>
 
 <svelte:head>
-  <title>Actualiza tus datos — ISP Manager</title>
+  <title>Actualiza tus datos — Internet Online</title>
 </svelte:head>
 
 {#if loading}
@@ -180,16 +180,17 @@
 
 {:else}
   <!-- Top banner -->
-  <div class="card mb-4">
+  <div class="card mb-4 overflow-hidden">
+    <div class="h-1 bg-[#FDB913]"></div>
     <div class="p-5 sm:p-6">
-      <h1 class="text-xl font-semibold text-text-primary">Actualiza tus datos</h1>
+      <h1 class="text-xl font-bold text-[#16357E]">Actualiza tus datos</h1>
       <p class="text-sm text-text-secondary mt-1">
-        Hola{snapshot?.name ? ` ${snapshot.name.split(/\s+/)[0]}` : ''}, revisa
-        que la información de contacto y documento esté correcta. Sólo lo que
-        cambies se enviará.
+        Hola{snapshot?.name ? ` ${snapshot.name.split(/\s+/)[0]}` : ''}, ayúdanos a
+        mantener tu información al día para brindarte un mejor servicio. Revisa que
+        tus datos de contacto y documento estén correctos — sólo se enviará lo que cambies.
       </p>
       <p class="text-xs text-text-muted mt-2">
-        Este enlace vence el <strong>{fmtExpires(expiresAt)}</strong> y sólo se
+        Este enlace es seguro, vence el <strong>{fmtExpires(expiresAt)}</strong> y sólo se
         puede usar una vez.
       </p>
     </div>
@@ -320,9 +321,13 @@
     {/if}
 
     <div class="flex items-center justify-end gap-2 pb-6">
-      <button type="submit" class="btn-primary" disabled={saving}>
-        {#if saving}<Loader2 size={14} class="animate-spin" />{:else}<Save size={14} />{/if}
-        Guardar cambios
+      <!-- CTA dorado de marca (igual al botón de los correos) -->
+      <button type="submit" disabled={saving}
+              class="inline-flex items-center gap-2 px-8 py-3 rounded-xl font-extrabold text-[15px]
+                     text-[#0E255C] bg-[#FDB913] hover:bg-[#ECA600] transition-colors
+                     shadow-[0_4px_12px_rgba(253,185,19,0.35)] disabled:opacity-60">
+        {#if saving}<Loader2 size={15} class="animate-spin" />{:else}<Save size={15} />{/if}
+        Guardar mis datos
       </button>
     </div>
   </form>

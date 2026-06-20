@@ -90,7 +90,6 @@ model User {
   clientUpdateTokens ClientUpdateToken[]
   payments          Payment[]
   bulkOperations    BulkOperationLog[]
-  collectionWindows CollectionWindow[]
   routerBackups     RouterBackup[]
   billingCycles     BillingCycle[]
   paymentLinkCampaigns PaymentLinkCampaign[]
@@ -146,6 +145,9 @@ model Client {
   zoneId           Int?
   balance          Int          @default(0) // in cents
   monthlyFee       Int          @default(0) // in cents — per-client price (WispHub-style)
+  // Tecnología de conexión del cliente. FIBER = fibra óptica (default, todos
+  // los existentes), WIRELESS = inalámbrico (clientes de antenas).
+  connectionType   String       @default("FIBER")
   installationDate DateTime?
   contractDate     DateTime?
   cutoffDate       DateTime?
@@ -174,8 +176,50 @@ model Client {
   clientUser          ClientUser?
   paymentLinks        PaymentLink[]
   clientNotifications ClientNotification[]
+  inventoryItems      InventoryItem[]
 
   @@map("clients")
+}
+
+// ── Inventario ──────────────────────────────────────────────────────
+// InventoryProduct = catálogo (un tipo de producto: ONU, TV Box, router…)
+// con nombre + imagen. InventoryItem = una unidad física con su serial,
+// que puede estar en bodega (clientId null) o asignada a un cliente.
+// Un cliente puede tener N items (ej. una ONU + un TV Box).
+model InventoryProduct {
+  id          String   @id @default(cuid())
+  name        String                       // "ONU Huawei HG8310", "TV Box X96"
+  category    String?                      // ONU | TVBox | Router | Antena | Otro
+  imageUrl    String?                      // /uploads/inventory/xyz.jpg
+  description String?  @db.Text
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items InventoryItem[]
+
+  @@index([category])
+  @@map("inventory_products")
+}
+
+model InventoryItem {
+  id         String   @id @default(cuid())
+  productId  String
+  serial     String?  @unique               // serial físico del equipo (único si existe)
+  clientId   String?                         // null = en bodega; set = entregado al cliente
+  status     String   @default("ASSIGNED")   // IN_STOCK | ASSIGNED | RETURNED | FAULTY
+  notes      String?
+  assignedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  product InventoryProduct @relation(fields: [productId], references: [id], onDelete: Restrict)
+  client  Client?          @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([clientId])
+  @@index([status])
+  @@map("inventory_items")
 }
 
 // Single-use, time-boxed token that grants a public URL the ability to
@@ -244,6 +288,10 @@ model Plan {
   wisphubId       String?  @unique
   name            String
   type            String? // PPPoE, Hotspot, etc.
+  // Tecnología a la que aplica este plan. FIBER (default) | WIRELESS. Evita
+  // mezclar perfiles entre routers: al asignar plan a un cliente solo se
+  // ofrecen los de su misma tecnología.
+  connectionType  String   @default("FIBER")
   description     String?
   price           Int // in cents
   monthlyPrice    Int      @default(0) // in cents (for frontend compatibility)
@@ -779,6 +827,26 @@ model WhatsAppConfig {
   @@map("whatsapp_configs")
 }
 
+// Wompi payment gateway credentials managed from the UI. Only the row with
+// isActive=true is consulted by wompi.service. When no row is active the
+// service falls back to .env variables so existing deployments keep working.
+model WompiConfig {
+  id            String    @id @default(cuid())
+  publicKey     String
+  privateKey    String
+  eventsKey     String
+  integrityKey  String
+  isActive      Boolean   @default(true)
+  environment   String    @default("production") // "production" | "sandbox"
+  isVerified    Boolean   @default(false)
+  lastTestedAt  DateTime?
+  lastTestResult String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@map("wompi_configs")
+}
+
 // Telegram bot config managed from the UI (Monitor de Red → Configuración).
 // Only the row with isActive=true is consulted by telegram.service. When no
 // row is active the monitor still runs but skips notifications.
@@ -884,40 +952,22 @@ model BulkOperationLog {
 //
 // A SystemConfig key cannot replace this — we want history, multiple past
 // windows, and per-window metrics in FASE 5.
-model CollectionWindow {
-  id                  String   @id @default(cuid())
-  name                String   // operator-facing label (e.g. "Cierre Junio")
-  startDate           DateTime
-  endDate             DateTime
-  targetStatuses      String[] @default(["PENDING","OVERDUE"])
-  channels            String[] @default(["EMAIL"])
-  sendFrequencyHours  Int      @default(24)
-  messageTemplate     String   @default("Hola {name}, tu factura por {amount} vence el {dueDate}. Realiza tu pago para evitar inconvenientes.")
-  isActive            Boolean  @default(true)
-  createdById         String?
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-
-  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
-
-  @@index([isActive, startDate, endDate])
-  @@map("collection_windows")
-}
-
 // BillingCycle — parámetro mensual del ciclo de cobro del servicio.
 // Un row por (year, month). Gobierna las FECHAS del ciclo (inicio de cobro
 // y fecha máxima de pago), el estado del período, notas operativas y un
 // toggle SEPARADO de "corte automático" que está OFF por defecto.
 //
-// Lo que ESTE modelo NO hace:
-//   • No genera facturas (eso es bulk-billing).
-//   • No suspende servicios (esa es una política manual).
-//   • No envía notificaciones (eso es CollectionWindow / auto-collection).
-//
 // Lo que SÍ hace:
+//   • Genera automáticamente las facturas del período: en collectionStart el
+//     scheduler diario emite las facturas (issueDate=collectionStart,
+//     dueDate=collectionEnd). Idempotente — ver invoiceService
+//     .generateInvoicesForActiveCycle / generateInvoicesForCycle.
 //   • Clasifica clientes en buckets para el período (al día, dentro de
 //     ventana, vencido, en mora, suspendible) consultable vía endpoint.
 //   • Persiste la decisión de fechas por mes para auditoría/UI.
+//
+// Lo que ESTE modelo NO hace:
+//   • No suspende servicios (esa es una política manual).
 //
 // Estados:
 //   draft   — el operador está configurando, sin efecto en clasificación

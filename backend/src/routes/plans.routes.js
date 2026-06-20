@@ -17,8 +17,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST create plan
-router.post('/', async (req, res) => {
+// POST create plan (admin-only — the mount is operational so technicians can READ the catalog)
+router.post('/', requireAdmin, async (req, res) => {
   try {
     const plan = await prisma.plan.create({ data: req.body });
     res.status(201).json({ success: true, data: plan });
@@ -27,8 +27,8 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT update plan
-router.put('/:id', async (req, res) => {
+// PUT update plan (admin-only)
+router.put('/:id', requireAdmin, async (req, res) => {
   try {
     const plan = await prisma.plan.update({
       where: { id: req.params.id },
@@ -40,8 +40,8 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE plan
-router.delete('/:id', async (req, res) => {
+// DELETE plan (admin-only)
+router.delete('/:id', requireAdmin, async (req, res) => {
   try {
     await prisma.plan.delete({ 
       where: { id: req.params.id } 

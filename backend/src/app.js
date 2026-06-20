@@ -11,10 +11,10 @@ import { env }        from './config/env.js';
 import authRoutes     from './routes/auth.routes.js';
 import clientRoutes   from './routes/clients.routes.js';
 import zoneRoutes     from './routes/zones.routes.js';
+import inventoryRoutes from './routes/inventory.routes.js';
 import planRoutes     from './routes/plans.routes.js';
 import routerRoutes   from './routes/routers.routes.js';
 import invoiceRoutes  from './routes/invoices.routes.js';
-import collectionWindowsRoutes from './routes/collection-windows.routes.js';
 import backupsRoutes  from './routes/backups.routes.js';
 import billingCyclesRoutes from './routes/billing-cycles.routes.js';
 import paymentRoutes, { webhookRouter as paymentWebhookRouter } from './routes/payments.routes.js';
@@ -32,6 +32,7 @@ import publicClientUpdatesRoutes from './routes/public.client-updates.routes.js'
 import clientAuthRoutes from './routes/client-auth.routes.js';
 import portalRoutes from './routes/portal.routes.js';
 import paymentLinksRoutes, { pixelRouter as paymentLinksPixelRouter } from './routes/payment-links.routes.js';
+import wompiConfigRoutes from './routes/wompi-config.routes.js';
 import { makeOriginGuard } from './middleware/origin-guard.middleware.js';
 
 const app = express();
@@ -110,13 +111,16 @@ app.use('/api/v1', paymentLinksPixelRouter);
 //                           mikrotik accounts (ADMIN / legacy OPERATOR only)
 app.use('/api/v1/zones',             authMiddleware, requireOperational, zoneRoutes);
 app.use('/api/v1/clients',           authMiddleware, requireOperational, clientRoutes);
+app.use('/api/v1/inventory',         authMiddleware, requireOperational, inventoryRoutes);
 app.use('/api/v1/clients/:id/evidence-photos', authMiddleware, requireOperational, evidenceRoutes);
 app.use('/api/v1/dashboard',         authMiddleware, requireOperational, dashboardRoutes);
-app.use('/api/v1/plans',             authMiddleware, requireAdmin,       planRoutes);
-app.use('/api/v1/mikrotik/routers',  authMiddleware, requireAdmin,       routerRoutes);
+// Plans + routers are mounted as `requireOperational` so field TECHNICIANs can
+// provision clients (plan catalog, PPP profiles, available IPs). Write/admin
+// surface is still gated per-route inside each router (requireAdmin).
+app.use('/api/v1/plans',             authMiddleware, requireOperational,  planRoutes);
+app.use('/api/v1/mikrotik/routers',  authMiddleware, requireOperational,  routerRoutes);
 app.use('/api/v1/mikrotik/accounts', authMiddleware, requireAdmin,       accountsRoutes);
 app.use('/api/v1/invoices',          authMiddleware, requireAdmin,       invoiceRoutes);
-app.use('/api/v1/collection-windows', authMiddleware, requireAdmin,      collectionWindowsRoutes);
 app.use('/api/v1/backups',           authMiddleware, requireAdmin,       backupsRoutes);
 app.use('/api/v1/billing-cycles',    authMiddleware, requireAdmin,       billingCyclesRoutes);
 app.use('/api/v1/payments',          authMiddleware, requireOperational, paymentRoutes);
@@ -131,6 +135,7 @@ app.use('/api/v1/telegram',          authMiddleware, requireAdmin,       telegra
 app.use('/api/v1/whatsapp/webhook',                                     whatsappWebhookRouter);
 app.use('/api/v1/whatsapp',          authMiddleware, requireAdmin,       whatsappRoutes);
 app.use('/api/v1/payment-links',     authMiddleware, requireAdmin,       paymentLinksRoutes);
+app.use('/api/v1/wompi-config',      authMiddleware, requireAdmin,       wompiConfigRoutes);
 
 // ── Static serving of uploaded files ──────────────────────
 // Files are saved under <UPLOADS_PATH> by routes that use multer; expose

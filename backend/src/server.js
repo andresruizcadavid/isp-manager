@@ -13,7 +13,6 @@ import { startRouterMonitor } from './services/router-monitor.service.js';
 import './jobs/billing.job.js';
 import './jobs/overdue.job.js';
 import './jobs/debtor-notification.job.js';
-import './jobs/auto-collection.job.js';
 import './jobs/backup.job.js';
 
 // Initialize Redis connection
@@ -47,6 +46,23 @@ const server = httpServer.listen(env.PORT, async () => {
   } catch (e) {
     console.warn('Could not run campaign orphan cleanup:', e.message);
   }
+
+  // Self-healing sweep: a campaign can also hang WITHIN a live process (e.g. a
+  // stalled external call) — the startup cleanup above won't catch those. Every
+  // 10 min, mark any campaign stuck in 'running' for >30 min as failed so it
+  // stops blocking the UI (edit/relaunch) and the operator can re-run it.
+  setInterval(async () => {
+    try {
+      const cutoff = new Date(Date.now() - 30 * 60 * 1000);
+      const stale = await prisma.notificationCampaign.updateMany({
+        where: { status: 'running', startedAt: { lt: cutoff } },
+        data:  { status: 'failed', finishedAt: new Date() }
+      });
+      if (stale.count > 0) console.log(`🧹 Marked ${stale.count} stale 'running' campaign(s) (>30min) as failed.`);
+    } catch (e) {
+      console.warn('Stale campaign sweep failed:', e.message);
+    }
+  }, 10 * 60 * 1000).unref();
 
   // Start the ICMP monitor (in-process scheduler). Pings every device on the
   // map every 30s and pushes live updates via socket.io.
@@ -105,8 +121,10 @@ process.on('uncaughtException', (error) => {
   process.exit(1);
 });
 
-// Handle unhandled promise rejections
+// Handle unhandled promise rejections. We log but deliberately do NOT exit:
+// many call sites are best-effort (notification dispatch, webhook side-effects)
+// and a single escaped rejection must not tear down the whole single-instance
+// API. Truly fatal cases surface via uncaughtException above.
 process.on('unhandledRejection', (reason, promise) => {
   console.error('💥 Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
 });

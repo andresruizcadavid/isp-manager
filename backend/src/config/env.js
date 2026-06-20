@@ -23,7 +23,7 @@ const envSchema = z.object({
   // because dev installs that don't use the checkout flow shouldn't fail
   // to start; the service throws a clear error when actually invoked.
   WOMPI_INTEGRITY_KEY: z.string().optional(),
-  WOMPI_API_URL: z.string().url().default('https://api.wompi.co/v1'),
+  WOMPI_API_URL: z.string().url().default('https://production.wompi.co/v1'),
   
   // Email
   SMTP_HOST: z.string().min(1),

@@ -1,13 +1,6 @@
-import crypto from 'crypto';
 import { prisma } from '../config/database.js';
 import { wompiService } from './wompi.service.js';
 import { AppError } from '../middleware/error.middleware.js';
-
-function generateReference(clientId) {
-  const ts = Date.now().toString(36);
-  const rand = crypto.randomBytes(4).toString('hex');
-  return `PL-${clientId.slice(0, 6)}-${ts}-${rand}`;
-}
 
 class PaymentLinkService {
 
@@ -20,11 +13,15 @@ class PaymentLinkService {
     if (!invoice) throw new AppError('Factura no encontrada', 404, 'INVOICE_NOT_FOUND');
     if (invoice.status === 'PAID') throw new AppError('La factura ya está pagada', 400, 'ALREADY_PAID');
 
-    const reference = generateReference(invoice.clientId);
     const amountInCents = invoice.balanceDue > 0 ? invoice.balanceDue : invoice.total;
 
     // Call Wompi to create the payment link
     const checkout = await wompiService.createCheckout(invoice, { redirectUrl });
+
+    // Share the SAME reference the PaymentAttempt got, so PaymentLink and
+    // PaymentAttempt cross-reference 1:1 for traceability. (Wompi reconciles
+    // the webhook by payment_link_id/externalId, not by this internal ref.)
+    const reference = checkout.reference;
 
     const expiresAt = new Date(Date.now() + expiresInDays * 86400000);
 

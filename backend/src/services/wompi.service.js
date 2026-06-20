@@ -10,15 +10,48 @@ class WompiService {
     this.baseURL     = env.WOMPI_API_URL;
     this.publicKey   = env.WOMPI_PUBLIC_KEY;
     this.privateKey  = env.WOMPI_PRIVATE_KEY;
-    // Wompi splits its secret material into TWO distinct keys:
-    //   • integrity_secret → signs the *checkout link* (reference+amount+currency)
-    //   • events_secret    → signs *webhook events* (properties+timestamp)
-    // The official docs are at https://docs.wompi.co/docs/colombia/integridad
-    // and https://docs.wompi.co/docs/colombia/eventos. We surface clear errors
-    // when each one is missing at the moment it's actually needed, instead of
-    // failing silently with a stale undefined.
-    this.eventsKey    = env.WOMPI_EVENTS_KEY;
-    this.integrityKey = env.WOMPI_INTEGRITY_KEY || null;
+    this.eventsKey   = env.WOMPI_EVENTS_KEY;
+    this.integrityKey= env.WOMPI_INTEGRITY_KEY || null;
+  }
+
+  // Load keys from the active DB config row (if any), falling back to .env.
+  // Call after the user saves/updates Wompi keys via the UI so the in-memory
+  // singleton picks up the new values without a process restart.
+  async loadConfigFromDb() {
+    try {
+      const config = await prisma.wompiConfig.findFirst({
+        where: { isActive: true },
+        orderBy: { createdAt: 'desc' }
+      });
+      if (config) {
+        this.publicKey    = config.publicKey;
+        this.privateKey   = config.privateKey;
+        this.eventsKey    = config.eventsKey;
+        this.integrityKey = config.integrityKey || null;
+        // Keep the API base URL consistent with the configured environment.
+        // Wompi REQUIRES env-matched keys+URL: sandbox keys only authenticate
+        // against sandbox.wompi.co and prod keys only against production.wompi.co
+        // (https://docs.wompi.co/docs/colombia/ambientes-y-llaves). Without this,
+        // saving sandbox keys via the UI would silently keep hitting production
+        // and every checkout would 401.
+        this.baseURL = this.resolveBaseURL(config.environment, config.privateKey);
+      }
+    } catch (e) {
+      console.warn('[wompi] loadConfigFromDb failed, using .env fallback:', e.message);
+    }
+  }
+
+  // Resolve the correct Wompi API base URL for a given environment/key pair.
+  // The private-key prefix is the authoritative signal (prv_test_ / prv_prod_);
+  // the `environment` column is a secondary hint; env.WOMPI_API_URL is the last
+  // resort. This prevents a mislabeled `environment` column from routing
+  // sandbox keys to production (or vice-versa).
+  resolveBaseURL(environment, privateKey = '') {
+    if ((privateKey || '').startsWith('prv_prod_')) return 'https://production.wompi.co/v1';
+    if ((privateKey || '').startsWith('prv_test_')) return 'https://sandbox.wompi.co/v1';
+    if (environment === 'sandbox')    return 'https://sandbox.wompi.co/v1';
+    if (environment === 'production') return 'https://production.wompi.co/v1';
+    return env.WOMPI_API_URL;
   }
 
   getAuthHeaders() {
@@ -34,7 +67,8 @@ class WompiService {
   // handler (handleTransactionUpdate) matches the transaction back to
   // the attempt via payment_link_id and updates its status.
   async createCheckout(invoice, options = {}) {
-    const amountInCents = invoice.total || invoice.amount;
+    await this.loadConfigFromDb();
+    const amountInCents = invoice.balanceDue > 0 ? invoice.balanceDue : (invoice.total || invoice.amount);
     const currency = 'COP';
     const reference = this.generateReference(invoice);
 
@@ -69,7 +103,17 @@ class WompiService {
         { headers: this.getAuthHeaders() }
       );
 
-      const result = response.data.data;
+      const result = response.data?.data;
+      // Never fabricate a checkout URL. If Wompi answers 2xx without a link id
+      // the response is unusable — fail loudly so the caller doesn't surface a
+      // broken `.../l/undefined` link as a success.
+      if (!result?.id) {
+        throw new AppError(
+          'Wompi no devolvió un ID de link de pago válido',
+          502,
+          'WOMPI_INVALID_RESPONSE'
+        );
+      }
       const checkoutUrl = `https://checkout.wompi.co/l/${result.id}`;
 
       // Update the attempt with Wompi's response
@@ -78,15 +122,20 @@ class WompiService {
         data: { checkoutUrl, externalId: result.id }
       });
 
-      return { checkoutUrl, paymentAttemptId: attempt.id, wompiLinkId: result.id };
+      return { checkoutUrl, paymentAttemptId: attempt.id, wompiLinkId: result.id, reference };
     } catch (error) {
       await prisma.paymentAttempt.update({
         where: { id: attempt.id },
-        data: { status: 'FAILED' }
+        data: { status: 'FAILED', webhookPayload: error.response?.data || { error: error.message } }
       }).catch(e => console.error('[wompi] Failed to mark attempt as FAILED:', e.message));
 
-      console.error('Wompi payment link error:', error.response?.data || error.message);
-      throw new AppError('Error al crear link de pago de Wompi', 500, 'WOMPI_CHECKOUT_ERROR');
+      const wompiError = error.response?.data || { message: error.message };
+      console.error('[wompi] createCheckout failed:', JSON.stringify(wompiError));
+      const errDetail = wompiError?.error;
+      const errMsg = errDetail?.reason || errDetail?.message || wompiError?.message || JSON.stringify(wompiError);
+      const appError = new AppError(errMsg, 500, 'WOMPI_CHECKOUT_ERROR');
+      appError.wompiResponse = wompiError;
+      throw appError;
     }
   }
 
@@ -99,23 +148,6 @@ class WompiService {
     const rand = crypto.randomBytes(2).toString('hex');
     const number = invoice.invoiceNumber || invoice.id.slice(-8);
     return `${number}-${ts}-${rand}`;
-  }
-
-  // Checkout signature: sha256(reference + amount_in_cents + currency + integrity_secret).
-  // Used to harden the redirect URL so an attacker can't tamper with the
-  // amount/reference. The integrity_secret is a different value from the
-  // events_secret — see constructor.
-  // Wompi Widget docs: https://docs.wompi.co/docs/colombia/integridad
-  generateCheckoutSignature(reference, amount, currency) {
-    if (!this.integrityKey) {
-      throw new AppError(
-        'WOMPI_INTEGRITY_KEY no está configurado. Agrega la clave de integridad de Wompi al .env.',
-        500,
-        'WOMPI_INTEGRITY_KEY_MISSING'
-      );
-    }
-    const concatenatedString = `${reference}${amount}${currency}${this.integrityKey}`;
-    return crypto.createHash('sha256').update(concatenatedString).digest('hex');
   }
 
   // Webhook signature per https://docs.wompi.co/docs/colombia/eventos:
@@ -380,251 +412,24 @@ class WompiService {
     });
   }
 
-  async getTransaction(transactionId) {
-    try {
-      const response = await axios.get(
-        `${this.baseURL}/transactions/${transactionId}`,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi get transaction error:', error.response?.data || error.message);
-      throw new AppError('Error al obtener transacción de Wompi', 500, 'WOMPI_GET_TRANSACTION_ERROR');
-    }
-  }
-
-  async refundTransaction(transactionId, amount) {
-    try {
-      const refundData = {
-        amount_in_cents: amount,
-        reason: 'Refund requested by customer'
-      };
-
-      const response = await axios.post(
-        `${this.baseURL}/transactions/${transactionId}/refunds`,
-        refundData,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi refund error:', error.response?.data || error.message);
-      throw new AppError('Error al procesar reembolso en Wompi', 500, 'WOMPI_REFUND_ERROR');
-    }
-  }
-
-  async createPaymentSource(paymentSourceData) {
+  // Lightweight auth test — creates a minimal payment link without persisting
+  // anything. Used by the Wompi-config test route; does NOT create an attempt
+  // or payment_link DB row.
+  async createRawPaymentLink(linkData) {
     try {
       const response = await axios.post(
-        `${this.baseURL}/payment_sources`,
-        paymentSourceData,
+        `${this.baseURL}/payment_links`,
+        linkData,
         { headers: this.getAuthHeaders() }
       );
-
       return response.data.data;
     } catch (error) {
-      console.error('Wompi create payment source error:', error.response?.data || error.message);
-      throw new AppError('Error al crear fuente de pago en Wompi', 500, 'WOMPI_CREATE_SOURCE_ERROR');
+      console.error('[wompi] createRawPaymentLink failed:', error.response?.data || error.message);
+      const wompiError = error.response?.data || {};
+      const errDetail = wompiError?.error;
+      const errMsg = errDetail?.reason || errDetail?.message || error.message;
+      throw new AppError(errMsg, 500, 'WOMPI_RAW_LINK_ERROR');
     }
-  }
-
-  async getPaymentSource(paymentSourceId) {
-    try {
-      const response = await axios.get(
-        `${this.baseURL}/payment_sources/${paymentSourceId}`,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi get payment source error:', error.response?.data || error.message);
-      throw new AppError('Error al obtener fuente de pago de Wompi', 500, 'WOMPI_GET_SOURCE_ERROR');
-    }
-  }
-
-  async createPaymentIntent(paymentIntentData) {
-    try {
-      const response = await axios.post(
-        `${this.baseURL}/payment_intents`,
-        paymentIntentData,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi create payment intent error:', error.response?.data || error.message);
-      throw new AppError('Error al crear intento de pago en Wompi', 500, 'WOMPI_CREATE_INTENT_ERROR');
-    }
-  }
-
-  async getPaymentIntent(paymentIntentId) {
-    try {
-      const response = await axios.get(
-        `${this.baseURL}/payment_intents/${paymentIntentId}`,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi get payment intent error:', error.response?.data || error.message);
-      throw new AppError('Error al obtener intento de pago de Wompi', 500, 'WOMPI_GET_INTENT_ERROR');
-    }
-  }
-
-  async acceptPaymentIntent(paymentIntentId) {
-    try {
-      const response = await axios.post(
-        `${this.baseURL}/payment_intents/${paymentIntentId}/accept`,
-        {},
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi accept payment intent error:', error.response?.data || error.message);
-      throw new AppError('Error al aceptar intento de pago en Wompi', 500, 'WOMPI_ACCEPT_INTENT_ERROR');
-    }
-  }
-
-  async rejectPaymentIntent(paymentIntentId, reason) {
-    try {
-      const response = await axios.post(
-        `${this.baseURL}/payment_intents/${paymentIntentId}/reject`,
-        { reason },
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi reject payment intent error:', error.response?.data || error.message);
-      throw new AppError('Error al rechazar intento de pago en Wompi', 500, 'WOMPI_REJECT_INTENT_ERROR');
-    }
-  }
-
-  async getTransactionHistory(filters = {}) {
-    try {
-      const params = new URLSearchParams();
-      
-      if (filters.startDate) params.append('created_at__gte', filters.startDate);
-      if (filters.endDate) params.append('created_at__lte', filters.endDate);
-      if (filters.status) params.append('status', filters.status);
-      if (filters.limit) params.append('limit', filters.limit);
-      if (filters.offset) params.append('offset', filters.offset);
-
-      const response = await axios.get(
-        `${this.baseURL}/transactions?${params}`,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi get transaction history error:', error.response?.data || error.message);
-      throw new AppError('Error al obtener historial de transacciones de Wompi', 500, 'WOMPI_GET_HISTORY_ERROR');
-    }
-  }
-
-  async getMerchantInfo() {
-    try {
-      const response = await axios.get(
-        `${this.baseURL}/me`,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi get merchant info error:', error.response?.data || error.message);
-      throw new AppError('Error al obtener información del comerciante de Wompi', 500, 'WOMPI_GET_MERCHANT_ERROR');
-    }
-  }
-
-  async getPaymentMethods() {
-    try {
-      const response = await axios.get(
-        `${this.baseURL}/payment_methods`,
-        { headers: this.getAuthHeaders() }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi get payment methods error:', error.response?.data || error.message);
-      throw new AppError('Error al obtener métodos de pago de Wompi', 500, 'WOMPI_GET_METHODS_ERROR');
-    }
-  }
-
-  async createTokenizedCard(cardData) {
-    try {
-      const response = await axios.post(
-        `${this.baseURL}/tokens/cards`,
-        cardData,
-        { headers: { 'Content-Type': 'application/json' } }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi tokenize card error:', error.response?.data || error.message);
-      throw new AppError('Error al tokenizar tarjeta en Wompi', 500, 'WOMPI_TOKENIZE_CARD_ERROR');
-    }
-  }
-
-  async createTokenizedNequi(nequiData) {
-    try {
-      const response = await axios.post(
-        `${this.baseURL}/tokens/nequi`,
-        nequiData,
-        { headers: { 'Content-Type': 'application/json' } }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi tokenize Nequi error:', error.response?.data || error.message);
-      throw new AppError('Error al tokenizar Nequi en Wompi', 500, 'WOMPI_TOKENIZE_NEQUI_ERROR');
-    }
-  }
-
-  async createTokenizedBancolombia(bancolombiaData) {
-    try {
-      const response = await axios.post(
-        `${this.baseURL}/tokens/bancolombia`,
-        bancolombiaData,
-        { headers: { 'Content-Type': 'application/json' } }
-      );
-
-      return response.data.data;
-    } catch (error) {
-      console.error('Wompi tokenize Bancolombia error:', error.response?.data || error.message);
-      throw new AppError('Error al tokenizar Bancolombia en Wompi', 500, 'WOMPI_TOKENIZE_BANCOLOMBIA_ERROR');
-    }
-  }
-
-  async sendPaymentConfirmation(invoice, transactionId) {
-    if (!invoice.client) return;
-    dispatch({
-      type: NOTIFICATION_TYPES.PAYMENT_RECEIVED,
-      client: invoice.client,
-      payload: { invoice, payment: { amount: invoice.total || invoice.amount } }
-    }).catch(e => console.warn('[wompi] sendPaymentConfirmation dispatch failed:', e.message));
-  }
-
-  async sendPaymentFailure(invoice, transactionId) {
-    if (!invoice.client) return;
-    dispatch({
-      type: NOTIFICATION_TYPES.PAYMENT_FAILED,
-      client: invoice.client,
-      payload: {
-        invoice,
-        cta: { text: 'Reintentar pago', url: `${env.FRONTEND_URL}/invoices/${invoice.id}` }
-      }
-    }).catch(e => console.warn('[wompi] sendPaymentFailure dispatch failed:', e.message));
-  }
-
-  // Helper method to validate webhook integrity
-  validateWebhookIntegrity(payload, signature) {
-    const integrityKey = this.eventsKey;
-    const concatenatedString = JSON.stringify(payload) + integrityKey;
-    const expectedSignature = crypto.createHash('sha256').update(concatenatedString).digest('hex');
-    
-    return signature === expectedSignature;
   }
 
   // Method to handle different webhook event types
@@ -664,3 +469,5 @@ class WompiService {
 }
 
 export const wompiService = new WompiService();
+// Load DB config at startup so keys from the UI take effect immediately
+wompiService.loadConfigFromDb().catch(() => {});

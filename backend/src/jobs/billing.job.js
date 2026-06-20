@@ -10,9 +10,13 @@ class BillingJob {
   }
 
   setupSchedules() {
-    // Generate monthly invoices - Run on 1st of each month at 2:00 AM
-    cron.schedule('0 2 1 * *', async () => {
-      console.log('🔄 Starting monthly invoice generation job...');
+    // Generate invoices according to the ACTIVE billing cycle. Runs DAILY at
+    // 2:00 AM but only generates once the cycle's collectionStart has arrived
+    // (idempotent — see invoiceService.generateInvoicesForActiveCycle). This
+    // replaces the old fixed "1st of the month" schedule so invoicing always
+    // follows the operator-configured ciclo de cobro.
+    cron.schedule('0 2 * * *', async () => {
+      console.log('🔄 Revisando ciclo de cobro para generación automática de facturas...');
       await this.generateMonthlyInvoices();
     });
 
@@ -71,8 +75,20 @@ class BillingJob {
     const startTime = Date.now();
 
     try {
-      const results = await invoiceService.generateMonthlyInvoices();
-      
+      // Cycle-driven: only generates when there is an active cycle whose
+      // collectionStart has arrived. issueDate/dueDate come from the cycle.
+      const out = await invoiceService.generateInvoicesForActiveCycle();
+      if (!out.ran) {
+        console.log(
+          out.reason === 'no_active_cycle'
+            ? 'ℹ️ No hay ciclo de cobro activo — no se generan facturas automáticamente.'
+            : `ℹ️ El ciclo ${out.cycle?.year}-${String(out.cycle?.month).padStart(2, '0')} aún no inicia cobro (collectionStart en el futuro). Sin generación hoy.`
+        );
+        return;
+      }
+      const results = out.results;
+      console.log(`📅 Ciclo de cobro ${out.cycle.year}-${String(out.cycle.month).padStart(2, '0')} — generación automática de facturas`);
+
       console.log(`✅ Monthly invoice generation completed:`, {
         successful: results.successful.length,
         failed: results.failed.length,
@@ -399,7 +415,7 @@ class BillingJob {
               summary,
               company: {
                 name: process.env.COMPANY_NAME || 'Mi ISP',
-                city: process.env.COMPANY_CITY || 'Cali'
+                city: process.env.COMPANY_CITY || 'Jamundí'
               }
             }
           });

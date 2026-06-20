@@ -27,13 +27,44 @@ sw.addEventListener('activate', (event) => {
 });
 
 sw.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
+  const { request } = event;
+  const url = new URL(request.url);
+
   if (url.origin !== location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
   if (url.pathname.startsWith('/socket.io/')) return;
-  if (event.request.method !== 'GET') return;
+  if (request.method !== 'GET') return;
 
+  // Hashed build assets are immutable (their URL changes when content changes),
+  // so cache-first is safe and fast.
+  const isImmutable =
+    build.includes(url.pathname) || url.pathname.startsWith('/_app/immutable/');
+
+  if (isImmutable) {
+    event.respondWith(caches.match(request).then((cached) => cached || fetch(request)));
+    return;
+  }
+
+  // Everything else — navigations (HTML), the SPA fallback (200.html) and other
+  // static files — uses NETWORK-FIRST. This was the fix for the mobile
+  // "flicker / reload loop": cache-first used to serve a STALE app shell that
+  // referenced JS chunks a later deploy had already deleted → chunk-load error
+  // → SvelteKit auto-reload → loop. Network-first always picks up the latest
+  // deploy and only falls back to cache when truly offline.
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(request)
+      .then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(ASSETS).then((c) => c.put(request, copy)).catch(() => {});
+        }
+        return res;
+      })
+      .catch(async () => {
+        const cached = await caches.match(request);
+        if (cached) return cached;
+        // Last resort for client-side routes when offline: the SPA shell.
+        return (await caches.match('/200.html')) || (await caches.match('/index.html')) || Response.error();
+      })
   );
 });

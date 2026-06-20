@@ -200,7 +200,17 @@
         sendPaymentLink
       });
       sendResults = res;
-      showToast('success', res.message || 'Envío procesado');
+      // Honest status: the backend returns 207 with success:false on partial
+      // failure (the api client unwraps `data`, so inspect the rows directly).
+      const rows   = res?.results || [];
+      const failed = rows.filter(r => r.status === 'failed');
+      if (failed.length === 0) {
+        showToast('success', 'Envío completado correctamente');
+      } else if (failed.length === rows.length) {
+        showToast('error', 'No se pudo completar ningún envío');
+      } else {
+        showToast('error', `Envío parcial: ${failed.length} de ${rows.length} fallaron`);
+      }
     } catch (e) {
       sendError = e.message || 'Envío fallido';
     } finally {

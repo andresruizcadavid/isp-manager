@@ -15,4 +15,6 @@ export const clientsApi = {
   suspend:  (id)       => api.post(`/clients/${id}/suspend`),
   activate: (id)       => api.post(`/clients/${id}/activate`),
   nextPppoeNumber: ()  => api.get('/clients/next-pppoe-number'),
+  notifications: (id)  => api.get(`/clients/${id}/notifications`),
+  notify:   (id, data) => api.post(`/clients/${id}/notify`, data),
 };

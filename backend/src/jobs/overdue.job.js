@@ -379,9 +379,10 @@ Estimado/a ${invoice.client.name},
   }
 
   getNextRunTime() {
-    const now = new Date();
+    // Only the schedules actually registered in setupSchedules(). There is
+    // intentionally NO suspensionCheck — auto-suspension was removed per the
+    // operator's manual-only policy.
     const nextRuns = {
-      suspensionCheck: this.getNextCronRun('0 8 * * *'),
       reactivationCheck: this.getNextCronRun('0 10 * * *'),
       finalWarnings: this.getNextCronRun('0 18 * * *'),
       cleanup: this.getNextCronRun('0 2 * * 0')
@@ -394,10 +395,7 @@ Estimado/a ${invoice.client.name},
     const now = new Date();
     const nextRun = new Date(now);
     
-    if (cronExpression === '0 8 * * *') {
-      nextRun.setDate(nextRun.getDate() + 1);
-      nextRun.setHours(8, 0, 0, 0);
-    } else if (cronExpression === '0 10 * * *') {
+    if (cronExpression === '0 10 * * *') {
       nextRun.setDate(nextRun.getDate() + 1);
       nextRun.setHours(10, 0, 0, 0);
     } else if (cronExpression === '0 18 * * *') {

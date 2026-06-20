@@ -45,6 +45,10 @@ function clientVars(client, overrides = {}) {
  */
 async function resolveAudience(filter) {
   const where = {};
+  // Explicit selection wins: when the operator picked specific clients via the
+  // UI checkboxes we send ONLY to those (the other filters were used to build
+  // the candidate list and are redundant here, but kept for safety/AND).
+  if (filter?.clientIds?.length) where.id = { in: filter.clientIds };
   if (filter?.zoneId)  where.zoneId  = Number(filter.zoneId);
   if (filter?.planId)  where.planId  = filter.planId;
   if (filter?.status)  where.status  = filter.status;
@@ -63,6 +67,112 @@ async function resolveAudience(filter) {
       }
     }
   });
+}
+
+/** Load a single client with everything sendToClient needs (same includes as
+ *  resolveAudience). Used by the single-client sends: campaign test + the
+ *  manual "Enviar notificación" on the client page. */
+export async function loadClientForSend(clientId) {
+  return prisma.client.findUnique({
+    where: { id: clientId },
+    include: {
+      plan: { select: { name: true } },
+      zone: { select: { name: true } },
+      mikrotikAccount: { select: { remoteAddress: true } },
+      invoices: {
+        where: { status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
+        select: { id: true, status: true, total: true, amount: true, balanceDue: true, dueDate: true }
+      }
+    }
+  });
+}
+
+/**
+ * Per-client send shared by the campaign runner, the campaign test send, and
+ * the manual single-client send. Generates the payment link when requested,
+ * renders the template, sends on each channel and writes one NotificationLog
+ * per channel. Returns { sent, failed }.
+ *
+ * `client` must be loaded with plan/zone/mikrotikAccount/invoices (see
+ * resolveAudience / loadClientForSend). `campaignId` is null for single sends
+ * (test / manual) so they don't pollute a campaign's counters.
+ */
+export async function sendToClient({
+  client, template, channel, generatePaymentLinks = false,
+  campaignId = null, type = 'GENERAL_ANNOUNCEMENT'
+}) {
+  const channels = channel === 'BOTH' ? ['EMAIL', 'WHATSAPP'] : [channel];
+
+  // Generate payment link from the oldest open invoice when requested.
+  let paymentLinkUrl = '';
+  let paymentLinkId = null;
+  if (generatePaymentLinks) {
+    const pending = (client.invoices || []).filter(i => ['PENDING', 'OVERDUE', 'PARTIAL'].includes(i.status));
+    const oldest = pending.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+    if (oldest) {
+      try {
+        const link = await paymentLinkService.createForInvoice(oldest.id);
+        paymentLinkUrl = link.checkoutUrl;
+        paymentLinkId = link.id;
+      } catch (e) {
+        console.error(`[sendToClient ${client.id}] failed to create payment link: ${e.message}`);
+      }
+    }
+  }
+
+  const vars = clientVars(client, { paymentLinkUrl });
+  const subject = renderTemplate(template.subject || '', vars);
+  const body    = renderTemplate(template.body, vars);
+
+  let sent = 0, failed = 0;
+  for (const ch of channels) {
+    const recipient = ch === 'EMAIL' ? (client.email || '') : (client.phone || '');
+    if (!recipient) {
+      await prisma.notificationLog.create({
+        data: {
+          clientId: client.id, campaignId, type, channel: ch, recipient: '',
+          subject: ch === 'EMAIL' ? subject : null, content: body,
+          status: 'failed',
+          error: ch === 'EMAIL' ? 'Cliente sin email' : 'Cliente sin teléfono'
+        }
+      }).catch(() => {});
+      failed++;
+      continue;
+    }
+    try {
+      if (ch === 'EMAIL') {
+        const cta = paymentLinkUrl ? { text: 'Pagar ahora', url: paymentLinkUrl } : undefined;
+        await notificationService.sendEmailRaw({
+          to: recipient, subject, body, cta, preset: template.preset || undefined
+        });
+      } else {
+        await notificationService.sendWhatsApp({ to: recipient, message: body });
+      }
+      if (paymentLinkId && ch === 'EMAIL') {
+        await prisma.paymentLink.update({
+          where: { id: paymentLinkId }, data: { sentAt: new Date() }
+        }).catch(e => console.error(`[sendToClient ${client.id}] failed to update sentAt: ${e.message}`));
+      }
+      await prisma.notificationLog.create({
+        data: {
+          clientId: client.id, campaignId, type, channel: ch, recipient,
+          subject: ch === 'EMAIL' ? subject : null, content: body,
+          status: 'sent', sentAt: new Date()
+        }
+      });
+      sent++;
+    } catch (e) {
+      await prisma.notificationLog.create({
+        data: {
+          clientId: client.id, campaignId, type, channel: ch, recipient,
+          subject: ch === 'EMAIL' ? subject : null, content: body,
+          status: 'failed', error: e.message?.slice(0, 500)
+        }
+      }).catch(logErr => console.error(`[sendToClient ${client.id}] could not write failed log:`, logErr.message));
+      failed++;
+    }
+  }
+  return { sent, failed };
 }
 
 /**
@@ -187,109 +297,21 @@ export async function runCampaign(campaignId) {
   let failed = 0;
 
   for (const client of audience) {
-    // Generate payment link if the campaign has the flag enabled
-    let paymentLinkUrl = '';
-    let paymentLinkId = null;
-    if (campaign.generatePaymentLinks) {
-      const pending = (client.invoices || []).filter(i => ['PENDING', 'OVERDUE', 'PARTIAL'].includes(i.status));
-      const oldest = pending.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
-      if (oldest) {
-        try {
-          const link = await paymentLinkService.createForInvoice(oldest.id);
-          paymentLinkUrl = link.checkoutUrl;
-          paymentLinkId = link.id;
-        } catch (e) {
-          console.error(`[campaign ${campaignId}] failed to create payment link for client ${client.id}: ${e.message}`);
-        }
-      }
-    }
+    const r = await sendToClient({
+      client,
+      template: campaign.template,
+      channel: campaign.channel,
+      generatePaymentLinks: campaign.generatePaymentLinks,
+      campaignId
+    });
+    sent   += r.sent;
+    failed += r.failed;
 
-    const vars = clientVars(client, { paymentLinkUrl });
-    const subject = renderTemplate(campaign.template.subject || '', vars);
-    const body    = renderTemplate(campaign.template.body, vars);
-
-    for (const ch of channels) {
-      const recipient = ch === 'EMAIL' ? (client.email || '') : (client.phone || '');
-      if (!recipient) {
-        await prisma.notificationLog.create({
-          data: {
-            clientId: client.id,
-            campaignId,
-            type: 'GENERAL_ANNOUNCEMENT',
-            channel: ch,
-            recipient: '',
-            subject: ch === 'EMAIL' ? subject : null,
-            content: body,
-            status: 'failed',
-            error: ch === 'EMAIL' ? 'Cliente sin email' : 'Cliente sin teléfono'
-          }
-        });
-        failed++;
-        continue;
-      }
-
-      try {
-        console.log(`[campaign ${campaignId}] → ${ch} to ${recipient}`);
-        if (ch === 'EMAIL') {
-          const cta = paymentLinkUrl ? { text: 'Pagar ahora', url: paymentLinkUrl } : undefined;
-          await notificationService.sendEmailRaw({
-            to: recipient,
-            subject,
-            body,
-            cta,
-            preset: campaign.template.preset || undefined
-          });
-        } else {
-          await notificationService.sendWhatsApp({ to: recipient, message: body });
-        }
-        // Mark PaymentLink as sent when email is delivered
-        if (paymentLinkId && ch === 'EMAIL') {
-          await prisma.paymentLink.update({
-            where: { id: paymentLinkId },
-            data: { sentAt: new Date() }
-          }).catch(e => console.error(`[campaign ${campaignId}] failed to update sentAt: ${e.message}`));
-        }
-        await prisma.notificationLog.create({
-          data: {
-            clientId: client.id,
-            campaignId,
-            type: 'GENERAL_ANNOUNCEMENT',
-            channel: ch,
-            recipient,
-            subject: ch === 'EMAIL' ? subject : null,
-            content: body,
-            status: 'sent',
-            sentAt: new Date()
-          }
-        });
-        sent++;
-        console.log(`[campaign ${campaignId}]   ✓ sent (${sent + failed}/${total})`);
-      } catch (e) {
-        console.error(`[campaign ${campaignId}]   ✗ failed: ${e.message}`);
-        await prisma.notificationLog.create({
-          data: {
-            clientId: client.id,
-            campaignId,
-            type: 'GENERAL_ANNOUNCEMENT',
-            channel: ch,
-            recipient,
-            subject: ch === 'EMAIL' ? subject : null,
-            content: body,
-            status: 'failed',
-            error: e.message?.slice(0, 500)
-          }
-        }).catch(logErr => console.error(`[campaign ${campaignId}] could not write failed log:`, logErr.message));
-        failed++;
-      }
-
-      // Update counters every 10 deliveries so the UI can poll mid-run.
-      if ((sent + failed) % 10 === 0) {
-        await prisma.notificationCampaign.update({
-          where: { id: campaignId },
-          data: { sentCount: sent, failedCount: failed }
-        }).catch(() => {});
-      }
-    }
+    // Update counters after each client so the UI poll sees live progress.
+    await prisma.notificationCampaign.update({
+      where: { id: campaignId },
+      data: { sentCount: sent, failedCount: failed }
+    }).catch(() => {});
   }
 
   // Final status:

@@ -36,6 +36,7 @@
     monthlyFee: '',
     notes: '',
     planId: '',
+    connectionType: 'FIBER',
     mikrotik: {
       username: '', password: '', remoteAddress: '',
       localAddress: '', profileName: '', coordinates: '',
@@ -194,8 +195,85 @@
 
   // Reactively (re)load profiles whenever the zone's router changes.
   // Single-page form means we always want fresh profiles once a zone is set.
+  // Loading the profiles IS our connectivity probe: if they come back the
+  // router is reachable; if it errors, the zone's router is offline.
   $: if (selectedZone?.router?.id && selectedZone.router.id !== profilesRouterId) {
     loadProfiles(selectedZone.router.id);
+  }
+
+  // ── Unified "router connection" status for the selected zone ──────────
+  // Derived from the profiles load so the operator gets one clear signal the
+  // moment a zone is picked: connecting → connected → error (with retry),
+  // instead of a silent spinner buried in the profile field.
+  $: routerConnState = !selectedZone
+        ? 'idle'
+        : profilesLoading
+          ? 'connecting'
+          : profilesError
+            ? 'error'
+            : profilesRouterId === selectedZone.router?.id
+              ? 'connected'
+              : 'connecting';
+
+  function retryRouterConnection() {
+    if (selectedZone?.router?.id) loadProfiles(selectedZone.router.id);
+  }
+
+  // ── Adopt-existing-account flow ─────────────────────────────────
+  // Clients installed in the field may already have a PPPoE secret on the
+  // router without being registered here. "Verificar en el router" does a
+  // READ-ONLY lookup; if found, the operator can confirm and we pre-fill the
+  // form + mark reuseExisting so the backend ADOPTS the secret (no device
+  // writes, the live service is never touched).
+  let lookupBusy = false;
+  let lookupError = '';
+  let lookupResult = null;      // { found, secret, active, suggestedPlan, linkedClient }
+  let lookupChecked = '';       // username we last checked (avoid re-checks)
+  let lookupApplied = false;    // operator confirmed the import
+
+  async function checkExistingAccount() {
+    const username = (form.mikrotik.username || '').trim();
+    const rid = selectedZone?.router?.id;
+    lookupError = ''; lookupResult = null; lookupApplied = false;
+    form.mikrotik.reuseExisting = false;
+    if (!username) { lookupError = 'Escribe primero el usuario PPPoE.'; return; }
+    if (!rid)      { lookupError = 'La zona seleccionada no tiene router asignado.'; return; }
+    lookupBusy = true;
+    try {
+      const data = await routersApi.pppSecretLookup(rid, username);
+      lookupResult = data || { found: false };
+      lookupChecked = username;
+    } catch (e) {
+      lookupError = e.message || 'No se pudo consultar el router.';
+    } finally { lookupBusy = false; }
+  }
+
+  function applyLookup() {
+    const s = lookupResult?.secret;
+    if (!s) return;
+    // Fill from the router. The IP in use (active session) wins over the
+    // secret's static remote-address; existing operator input is overwritten
+    // deliberately — the router is the source of truth for an adopted account.
+    if (s.password) form.mikrotik.password = s.password;
+    const ip = lookupResult.active?.address || s.remoteAddress;
+    if (ip) form.mikrotik.remoteAddress = String(ip).split('/')[0];
+    if (s.localAddress) form.mikrotik.localAddress = String(s.localAddress).split('/')[0];
+    if (s.profile) form.mikrotik.profileName = s.profile;
+    if (lookupResult.suggestedPlan?.id) form.planId = lookupResult.suggestedPlan.id;
+    form.mikrotik.reuseExisting = true;
+    lookupApplied = true;
+  }
+
+  function dismissLookup() {
+    lookupResult = null;
+    lookupApplied = false;
+    form.mikrotik.reuseExisting = false;
+  }
+
+  // Username changed after a check → stale result, reset the adopt state.
+  $: if (lookupChecked && (form.mikrotik.username || '').trim() !== lookupChecked) {
+    dismissLookup();
+    lookupChecked = '';
   }
 
   // ── Progress dialog state machine ──────────────────
@@ -254,6 +332,7 @@
                           : undefined,
         notes:          form.notes,
         planId:         form.planId || null,
+        connectionType: form.connectionType || 'FIBER',
         // Note: no routerId — server resolves from zone.
         mikrotik: {
           username:      form.mikrotik.username,
@@ -263,6 +342,9 @@
           profileName:   form.mikrotik.profileName,
           coordinates:   form.mikrotik.coordinates,
           status:        form.mikrotik.status,
+          // Adopt flow: the operator confirmed this secret already exists on
+          // the router — backend links it instead of creating a new one.
+          reuseExisting: !!form.mikrotik.reuseExisting,
         }
       };
       const created = await clientsApi.create(payload);
@@ -408,6 +490,39 @@
             {/each}
           </div>
 
+          <!-- ── Router connection status for the selected zone ──────────
+               One clear signal: connecting / connected / offline. The
+               profile + IP fields downstream depend on this link being up. -->
+          {#if routerConnState !== 'idle'}
+            {#if routerConnState === 'connecting'}
+              <div class="mt-3 flex items-center gap-2.5 rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm text-blue-800">
+                <Loader2 size={15} class="animate-spin flex-shrink-0" />
+                <span>Conectando con el router <span class="font-semibold">{selectedZone?.router?.name || ''}</span>…</span>
+              </div>
+            {:else if routerConnState === 'connected'}
+              <div class="mt-3 flex items-center gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50/60 px-3 py-2.5 text-sm text-emerald-800">
+                <ShieldCheck size={15} class="flex-shrink-0 text-emerald-600" />
+                <span>
+                  Conectado con <span class="font-semibold">{selectedZone?.router?.name || ''}</span>
+                  · <span class="font-medium">{profiles.length}</span> {profiles.length === 1 ? 'perfil' : 'perfiles'} cargados.
+                  Los campos del servicio ya responden a esta zona.
+                </span>
+              </div>
+            {:else if routerConnState === 'error'}
+              <div class="mt-3 flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
+                <AlertCircle size={15} class="mt-0.5 flex-shrink-0" />
+                <div class="flex-1 min-w-0">
+                  <div class="font-medium">No se pudo conectar con el router de la zona <span class="font-semibold">{selectedZone?.router?.name || ''}</span>.</div>
+                  {#if profilesError}<div class="text-xs text-red-600/80 truncate" title={profilesError}>{profilesError}</div>{/if}
+                  <button type="button" on:click={retryRouterConnection}
+                          class="mt-1.5 inline-flex items-center gap-1.5 text-xs font-semibold text-brand-700 hover:underline">
+                    <Loader2 size={12} class={profilesLoading ? 'animate-spin' : ''} /> Reintentar conexión
+                  </button>
+                </div>
+              </div>
+            {/if}
+          {/if}
+
         {/if}
       </div>
     </div>
@@ -481,7 +596,15 @@
             <span class="text-slate-400 text-xs font-normal ml-1">opcional</span>
           </label>
           <input id="city" type="text" bind:value={form.city}
-                 placeholder="Cali" class="input"/>
+                 placeholder="Jamundí" class="input"/>
+        </div>
+
+        <div>
+          <label for="conn-type" class="label">Tecnología de conexión</label>
+          <select id="conn-type" bind:value={form.connectionType} class="input">
+            <option value="FIBER">🔵 Fibra óptica</option>
+            <option value="WIRELESS">📡 Inalámbrico</option>
+          </select>
         </div>
 
         <div>
@@ -551,8 +674,62 @@
             Usuario en el RB (PPPoE)
             <span class="text-slate-400 text-xs font-normal ml-1">Auto-generado</span>
           </label>
-          <input id="username" type="text" bind:value={form.mikrotik.username}
-                 placeholder="0026maria_godoy_urrea" class="input font-mono"/>
+          <div class="flex gap-2">
+            <input id="username" type="text" bind:value={form.mikrotik.username}
+                   placeholder="0026maria_godoy_urrea" class="input font-mono flex-1"/>
+            <button type="button" on:click={checkExistingAccount} disabled={lookupBusy}
+                    class="btn-ghost whitespace-nowrap" title="Consulta (solo lectura) si esta cuenta ya existe en el router de la zona">
+              {#if lookupBusy}Verificando…{:else}🔍 Verificar en el router{/if}
+            </button>
+          </div>
+          {#if lookupError}
+            <p class="text-[11px] text-amber-700 mt-1.5">{lookupError}</p>
+          {/if}
+
+          {#if lookupResult && !lookupResult.found}
+            <p class="text-[11px] text-emerald-700 mt-1.5">
+              ✓ La cuenta no existe en el router — se creará como cliente nuevo.
+            </p>
+          {/if}
+
+          {#if lookupResult?.found && lookupResult.linkedClient}
+            <div class="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs text-amber-800 leading-relaxed">
+              ⚠️ <strong>Esta cuenta ya está registrada en el sistema</strong> y vinculada al cliente
+              <a href={`/clients/${lookupResult.linkedClient.id}`} class="font-semibold underline">{lookupResult.linkedClient.name}</a>.
+              No se puede crear un cliente nuevo con este usuario — edita el cliente existente.
+            </div>
+          {:else if lookupResult?.found}
+            <div class="mt-2 rounded-lg bg-blue-50 border border-blue-200 px-3 py-2.5 text-xs text-blue-900 leading-relaxed space-y-2">
+              <p>
+                🔍 <strong>Esta cuenta ya existe en el MikroTik</strong>
+                {#if lookupResult.active}<span class="text-emerald-700 font-medium"> · en línea ({lookupResult.active.uptime || 'activa'})</span>{:else}<span class="text-slate-500"> · sin sesión activa</span>{/if}{#if lookupResult.secret.disabled}<span class="text-red-600 font-medium"> · deshabilitada en el router</span>{/if}
+              </p>
+              <p class="font-mono text-[11px] text-blue-800">
+                {#if lookupResult.active?.address || lookupResult.secret.remoteAddress}IP: {lookupResult.active?.address || lookupResult.secret.remoteAddress} · {/if}
+                {#if lookupResult.secret.profile}Perfil: {lookupResult.secret.profile} · {/if}
+                {#if lookupResult.suggestedPlan}Plan sugerido: {lookupResult.suggestedPlan.name} · {/if}
+                Contraseña PPPoE: {lookupResult.secret.password ? 'disponible' : 'no visible'}
+              </p>
+              <p class="text-[11px] text-blue-700">
+                Puedo completar el formulario con estos datos. <strong>Solo se leen datos</strong> — no se
+                modifica nada en el router ni se interrumpe el servicio del cliente.
+              </p>
+              {#if lookupApplied}
+                <p class="text-emerald-700 font-semibold">✓ Datos aplicados al formulario. Al guardar, la cuenta existente será adoptada (no se recreará).</p>
+              {:else}
+                <div class="flex gap-2 pt-0.5">
+                  <button type="button" on:click={applyLookup}
+                          class="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs">
+                    Usar estos datos
+                  </button>
+                  <button type="button" on:click={dismissLookup}
+                          class="px-3 py-1.5 rounded-lg border border-blue-300 text-blue-700 font-medium text-xs hover:bg-blue-100">
+                    Ignorar
+                  </button>
+                </div>
+              {/if}
+            </div>
+          {/if}
         </div>
 
         <div>

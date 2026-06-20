@@ -2,6 +2,7 @@ import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { invoiceService } from '../services/invoice.service.js';
+import { paymentLinkService } from '../services/payment-link.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
 
@@ -669,17 +670,15 @@ class InvoicesController {
   generateInvoicePDF = asyncHandler(async (req, res) => {
     const { id } = req.params;
 
+    // NOTE: Invoice has no `plan`/`creator` relation — the plan is reached
+    // through the client (Client.plan). Including them directly threw a
+    // Prisma validation error (pre-existing bug). `items` powers the PDF
+    // line-item table; when absent the PDF synthesizes a single row.
     const invoice = await prisma.invoice.findUnique({
       where: { id },
       include: {
-        client: true,
-        plan: true,
-        creator: {
-          select: {
-            id: true,
-            name: true
-          }
-        }
+        client: { include: { plan: true } },
+        items: true
       }
     });
 
@@ -752,7 +751,9 @@ class InvoicesController {
 
     const invoice = await prisma.invoice.findUnique({
       where: { id },
-      include: { client: true }
+      include: {
+        client: { include: { plan: true } }
+      }
     });
 
     if (!invoice) {
@@ -761,15 +762,27 @@ class InvoicesController {
 
     const results = [];
 
+    // Amount actually owed / charged by the Wompi link, so the figure shown to
+    // the customer in email + WhatsApp matches what they will be charged.
+    // `amount` is the pre-tax subtotal; `total` = amount + tax − discount.
+    const invoiceValue = invoice.total ?? invoice.amount;
+    const chargeAmount = invoice.balanceDue > 0 ? invoice.balanceDue : invoiceValue;
+
     // Generate Wompi payment link if requested
     let paymentLinkUrl = null;
+    let paymentLinkResult = null;
     if (sendPaymentLink) {
       try {
-        const { default: wompiService } = await import('../services/wompi.service.js');
-        const checkout = await wompiService.createCheckout(invoice);
-        paymentLinkUrl = checkout.checkoutUrl || checkout.url;
+        const paymentLink = await paymentLinkService.createForInvoice(id, {
+          expiresInDays: 30,
+          redirectUrl: `${env.FRONTEND_URL}/invoices/${id}?wompi=return`
+        });
+        paymentLinkUrl = paymentLink.checkoutUrl;
+        paymentLinkResult = { action: 'payment_link', channel: 'wompi', status: 'sent', checkoutUrl: paymentLinkUrl };
       } catch (e) {
-        results.push({ action: 'payment_link', channel: 'wompi', status: 'failed', error: e.message });
+        const realError = e.response?.data || e.message;
+        paymentLinkResult = { action: 'payment_link', channel: 'wompi', status: 'failed', error: typeof realError === 'string' ? realError : JSON.stringify(realError) };
+        console.error('[sendInvoice] Wompi payment link error:', realError);
       }
     }
 
@@ -814,11 +827,11 @@ class InvoicesController {
 
               // Build HTML content with branded template
               const built = notificationService.buildEmailTemplate('invoice', { invoice, client: invoice.client, company });
-              const subject = `PDF adjunto - Factura ${invoice.invoiceNumber}`;
+              const subject = `Tu factura ${invoice.invoiceNumber} en PDF — Internet Online`;
               const html = renderEmailTemplate({
-                icon: EMAIL_PRESETS.invoice?.icon || '📄',
-                title: built.title || subject,
-                body: `Adjuntamos el PDF de la factura ${invoice.invoiceNumber}.`,
+                icon: EMAIL_PRESETS.invoice?.icon || '🧾',
+                title: built.title || 'Tu factura ya está lista',
+                body: `Hola ${(invoice.client?.name || '').split(' ')[0] || 'vecino(a)'},\n\nAdjuntamos el PDF de tu factura ${invoice.invoiceNumber} de Internet Online. Para que tu hogar siempre esté conectado, recuerda pagar antes de la fecha de vencimiento.`,
                 fields: built.fields || [],
                 companyName: from.fromName,
                 companyDomain: from.fromEmail?.split('@')[1]
@@ -832,25 +845,35 @@ class InvoicesController {
                 html,
                 attachments: [{ filename: `factura-${invoice.invoiceNumber}.pdf`, content: pdfBuffer }]
               });
+
+              results.push({ action: 'send_pdf', channel: 'email', status: 'sent' });
             } catch (pdfErr) {
               results.push({ action: 'send_pdf', channel: 'email', status: 'failed', error: pdfErr.message });
             }
           }
 
-          // Send payment link email if requested
+          // Send payment link email if requested. Own try/catch + explicit
+          // result row so a failure here is reported independently and does
+          // NOT flip the (already-sent) invoice email to failed.
           if (paymentLinkUrl) {
-            await notificationService.sendEmailRaw({
-              to: invoice.client.email,
-              subject: `Link de Pago - Factura ${invoice.invoiceNumber}`,
-              body: `Estimado(a) ${invoice.client.name || 'cliente'},\n\nPuede realizar el pago de su factura ${invoice.invoiceNumber} por $${(invoice.amount / 100).toLocaleString('es-CO')} COP a través del siguiente enlace de pago seguro:\n\n${paymentLinkUrl}`,
-              cta: { text: 'Pagar Ahora', url: paymentLinkUrl },
-              preset: 'invoice'
-            });
+            try {
+              await notificationService.sendEmailRaw({
+                to: invoice.client.email,
+                subject: `Paga tu factura ${invoice.invoiceNumber} en línea — Internet Online`,
+                title: 'Paga tu internet en un clic',
+                body: `Hola ${(invoice.client.name || '').split(' ')[0] || 'vecino(a)'},\n\nPagar tu factura ${invoice.invoiceNumber} por $${(chargeAmount / 100).toLocaleString('es-CO')} COP es muy fácil y 100% seguro. Solo toca el botón y listo: tu hogar sigue conectado de verdad.`,
+                cta: { text: 'Pagar ahora', url: paymentLinkUrl },
+                preset: 'invoice'
+              });
 
-            await notificationService.logNotification(
-              invoice.clientId, 'GENERAL_ANNOUNCEMENT', 'EMAIL',
-              `Link de pago factura ${invoice.invoiceNumber} enviado`
-            );
+              await notificationService.logNotification(
+                invoice.clientId, 'GENERAL_ANNOUNCEMENT', 'EMAIL',
+                `Link de pago factura ${invoice.invoiceNumber} enviado`
+              );
+              results.push({ action: 'send_link', channel: 'email', status: 'sent' });
+            } catch (linkErr) {
+              results.push({ action: 'send_link', channel: 'email', status: 'failed', error: linkErr.message });
+            }
           }
         } else if (ch === 'whatsapp') {
           if (!invoice.client?.phone) {
@@ -858,7 +881,7 @@ class InvoicesController {
             continue;
           }
 
-          const amountFormatted = `$${(invoice.amount / 100).toLocaleString('es-CO')} COP`;
+          const amountFormatted = `$${(invoiceValue / 100).toLocaleString('es-CO')} COP`;
           const dueFormatted = invoice.dueDate
             ? new Date(invoice.dueDate).toLocaleDateString('es-CO')
             : '—';
@@ -871,18 +894,25 @@ class InvoicesController {
             msg += `🔗 *Link de pago:* ${paymentLinkUrl}\n\n`;
           }
 
-          await notificationService.sendWhatsApp({ to: invoice.client.phone, message: msg });
+          const waResult = await notificationService.sendWhatsApp({ to: invoice.client.phone, message: msg });
 
-          await notificationService.logNotification(
-            invoice.clientId, 'GENERAL_ANNOUNCEMENT', 'WHATSAPP',
-            `Factura ${invoice.invoiceNumber} enviada por WhatsApp`
-          );
-
-          results.push({ action: 'send', channel: 'whatsapp', status: 'sent' });
+          if (waResult?.ok) {
+            await notificationService.logNotification(
+              invoice.clientId, 'GENERAL_ANNOUNCEMENT', 'WHATSAPP',
+              `Factura ${invoice.invoiceNumber} enviada por WhatsApp`
+            );
+            results.push({ action: 'send', channel: 'whatsapp', status: 'sent' });
+          } else {
+            results.push({ action: 'send', channel: 'whatsapp', status: 'failed', error: waResult?.error || 'Error al enviar WhatsApp' });
+          }
         }
       } catch (e) {
         results.push({ action: 'send', channel: ch, status: 'failed', error: e.message });
       }
+    }
+
+    if (paymentLinkResult) {
+      results.push(paymentLinkResult);
     }
 
     const allOk = results.every(r => r.status === 'sent');

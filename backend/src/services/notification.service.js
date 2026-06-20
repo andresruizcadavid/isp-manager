@@ -3,6 +3,7 @@ import { env } from '../config/env.js';
 import { AppError } from '../middleware/error.middleware.js';
 import { prisma } from '../config/database.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from './email-base.template.js';
+import { BRAND } from '../config/brand.js';
 
 class NotificationService {
   constructor() {
@@ -84,6 +85,26 @@ class NotificationService {
       });
     }
     return this._legacyTransporter;
+  }
+
+  // Welcome email — fired (best-effort) when a new client is created with an
+  // email. Honors an operator-authored 'welcome' template via sendEmail.
+  async sendWelcome(client) {
+    if (!client?.email) return false;
+    try {
+      await this.sendEmail({
+        to: client.email,
+        subject: '¡Bienvenido a Internet Online!',
+        template: 'welcome',
+        data: { client, company: this._companyInfo() }
+      });
+      await this.logNotification(client.id, 'GENERAL_ANNOUNCEMENT', 'EMAIL', 'Correo de bienvenida');
+      return true;
+    } catch (error) {
+      console.error('Error sending welcome notification:', error);
+      await this.logNotification(client.id, 'GENERAL_ANNOUNCEMENT', 'EMAIL', 'Correo de bienvenida', 'FAILED', error.message);
+      return false;
+    }
   }
 
   async sendInvoiceNotification(invoice) {
@@ -446,19 +467,78 @@ class NotificationService {
     }
   }
 
+  // ── Editable-template integration (Centro de Notificaciones → Plantillas) ──
+  // Variable substitution for operator-authored templates. Same {{var}} syntax
+  // and (mostly) the same variable names the campaign runner exposes, so a
+  // template works identically whether fired transactionally or in a campaign.
+  _renderVars(str, vars) {
+    return String(str || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
+      const v = vars[k];
+      return v === undefined || v === null ? '' : String(v);
+    });
+  }
+
+  _txVars({ client = {}, invoice = {}, payment = {}, daysOverdue = null, company = {} } = {}) {
+    const money = (c) => `$${Math.round((c || 0) / 100).toLocaleString('es-CO')}`;
+    const date  = (d) => d ? new Date(d).toLocaleDateString('es-CO') : '';
+    return {
+      name:          client.name || '',
+      email:         client.email || '',
+      phone:         client.phone || '',
+      plan:          client.plan?.name || invoice.plan?.name || '',
+      zone:          client.zone?.name || '',
+      balance:       money(invoice.balanceDue ?? invoice.total ?? invoice.amount),
+      invoiceNumber: invoice.invoiceNumber || invoice.number || '',
+      amount:        money(invoice.total ?? invoice.amount),
+      dueDate:       date(invoice.dueDate),
+      daysOverdue:   daysOverdue != null ? String(daysOverdue) : '',
+      paymentAmount: money(payment.amount),
+      paymentMethod: payment.paymentMethod || '',
+      transactionId: payment.transactionId || '',
+      company:       company.name  || BRAND.name,
+      companyPhone:  company.phone || BRAND.phone,
+      companyEmail:  company.email || BRAND.email
+    };
+  }
+
+  // Active operator-authored EMAIL template for this preset, or null.
+  async _findTemplateByPreset(preset) {
+    if (!preset) return null;
+    try {
+      return await prisma.notificationTemplate.findFirst({
+        where: { preset, channel: 'EMAIL', isActive: true },
+        orderBy: { updatedAt: 'desc' }
+      });
+    } catch { return null; }
+  }
+
   async sendEmail(options) {
     const { to, subject, template, data } = options;
 
-    // Resolve the structured shape ({ preset, title, body, fields }) for the
-    // requested template — then render once through the shared base.
+    // Resolve the built-in branded shape ({ preset, title, body, fields }).
     const built = this.buildEmailTemplate(template, data);
     const { transporter, from } = await this.getTransporter();
 
+    // INTEGRATION: if the operator authored an active template for this preset
+    // in the Notification Center, it wins (subject + body rendered with vars).
+    // Otherwise we fall back to the built-in branded copy. This makes the
+    // "Plantillas" tab actually govern the system's transactional emails.
+    let finalSubject = subject;
+    let finalBody    = built.body || '';
+    let finalFields  = built.fields || [];
+    const dbTpl = await this._findTemplateByPreset(built.preset);
+    if (dbTpl) {
+      const vars = this._txVars(data || {});
+      finalBody = this._renderVars(dbTpl.body, vars);
+      if (dbTpl.subject) finalSubject = this._renderVars(dbTpl.subject, vars);
+      finalFields = []; // operator body is authoritative — avoid duplicate rows
+    }
+
     const html = renderEmailTemplate({
       icon:          EMAIL_PRESETS[built.preset]?.icon  || EMAIL_PRESETS.general_announcement.icon,
-      title:         built.title || subject || EMAIL_PRESETS[built.preset]?.title || 'Aviso',
-      body:          built.body || '',
-      fields:        built.fields || [],
+      title:         built.title || finalSubject || EMAIL_PRESETS[built.preset]?.title || 'Aviso',
+      body:          finalBody,
+      fields:        finalFields,
       companyName:   from.fromName,
       companyDomain: from.fromEmail?.split('@')[1]
     });
@@ -466,8 +546,8 @@ class NotificationService {
     await transporter.sendMail({
       from: `"${from.fromName}" <${from.fromEmail}>`,
       to,
-      subject,
-      text: built.body || '',
+      subject: finalSubject,
+      text: finalBody,
       html
     });
   }
@@ -579,86 +659,6 @@ class NotificationService {
     return result;
   }
 
-  // Each builder returns a structured payload:
-  //   { preset, title, body, fields[] }
-  // that the shared renderEmailTemplate() turns into the branded HTML email.
-  // Adding a new transactional template = adding one method + one map entry.
-  buildEmailTemplate(template, data) {
-    const builders = {
-      invoice:                this.buildInvoiceTemplate,
-      payment_reminder:       this.buildPaymentReminderTemplate,
-      payment_confirmation:   this.buildPaymentConfirmationTemplate,
-      service_suspension:     this.buildServiceSuspensionTemplate,
-      service_activation:     this.buildServiceActivationTemplate,
-      installation_scheduled: this.buildInstallationScheduledTemplate,
-      general_announcement:   this.buildGeneralAnnouncementTemplate
-    };
-    const fn = builders[template];
-    if (!fn) return { preset: 'general_announcement', title: 'Aviso', body: '', fields: [] };
-    return fn.call(this, data || {});
-  }
-
-  // ── Transactional template builders ─────────────────────────────
-  // Each returns { preset, title, body, fields } — the shared base template
-  // takes over from there to produce a consistent branded HTML email.
-
-  buildInvoiceTemplate({ invoice = {}, client = {}, company = {} }) {
-    const dueDate    = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('es-CO') : '—';
-    const emitted    = invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString('es-CO') : '—';
-    const amountCop  = `$${((invoice.amount || invoice.total || 0) / 100).toLocaleString('es-CO')} COP`;
-    return {
-      preset: 'invoice',
-      title:  `Tu factura ${invoice.invoiceNumber || invoice.number || ''} está lista`.trim(),
-      body:   `Estimado(a) ${client.name || ''},\n\nHemos generado una nueva factura para tu servicio. Encuentra los detalles abajo y realiza tu pago antes de la fecha de vencimiento para evitar interrupciones.`,
-      fields: [
-        { label: 'Número de factura', value: invoice.invoiceNumber || invoice.number || '—' },
-        { label: 'Fecha de emisión',  value: emitted },
-        { label: 'Fecha de vencimiento', value: dueDate },
-        invoice.plan?.name && { label: 'Plan', value: invoice.plan.name },
-        { label: 'Monto a pagar',     value: amountCop },
-        company.phone && { label: 'Contacto', value: company.phone }
-      ].filter(Boolean)
-    };
-  }
-
-  buildPaymentReminderTemplate({ invoice = {}, client = {}, daysOverdue = 0, company = {} }) {
-    const isOverdue = daysOverdue > 0;
-    const dueDate   = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('es-CO') : '—';
-    const amountCop = `$${((invoice.amount || invoice.total || 0) / 100).toLocaleString('es-CO')} COP`;
-    return {
-      preset: 'reminder',
-      title:  isOverdue ? 'Tu pago está vencido' : 'Recuerda pagar antes de vencer',
-      body:   `Estimado(a) ${client.name || ''},\n\n${
-        isOverdue
-          ? `Tu factura #${invoice.invoiceNumber || invoice.number || ''} está vencida hace ${daysOverdue} día${daysOverdue === 1 ? '' : 's'}. Regulariza tu pago lo antes posible para evitar la suspensión del servicio.`
-          : `Tu factura #${invoice.invoiceNumber || invoice.number || ''} vence el ${dueDate}. Realiza tu pago a tiempo para mantener tu servicio activo.`
-      }`,
-      fields: [
-        { label: 'Factura',     value: invoice.invoiceNumber || invoice.number || '—' },
-        { label: 'Monto',       value: amountCop },
-        invoice.plan?.name && { label: 'Plan', value: invoice.plan.name },
-        { label: 'Vence',       value: dueDate },
-        isOverdue && { label: 'Días de mora', value: String(daysOverdue) },
-        company.phone && { label: 'Contacto', value: company.phone }
-      ].filter(Boolean)
-    };
-  }
-
-  buildPaymentConfirmationTemplate({ invoice = {}, payment = {}, client = {}, company = {} }) {
-    const amountCop = `$${((payment.amount || 0) / 100).toLocaleString('es-CO')} COP`;
-    const paidAt    = payment.paidAt ? new Date(payment.paidAt).toLocaleDateString('es-CO') : '—';
-    return {
-      preset: 'payment_received',
-      title:  'Pago registrado correctamente',
-      body:   `Estimado(a) ${client.name || ''},\n\nConfirmamos la recepción de tu pago. ¡Gracias! Tu servicio continúa activo sin interrupciones.`,
-      fields: [
-        { label: 'Factura',        value: invoice.invoiceNumber || invoice.number || '—' },
-        { label: 'Monto pagado',   value: amountCop },
-        payment.paymentMethod && { label: 'Método', value: payment.paymentMethod },
-        { label: 'Fecha de pago',  value: paidAt },
-        payment.transactionId && { label: 'Referencia', value: payment.transactionId },
-        company.phone && { label: 'Contacto', value: company.phone }
-      ].filter(Boolean)
   // ── WhatsApp template helpers ───────────────────────────────────
   // Plain "55.000" (no symbol) — the template body carries the "$" literal.
   _waMoney(cents) { return Math.round((cents || 0) / 100).toLocaleString('es-CO'); }
@@ -697,17 +697,127 @@ class NotificationService {
     return inv ? this._waPayLink(inv.id) : null;
   }
 
+  // Each builder returns a structured payload:
+  //   { preset, title, body, fields[] }
+  // that the shared renderEmailTemplate() turns into the branded HTML email.
+  // Adding a new transactional template = adding one method + one map entry.
+  // Company block reused by every transactional send (env-backed, brand-safe).
+  _companyInfo() {
+    return {
+      name:    env.COMPANY_NAME,
+      nit:     env.COMPANY_NIT,
+      city:    env.COMPANY_CITY,
+      address: env.COMPANY_ADDRESS,
+      phone:   env.COMPANY_PHONE,
+      email:   env.COMPANY_EMAIL
+    };
+  }
+
+  buildEmailTemplate(template, data) {
+    const builders = {
+      welcome:                this.buildWelcomeTemplate,
+      invoice:                this.buildInvoiceTemplate,
+      payment_reminder:       this.buildPaymentReminderTemplate,
+      payment_confirmation:   this.buildPaymentConfirmationTemplate,
+      service_suspension:     this.buildServiceSuspensionTemplate,
+      service_activation:     this.buildServiceActivationTemplate,
+      installation_scheduled: this.buildInstallationScheduledTemplate,
+      general_announcement:   this.buildGeneralAnnouncementTemplate
+    };
+    const fn = builders[template];
+    if (!fn) return { preset: 'general_announcement', title: 'Aviso', body: '', fields: [] };
+    return fn.call(this, data || {});
+  }
+
+  // ── Transactional template builders ─────────────────────────────
+  // Each returns { preset, title, body, fields } — the shared base template
+  // takes over from there to produce a consistent branded HTML email.
+
+  buildWelcomeTemplate({ client = {}, company = {} }) {
+    const firstName = (client.name || '').split(' ')[0];
+    return {
+      preset: 'welcome',
+      title:  '¡Bienvenido a Internet Online!',
+      body:   `Hola ${firstName || 'vecino(a)'},\n\n¡Bienvenido a la familia Internet Online! Ya eres parte de "el internet de nuestra gente". Muy pronto disfrutarás de fibra óptica real, rápida y sin interrupciones, con la conexión estable 24/7 que tu hogar merece.\n\nCualquier cosa que necesites, escríbenos. ¡Conéctate de verdad! 💙`,
+      fields: [
+        client.plan?.name && { label: 'Tu plan', value: client.plan.name },
+        { label: 'WhatsApp', value: company.phone || BRAND.phone },
+        { label: 'Email',    value: company.email || BRAND.email }
+      ].filter(Boolean)
+    };
+  }
+
+  buildInvoiceTemplate({ invoice = {}, client = {}, company = {} }) {
+    const dueDate    = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('es-CO') : '—';
+    const emitted    = invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString('es-CO') : '—';
+    const amountCop  = `$${((invoice.amount || invoice.total || 0) / 100).toLocaleString('es-CO')} COP`;
+    const firstName = (client.name || '').split(' ')[0];
+    return {
+      preset: 'invoice',
+      title:  'Tu factura ya está lista',
+      body:   `Hola ${firstName || 'vecino(a)'},\n\nYa está lista tu factura de Internet Online del mes. Para que tu hogar siempre esté conectado, realiza tu pago antes de la fecha de vencimiento. Es muy fácil: usa el botón de pago seguro o cualquiera de nuestros canales.`,
+      fields: [
+        { label: 'Número de factura', value: invoice.invoiceNumber || invoice.number || '—' },
+        { label: 'Fecha de emisión',  value: emitted },
+        { label: 'Fecha de vencimiento', value: dueDate },
+        invoice.plan?.name && { label: 'Plan', value: invoice.plan.name },
+        { label: 'Total a pagar',     value: amountCop },
+        { label: 'Contacto', value: company.phone || BRAND.phone }
+      ].filter(Boolean)
+    };
+  }
+
+  buildPaymentReminderTemplate({ invoice = {}, client = {}, daysOverdue = 0, company = {} }) {
+    const isOverdue = daysOverdue > 0;
+    const dueDate   = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('es-CO') : '—';
+    const amountCop = `$${((invoice.amount || invoice.total || 0) / 100).toLocaleString('es-CO')} COP`;
+    const firstName = (client.name || '').split(' ')[0];
+    return {
+      preset: 'reminder',
+      title:  isOverdue ? 'Tu pago está pendiente' : 'Recuerda pagar tu internet',
+      body:   `Hola ${firstName || 'vecino(a)'},\n\n${
+        isOverdue
+          ? `Notamos que tu factura ${invoice.invoiceNumber || invoice.number || ''} lleva ${daysOverdue} día${daysOverdue === 1 ? '' : 's'} pendiente. Ponte al día para seguir disfrutando de tu internet de fibra óptica sin interrupciones. Si ya pagaste, ¡gracias! Puedes ignorar este mensaje.`
+          : `Tu factura ${invoice.invoiceNumber || invoice.number || ''} vence el ${dueDate}. Paga a tiempo y mantén tu hogar siempre conectado, con la conexión estable que ya conoces.`
+      }`,
+      fields: [
+        { label: 'Factura',     value: invoice.invoiceNumber || invoice.number || '—' },
+        { label: 'Monto',       value: amountCop },
+        invoice.plan?.name && { label: 'Plan', value: invoice.plan.name },
+        { label: 'Vence',       value: dueDate },
+        isOverdue && { label: 'Días pendiente', value: String(daysOverdue) },
+        { label: 'Contacto', value: company.phone || BRAND.phone }
+      ].filter(Boolean)
+    };
+  }
+
+  buildPaymentConfirmationTemplate({ invoice = {}, payment = {}, client = {}, company = {} }) {
+    const amountCop = `$${((payment.amount || 0) / 100).toLocaleString('es-CO')} COP`;
+    const paidAt    = payment.paidAt ? new Date(payment.paidAt).toLocaleDateString('es-CO') : '—';
+    const firstName = (client.name || '').split(' ')[0];
+    return {
+      preset: 'payment_received',
+      title:  '¡Recibimos tu pago!',
+      body:   `Hola ${firstName || 'vecino(a)'},\n\n¡Gracias por tu pago! Ya quedó registrado y tu servicio de fibra óptica sigue activo, con la conexión estable 24/7 de siempre. Para que tu hogar nunca se quede sin internet. 💙`,
+      fields: [
+        { label: 'Factura',        value: invoice.invoiceNumber || invoice.number || '—' },
+        { label: 'Monto pagado',   value: amountCop },
+        payment.paymentMethod && { label: 'Método', value: payment.paymentMethod },
+        { label: 'Fecha de pago',  value: paidAt },
+        payment.transactionId && { label: 'Referencia', value: payment.transactionId },
+        { label: 'Contacto', value: company.phone || BRAND.phone }
+      ].filter(Boolean)
     };
   }
 
   buildServiceSuspensionTemplate({ client = {}, company = {} }) {
     return {
       preset: 'service_suspended',
-      title:  'Tu servicio ha sido suspendido',
-      body:   `Estimado(a) ${client.name || ''},\n\nTu servicio de internet fue suspendido temporalmente por falta de pago.\n\nPara reactivarlo:\n1. Realiza el pago de las facturas pendientes.\n2. Avísanos para confirmar tu pago.\n3. Reactivaremos tu servicio en máximo 24 horas.`,
+      title:  'Tu servicio está suspendido',
+      body:   `Hola ${(client.name || '').split(' ')[0] || 'vecino(a)'},\n\nTu internet quedó suspendido temporalmente porque tienes facturas pendientes. ¡Pero reconectarte es muy fácil!\n\n1. Realiza el pago de tus facturas pendientes.\n2. Avísanos por WhatsApp para confirmarlo.\n3. Reactivamos tu servicio en máximo 24 horas.\n\nEstamos aquí para ayudarte a volver a conectarte de verdad.`,
       fields: [
-        company.phone && { label: 'Teléfono', value: company.phone },
-        company.email && { label: 'Email',    value: company.email }
+        { label: 'WhatsApp', value: company.phone || BRAND.phone },
+        { label: 'Email',    value: company.email || BRAND.email }
       ].filter(Boolean)
     };
   }
@@ -715,11 +825,11 @@ class NotificationService {
   buildServiceActivationTemplate({ client = {}, company = {} }) {
     return {
       preset: 'service_activated',
-      title:  'Tu servicio está activo',
-      body:   `Estimado(a) ${client.name || ''},\n\n¡Bienvenido de vuelta! Tu servicio de internet fue reactivado exitosamente y ya puedes navegar normalmente.\n\nSi notas algún problema técnico, contáctanos de inmediato.`,
+      title:  '¡Tu internet está activo!',
+      body:   `Hola ${(client.name || '').split(' ')[0] || 'vecino(a)'},\n\n¡Bienvenido de vuelta! Tu servicio de fibra óptica ya está activo y listo para que disfrutes velocidades hasta el máximo contratado y una conexión estable 24/7.\n\n¡Conéctate de verdad! Si notas algún detalle, escríbenos y te ayudamos enseguida.`,
       fields: [
-        company.phone && { label: 'Teléfono', value: company.phone },
-        company.email && { label: 'Email',    value: company.email }
+        { label: 'WhatsApp', value: company.phone || BRAND.phone },
+        { label: 'Email',    value: company.email || BRAND.email }
       ].filter(Boolean)
     };
   }
@@ -728,14 +838,14 @@ class NotificationService {
     const date = installationDate ? new Date(installationDate).toLocaleDateString('es-CO') : '—';
     return {
       preset: 'general_announcement',
-      title:  'Instalación programada',
-      body:   `Estimado(a) ${client.name || ''},\n\nProgramamos la instalación de tu servicio de internet.\n\nImportante:\n• Alguien mayor de 18 años debe estar presente.\n• Ten disponible el espacio donde se instalará el equipo.\n• Nuestro técnico se comunicará contigo antes de llegar.`,
+      title:  '¡Pronto tendrás tu internet!',
+      body:   `Hola ${(client.name || '').split(' ')[0] || 'vecino(a)'},\n\n¡Buenas noticias! Ya programamos la instalación de tu fibra óptica. Estás a un paso de conectarte de verdad.\n\nPara que todo salga perfecto:\n• Alguien mayor de 18 años debe estar presente.\n• Ten libre el espacio donde irá el equipo.\n• Nuestro técnico de la zona te llamará antes de llegar.`,
       fields: [
         { label: 'Fecha',     value: date },
         { label: 'Hora',      value: 'Por confirmar' },
         client.address && { label: 'Dirección', value: client.address },
         client.city && { label: 'Ciudad',     value: client.city },
-        company.phone && { label: 'Contacto', value: company.phone }
+        { label: 'Contacto', value: company.phone || BRAND.phone }
       ].filter(Boolean)
     };
   }
@@ -743,11 +853,11 @@ class NotificationService {
   buildGeneralAnnouncementTemplate({ client = {}, subject = '', message = '', company = {} }) {
     return {
       preset: 'general_announcement',
-      title:  subject || 'Aviso importante',
-      body:   `${client.name ? `Estimado(a) ${client.name},\n\n` : ''}${message || ''}`,
+      title:  subject || 'Tenemos un aviso para ti',
+      body:   `${client.name ? `Hola ${(client.name || '').split(' ')[0]},\n\n` : ''}${message || ''}`,
       fields: [
-        company.phone && { label: 'Teléfono', value: company.phone },
-        company.email && { label: 'Email',    value: company.email }
+        { label: 'WhatsApp', value: company.phone || BRAND.phone },
+        { label: 'Email',    value: company.email || BRAND.email }
       ].filter(Boolean)
     };
   }
@@ -755,18 +865,27 @@ class NotificationService {
 
   buildWhatsAppPaymentReminder(invoice, daysOverdue) {
     const isOverdue = daysOverdue > 0;
-    
-    if (isOverdue) {
-      return `📢 *${env.COMPANY_NAME}* - Recordatorio de Pago Vencido
+    // Defensive: the plan lives under invoice.client.plan (Invoice has no direct
+    // `plan` relation). Client/plan/dueDate may be missing depending on the
+    // include — never let an undefined access crash the reminder job.
+    const clientName = invoice.client?.name || 'cliente';
+    const planName   = invoice.client?.plan?.name || invoice.plan?.name || 'tu plan';
+    const amountCop  = `$${((invoice.amount ?? invoice.total ?? 0) / 100).toLocaleString('es-CO')} COP`;
+    const dueStr     = invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('es-CO') : '—';
+    const company    = env.COMPANY_NAME || 'Internet Online';
+    const phone      = env.COMPANY_PHONE || '+57 323 632 9425';
 
-Estimado/a ${invoice.client.name},
+    if (isOverdue) {
+      return `📢 *${company}* - Recordatorio de Pago Vencido
+
+Estimado/a ${clientName},
 
 Su factura #${invoice.invoiceNumber} está vencida hace ${daysOverdue} días.
 
 📄 Detalles:
 • Factura: ${invoice.invoiceNumber}
-• Monto: $${(invoice.amount / 100).toLocaleString('es-CO')} COP
-• Plan: ${invoice.plan.name}
+• Monto: ${amountCop}
+• Plan: ${planName}
 
 ⚠️ Para evitar la suspensión del servicio, por favor regularice su pago.
 
@@ -777,43 +896,47 @@ Su factura #${invoice.invoiceNumber} está vencida hace ${daysOverdue} días.
 
 Si ya realizó el pago, ignore este mensaje.
 
-📞 Contáctenos: ${env.COMPANY_PHONE}`;
+📞 Contáctenos: ${phone}`;
     } else {
-      return `📢 *${env.COMPANY_NAME}* - Recordatorio de Pago
+      return `📢 *${company}* - Recordatorio de Pago
 
-Estimado/a ${invoice.client.name},
+Estimado/a ${clientName},
 
-Le recordamos que su factura #${invoice.invoiceNumber} vence el ${invoice.dueDate.toLocaleDateString()}.
+Le recordamos que su factura #${invoice.invoiceNumber} vence el ${dueStr}.
 
 📄 Detalles:
 • Factura: ${invoice.invoiceNumber}
-• Monto: $${(invoice.amount / 100).toLocaleString('es-CO')} COP
-• Plan: ${invoice.plan.name}
-• Vencimiento: ${invoice.dueDate.toLocaleDateString()}
+• Monto: ${amountCop}
+• Plan: ${planName}
+• Vencimiento: ${dueStr}
 
 💳 Canales de pago disponibles.
 
-📞 Contáctenos: ${env.COMPANY_PHONE}`;
+📞 Contáctenos: ${phone}`;
     }
   }
 
   buildWhatsAppPaymentConfirmation(invoice, payment) {
-    return `✅ *${env.COMPANY_NAME}* - Confirmación de Pago
+    const clientName = invoice.client?.name || 'cliente';
+    const amountCop  = `$${((payment.amount ?? 0) / 100).toLocaleString('es-CO')} COP`;
+    const paidStr    = payment.paidAt ? new Date(payment.paidAt).toLocaleDateString('es-CO') : new Date().toLocaleDateString('es-CO');
+    const company    = env.COMPANY_NAME || 'Internet Online';
+    const phone      = env.COMPANY_PHONE || '+57 323 632 9425';
+    return `✅ *${company}* - Confirmación de Pago
 
-Estimado/a ${invoice.client.name},
+Estimado/a ${clientName},
 
 Hemos recibido su pago exitosamente:
 
 📄 Detalles:
 • Factura: ${invoice.invoiceNumber}
-• Monto pagado: $${(payment.amount / 100).toLocaleString('es-CO')} COP
-• Método: ${payment.paymentMethod}
-• Fecha: ${payment.paidAt.toLocaleDateString()}
+• Monto pagado: ${amountCop}${payment.paymentMethod ? `\n• Método: ${payment.paymentMethod}` : ''}
+• Fecha: ${paidStr}
 ${payment.transactionId ? `• Referencia: ${payment.transactionId}` : ''}
 
 🎉 ¡Gracias por su pago! Su servicio continua activo.
 
-📞 Contáctenos: ${env.COMPANY_PHONE}`;
+📞 Contáctenos: ${phone}`;
   }
 
   buildWhatsAppServiceSuspension(client) {
@@ -847,11 +970,25 @@ Si experimenta algún problema técnico, contáctenos de inmediato.
 
   async logNotification(clientId, type, channel, content, status = 'SENT', error = null, recipient = null) {
     try {
+      // `recipient` is required by the schema, but callers rarely have it
+      // handy. Derive it from the client's contact for the channel when not
+      // passed explicitly (EMAIL → email, otherwise phone). Falls back to "—"
+      // so a missing contact never crashes the logging (which would otherwise
+      // throw "Argument `recipient` is missing" and abort the send).
+      let to = recipient;
+      if (!to && clientId) {
+        const client = await prisma.client.findUnique({
+          where: { id: clientId },
+          select: { email: true, phone: true }
+        });
+        to = channel === 'EMAIL' ? client?.email : client?.phone;
+      }
       await prisma.notificationLog.create({
         data: {
           clientId,
           type,
           channel,
+          recipient: to || '—',
           content,
           status,
           sentAt: status === 'SENT' ? new Date() : null,
@@ -935,17 +1072,3 @@ Si experimenta algún problema técnico, contáctenos de inmediato.
 }
 
 export const notificationService = new NotificationService();
-      // `recipient` is required by the schema, but callers rarely have it
-      // handy. Derive it from the client's contact for the channel when not
-      // passed explicitly (EMAIL → email, otherwise phone). Falls back to "—"
-      // so a missing contact never crashes the logging (which would otherwise
-      // throw "Argument `recipient` is missing" and abort the send).
-      let to = recipient;
-      if (!to && clientId) {
-        const client = await prisma.client.findUnique({
-          where: { id: clientId },
-          select: { email: true, phone: true }
-        });
-        to = channel === 'EMAIL' ? client?.email : client?.phone;
-      }
-          recipient: to || '—',

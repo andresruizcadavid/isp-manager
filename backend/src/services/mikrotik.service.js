@@ -2,6 +2,12 @@ import { env } from '../config/env.js';
 import { prisma } from '../config/database.js';
 
 const REQUEST_TIMEOUT_MS = 15000;
+// Tuning for interactive endpoints hit from the UI (new-client form: load
+// PPPoE profiles, available IPs, adopt-account lookup). Background jobs keep
+// the robust 15s×3 defaults; an operator staring at a spinner must not. Fail
+// fast (~7s + one retry) so a slow/unreachable router surfaces in seconds, not
+// the ~46s worst case of the defaults.
+export const INTERACTIVE_OPTS = { timeoutMs: 7000, retries: 1 };
 // Network-level transient failures we should retry. HTTP 4xx/5xx are NOT
 // retried — those are deterministic responses from the router.
 const TRANSIENT_NET_CODES = new Set([
@@ -168,8 +174,8 @@ export class MikrotikService {
     return this.request('/ppp/active');
   }
 
-  async getPPPoEProfiles() {
-    return this.request('/ppp/profile');
+  async getPPPoEProfiles(opts = {}) {
+    return this.request('/ppp/profile', 'GET', null, opts);
   }
 
   async findPPPoEProfileByName(name) {
@@ -204,17 +210,17 @@ export class MikrotikService {
     return this.request('/ppp/profile', 'PUT', body);
   }
 
-  async findPPPoESecretByName(name) {
+  async findPPPoESecretByName(name, opts = {}) {
     if (!name) throw new Error('findPPPoESecretByName: name requerido');
     // RouterOS REST supports query: ?name=foo
-    const list = await this.request(`/ppp/secret?name=${encodeURIComponent(name)}`);
+    const list = await this.request(`/ppp/secret?name=${encodeURIComponent(name)}`, 'GET', null, opts);
     if (Array.isArray(list) && list.length > 0) return list[0];
     return null;
   }
 
-  async findActivePPPoEByName(name) {
+  async findActivePPPoEByName(name, opts = {}) {
     if (!name) throw new Error('findActivePPPoEByName: name requerido');
-    const list = await this.request(`/ppp/active?name=${encodeURIComponent(name)}`);
+    const list = await this.request(`/ppp/active?name=${encodeURIComponent(name)}`, 'GET', null, opts);
     if (Array.isArray(list) && list.length > 0) return list[0];
     return null;
   }

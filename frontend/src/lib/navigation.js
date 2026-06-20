@@ -25,7 +25,7 @@
 
 import {
   LayoutDashboard, Users, Router as RouterIcon, Network, CreditCard,
-  Building2, Activity
+  Building2, Activity, Boxes
 } from 'lucide-svelte';
 
 // ── Roles ──────────────────────────────────────────────────────────────
@@ -79,9 +79,19 @@ export const NAV_ITEMS = [
     href: '/zones', roles: OPERATIONAL_TIER,
     match: ['/zones', under('/zones')] },
 
-  // Moved from Clientes → Finanzas (objective 3 of the collections sweep):
-  // bulk operations on customers are financial flows operationally; their
-  // history belongs alongside Facturas / Pagos / Ventanas de cobranza.
+  { id: 'inventory', type: 'item', parentId: 'group-clients',
+    label: 'Inventario', title: 'Inventario de equipos',
+    href: '/clients/inventory', roles: OPERATIONAL_TIER,
+    match: ['/clients/inventory'] },
+
+  { id: 'plans', type: 'item', parentId: 'group-clients',
+    label: 'Planes de Servicio', title: 'Planes de Servicio',
+    href: '/plans', roles: ADMIN_TIER,
+    match: ['/plans', under('/plans')] },
+
+  // Moved from Clientes → Finanzas: bulk operations on customers are financial
+  // flows operationally; their audit history belongs alongside Facturas. This
+  // history is shared with "Cambio masivo de plan".
   { id: 'invoices-bulk-history', type: 'item', parentId: 'group-finance',
     label: 'Historial masivo', title: 'Historial de cobros masivos',
     href: '/invoices/bulk-history', roles: ADMIN_TIER,
@@ -102,19 +112,6 @@ export const NAV_ITEMS = [
     href: '/invoices/billing-cycles', roles: ADMIN_TIER,
     match: ['/invoices/billing-cycles'] },
 
-  { id: 'collection-windows', type: 'item', parentId: 'group-finance',
-    label: 'Ventanas de cobranza', title: 'Ventanas de cobranza',
-    href: '/invoices/collection-windows', roles: ADMIN_TIER,
-    match: ['/invoices/collection-windows', /^\/invoices\/collection-windows\/[^/]+$/] },
-
-  // Month-driven mass billing flow (FASE 2 hybrid — selection-driven
-  // version remains in /clients via the modal). Strict match so the
-  // parent /invoices regex doesn't shadow it.
-  { id: 'bulk-billing', type: 'item', parentId: 'group-finance',
-    label: 'Cobro masivo', title: 'Cobro masivo por mes',
-    href: '/invoices/bulk-billing', roles: ADMIN_TIER,
-    match: ['/invoices/bulk-billing'] },
-
   // ── Sistema ──────────────────────────────────────────────────────
   { id: 'group-system', type: 'group',
     label: 'Sistema', icon: RouterIcon, roles: ADMIN_TIER },
@@ -128,11 +125,6 @@ export const NAV_ITEMS = [
     },
     href: '/mikrotik/routers', roles: ADMIN_TIER,
     match: ['/mikrotik/routers', under('/mikrotik/routers')] },
-
-  { id: 'plans', type: 'item', parentId: 'group-system',
-    label: 'Planes de Servicio', title: 'Planes de Servicio',
-    href: '/plans', roles: ADMIN_TIER,
-    match: ['/plans', under('/plans')] },
 
   { id: 'backups', type: 'item', parentId: 'group-system',
     label: 'Backup', title: 'Backup MikroTik',

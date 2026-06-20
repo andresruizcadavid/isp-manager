@@ -17,7 +17,6 @@
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import ResponsiveTable from '$lib/components/ui/ResponsiveTable.svelte';
   import BulkPlanChangeModal from '$lib/components/clients/BulkPlanChangeModal.svelte';
-  import BulkBillModal from '$lib/components/clients/BulkBillModal.svelte';
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
   import { Zap, CheckSquare, Square } from 'lucide-svelte';
@@ -36,6 +35,7 @@
   let status  = '';
   let planId  = '';
   let zoneId  = '';
+  let connType = '';   // '' | FIBER | WIRELESS
   // Fase 1 cobranzas: cuando está ON, la API filtra a clientes con
   // al menos una factura sin pagar y balanceDue > 0.
   let debtorsOnly = false;
@@ -128,29 +128,6 @@
   // selections.
   let bulkModalClients = [];
   let bulkModalLoading = false;
-  let showBulkBillModal = false;
-
-  async function openBulkBillModal() {
-    if (selectedIds.size === 0) return;
-    bulkModalLoading = true;
-    try {
-      const res = await clientsApi.getPage({ page: 1, limit: 500 });
-      const all = res?.data || [];
-      bulkModalClients = all.filter(c => selectedIds.has(c.id))
-                           .map(c => ({ id: c.id, name: c.name })); // minimal shape
-      showBulkBillModal = true;
-    } catch (e) {
-      error = e.message || 'No se pudieron cargar los clientes seleccionados';
-    } finally {
-      bulkModalLoading = false;
-    }
-  }
-  function onBulkBillDone() {
-    showBulkBillModal = false;
-    selectedIds = new Set();
-    selectionMode = false;
-    load();
-  }
 
   async function openBulkPlanModal() {
     if (selectedIds.size === 0) return;
@@ -376,6 +353,7 @@
       if (status)       params.status  = status;
       if (planId)       params.planId  = planId;
       if (zoneId)       params.zoneId  = zoneId;
+      if (connType)     params.connectionType = connType;
       if (debtorsOnly)  params.debtors = 'true';
       const res = await clientsApi.getPage(params);
       clients = res?.data ?? [];
@@ -871,6 +849,16 @@
           <option value={z.id}>{z.name}{z.routerId ? '' : ' ⚠️'}</option>
         {/each}
       </select>
+      <!-- Filtro por tecnología -->
+      <select class="hidden md:block h-7 pl-2.5 pr-7 text-xs rounded-md border border-slate-200 bg-white
+                     text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20
+                     focus:border-blue-500 appearance-none cursor-pointer"
+              style="background-image: url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E&quot;); background-repeat: no-repeat; background-position: right 0.5rem center;"
+              bind:value={connType} on:change={onFilterChange}>
+        <option value="">Toda tecnología</option>
+        <option value="FIBER">🔵 Fibra óptica</option>
+        <option value="WIRELESS">📡 Inalámbrico</option>
+      </select>
       <!-- Solo deudores: toggle pill aligned with the other filter selects -->
       <button type="button"
               on:click={() => { debtorsOnly = !debtorsOnly; onFilterChange(); }}
@@ -880,7 +868,7 @@
         <span class="w-1.5 h-1.5 rounded-full {debtorsOnly ? 'bg-red-500' : 'bg-slate-300'}"></span>
         Solo deudores
       </button>
-      {#if q || status || planId || zoneId || debtorsOnly}
+      {#if q || status || planId || zoneId || connType || debtorsOnly}
         <button class="hidden md:inline-flex text-xs text-slate-500 hover:text-slate-700 px-1.5"
                 on:click={() => { q=''; status=''; planId=''; zoneId=''; debtorsOnly=false; page=1; load(); }}>
           Limpiar
@@ -1004,7 +992,14 @@
               <td class="font-mono text-xs text-slate-700">
                 {client.mikrotikAccount?.remoteAddress || '—'}
               </td>
-              <td class="text-slate-600 whitespace-nowrap">{client.plan?.name || '—'}</td>
+              <td class="text-slate-600 whitespace-nowrap">
+                {client.plan?.name || '—'}
+                {#if client.connectionType === 'WIRELESS'}
+                  <span class="badge bg-cyan-50 text-cyan-700 ring-cyan-100 ml-1 text-[10px]" title="Tecnología: Inalámbrico">📡 Inalámbrico</span>
+                {:else}
+                  <span class="badge bg-blue-50 text-blue-700 ring-blue-100 ml-1 text-[10px]" title="Tecnología: Fibra óptica">🔵 Fibra</span>
+                {/if}
+              </td>
               <td class="text-slate-600 text-xs whitespace-nowrap max-w-[140px] truncate"
                   title={client.zone?.name || ''}>
                 {client.zone?.name || '—'}
@@ -1942,13 +1937,6 @@
                 class="text-xs text-brand-100 hover:text-white px-2 py-1 rounded">
           Limpiar
         </button>
-        <button type="button" on:click={openBulkBillModal}
-                disabled={bulkModalLoading}
-                class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-red-500 hover:bg-red-600
-                       text-white text-xs font-semibold rounded-lg shadow-sm transition-colors disabled:opacity-60">
-          {#if bulkModalLoading}<Loader2 size={14} class="animate-spin" />{:else}<svelte:component this={CreditCard} size={14} />{/if}
-          Cobro masivo…
-        </button>
         <button type="button" on:click={openBulkPlanModal}
                 disabled={bulkModalLoading}
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white text-brand-800
@@ -1973,9 +1961,3 @@
     on:done={onBulkPlanDone} />
 {/if}
 
-{#if showBulkBillModal}
-  <BulkBillModal
-    clients={bulkModalClients}
-    on:close={() => showBulkBillModal = false}
-    on:done={onBulkBillDone} />
-{/if}

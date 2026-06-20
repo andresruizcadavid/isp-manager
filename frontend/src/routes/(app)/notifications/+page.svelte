@@ -10,7 +10,8 @@
     Bell, Send, FileText, History as HistoryIcon, Plus, Pencil, Trash2,
     Mail, MessageSquare, MessageCircle, Layers, CheckCircle2, AlertCircle, Loader2,
     Save, X, Filter, RefreshCw, Eye, Server, Lock, User as UserIcon,
-    Eye as EyeIcon, EyeOff, ChevronDown, ChevronUp, Copy, Stethoscope, Phone
+    Eye as EyeIcon, EyeOff, ChevronDown, ChevronUp, Copy, Stethoscope, Phone,
+    Play, FlaskConical
   } from 'lucide-svelte';
 
   let tab = 'campaigns'; // campaigns | templates | history | smtp | whatsapp
@@ -43,17 +44,48 @@
   let tplSaving = false;
   let tplError = '';
 
-  // Email presets — must mirror EMAIL_PRESETS in backend/src/services/email-base.template.js
+  // Email presets — must mirror EMAIL_PRESETS in backend/src/services/email-base.template.js.
+  // `event` describes the transactional email this preset governs when the
+  // template is active (besides driving the header icon + title).
   const EMAIL_PRESETS = [
-    { key: '',                     icon: '📣', title: 'Aviso importante (por defecto)' },
-    { key: 'invoice',              icon: '💳', title: 'Tu factura está lista' },
-    { key: 'reminder',             icon: '⏰', title: 'Recuerda pagar antes de vencer' },
-    { key: 'service_suspended',    icon: '⛔', title: 'Tu servicio ha sido suspendido' },
-    { key: 'service_activated',    icon: '✅', title: 'Tu servicio está activo' },
-    { key: 'payment_received',     icon: '✅', title: 'Pago registrado correctamente' },
-    { key: 'welcome',              icon: '🎉', title: 'Bienvenida' },
-    { key: 'general_announcement', icon: '📣', title: 'Aviso importante' }
+    { key: '',                     icon: '📣', title: 'Aviso importante (por defecto)', event: 'Solo para campañas / avisos generales' },
+    { key: 'invoice',              icon: '🧾', title: 'Tu factura ya está lista',        event: 'Correo de factura emitida' },
+    { key: 'reminder',             icon: '⏰', title: 'Recuerda pagar tu internet',      event: 'Recordatorios de pago' },
+    { key: 'service_suspended',    icon: '⛔', title: 'Tu servicio está suspendido',     event: 'Aviso de suspensión' },
+    { key: 'service_activated',    icon: '✅', title: '¡Tu internet está activo!',       event: 'Aviso de reactivación' },
+    { key: 'payment_received',     icon: '✅', title: '¡Recibimos tu pago!',             event: 'Confirmación de pago' },
+    { key: 'welcome',              icon: '🎉', title: '¡Bienvenido a Internet Online!',  event: 'Correo de bienvenida (cliente nuevo)' },
+    { key: 'general_announcement', icon: '📣', title: 'Tenemos un aviso para ti',        event: 'Avisos generales / campañas' }
   ];
+
+  // ── Vista previa con el diseño real de marca (renderizada por el backend) ──
+  let tplPreviewHtml = '';
+  let tplPreviewSubject = '';
+  let tplPreviewLoading = false;
+  let tplPreviewTimer = null;
+  async function loadTplPreview() {
+    if (tplForm.channel !== 'EMAIL') return;
+    tplPreviewLoading = true;
+    try {
+      const r = await notificationsApi.previewTemplate({
+        preset:  tplForm.preset || '',
+        subject: tplForm.subject || '',
+        body:    tplForm.body || ''
+      });
+      tplPreviewHtml = r?.html || '';
+      tplPreviewSubject = r?.subject || '';
+    } catch (e) {
+      tplPreviewHtml = '';
+    } finally {
+      tplPreviewLoading = false;
+    }
+  }
+  // Debounced live refresh while the modal is open and editing an EMAIL template.
+  $: if (tplModalOpen && tplForm.channel === 'EMAIL'
+         && (tplForm.preset, tplForm.subject, tplForm.body, true)) {
+    clearTimeout(tplPreviewTimer);
+    tplPreviewTimer = setTimeout(loadTplPreview, 350);
+  }
 
   // Suggested subject + body per preset. Used to seed the form when the
   // operator picks a preset and the body is still empty (or via the
@@ -276,6 +308,17 @@ Email: contacto@internetonline.co
   let audienceList = [];           // first 200 matched clients (for review)
   let audienceListLoading = false;
   let audienceListOpen = false;    // expand/collapse the review list
+  let cmpSelected = new Set();      // explicit recipient selection (client ids)
+  // One-shot: when editing/cloning a campaign that saved an explicit
+  // clientIds selection, restore THAT selection when the list loads instead
+  // of the "select everyone" default. Consumed (nulled) on first load.
+  let cmpInitialSelection = null;
+  // Id of the DRAFT campaign being edited in place (PUT). null = new/clone.
+  let cmpEditingId = null;
+  // Single-client test send (the campaign is sent to just this one client).
+  let cmpTestClientId = '';
+  let cmpTesting = false;
+  let cmpTestMsg = null;            // { type: 'success'|'error', text }
 
   function emptyCmp() {
     return {
@@ -283,25 +326,37 @@ Email: contacto@internetonline.co
       audience: { zoneId: '', planId: '', status: '', overdue: false }
     };
   }
-  function openNewCmp() {
-    cmpForm = emptyCmp();
+  function resetCmpModalState() {
     cmpError = '';
     audiencePreview = null;
     audienceList = [];
     audienceListOpen = false;
+    cmpTestClientId = '';
+    cmpTesting = false;
+    cmpTestMsg = null;
+  }
+
+  function openNewCmp() {
+    cmpForm = emptyCmp();
+    cmpEditingId = null;
+    cmpInitialSelection = null;
+    resetCmpModalState();
     cmpModalOpen = true;
   }
 
-  // "Editar" pre-fills the new-campaign modal with an existing campaign's
-  // settings (template, channel, audience filter) so the operator can adjust
-  // anything and launch as a NEW run — the original campaign + its history
-  // stay intact. This is the cleanest pattern for our send-immediately model.
+  // "Editar" opens the campaign config. A DRAFT is edited in place (saving =
+  // PUT, no send). A campaign that already ran is immutable history, so we
+  // open it as a CLONE ("Copia de…") that saves as a new draft — the original
+  // run + its history stay intact. Either way, editing never sends anything;
+  // launching is a separate explicit action.
   function openEditCmp(c) {
     const audience = c.audienceJson
       ? (typeof c.audienceJson === 'string' ? JSON.parse(c.audienceJson) : c.audienceJson)
       : {};
+    const isDraft = c.status === 'draft';
+    cmpEditingId = isDraft ? c.id : null;
     cmpForm = {
-      name:       `Copia de ${c.name}`,
+      name:       isDraft ? c.name : `Copia de ${c.name}`,
       templateId: c.templateId || '',
       channel:    c.channel || 'EMAIL',
       generatePaymentLinks: !!c.generatePaymentLinks,
@@ -312,10 +367,11 @@ Email: contacto@internetonline.co
         overdue: !!audience.overdue
       }
     };
-    cmpError = '';
-    audiencePreview = null;
-    audienceList = [];
-    audienceListOpen = false;
+    resetCmpModalState();
+    // Preserve the campaign's saved explicit recipient selection (if any) so
+    // editing shows exactly who was picked, not the select-all default.
+    cmpInitialSelection = Array.isArray(audience.clientIds) && audience.clientIds.length
+      ? audience.clientIds : null;
     cmpModalOpen = true;
   }
 
@@ -362,6 +418,18 @@ Email: contacto@internetonline.co
     }
   }
 
+  // Delete a campaign row. The delivery history survives (the backend keeps
+  // NotificationLog rows, just unlinked), so this only clears the list.
+  async function deleteCmp(c) {
+    if (!confirm(`¿Eliminar la campaña "${c.name}"?\n\nEl historial de envíos se conserva en la pestaña Historial.`)) return;
+    try {
+      await notificationsApi.removeCampaign(c.id);
+      campaigns = campaigns.filter(x => x.id !== c.id);
+    } catch (e) {
+      alert(e.message || 'No se pudo eliminar la campaña.');
+    }
+  }
+
   async function loadAudienceList() {
     const filter = {};
     if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
@@ -372,9 +440,24 @@ Email: contacto@internetonline.co
     try {
       const res = await notificationsApi.previewClients(filter);
       audienceList = res?.clients || [];
+      // Default selection: restore the saved selection when editing (one-shot),
+      // otherwise select everyone in the candidate list.
+      if (cmpInitialSelection) {
+        const valid = new Set(audienceList.map(c => c.id));
+        cmpSelected = new Set(cmpInitialSelection.filter(id => valid.has(id)));
+        cmpInitialSelection = null;
+      } else {
+        cmpSelected = new Set(audienceList.map(c => c.id));
+      }
+      // Default the test recipient to the first selected (or first candidate)
+      // so "Enviar prueba" works without an extra pick. Drop a stale id.
+      if (!audienceList.some(c => c.id === cmpTestClientId)) {
+        cmpTestClientId = [...cmpSelected][0] || audienceList[0]?.id || '';
+      }
     } catch (e) {
       cmpError = e.message;
       audienceList = [];
+      cmpSelected = new Set();
     } finally { audienceListLoading = false; }
   }
   async function previewAudience() {
@@ -396,9 +479,39 @@ Email: contacto@internetonline.co
   $: audienceKey = `${cmpForm.audience.zoneId}|${cmpForm.audience.planId}|${cmpForm.audience.status}|${cmpForm.audience.overdue}`;
   $: if (cmpModalOpen && audienceKey) {
     previewAudience();
-    // Drop the cached client list so the next expand triggers a fresh fetch.
-    audienceList = [];
-    audienceListOpen = false;
+    loadAudienceList();   // auto-load so the operator can pick recipients
+  }
+
+  // Helper: does this client have a contact for the chosen channel? Used ONLY
+  // to warn — selection is NEVER blocked. The operator decides who receives;
+  // clients without a contact will simply be logged as "fallidos".
+  function hasChannelContact(c, channel = cmpForm.channel) {
+    if (channel === 'WHATSAPP') return !!c.phone;
+    if (channel === 'BOTH')     return !!(c.email || c.phone);
+    return !!c.email; // EMAIL
+  }
+  // (selection defaulting happens in loadAudienceList — deterministic, and it
+  // honors cmpInitialSelection when editing a campaign with saved clientIds.)
+  $: cmpAllSelected = audienceList.length > 0 && cmpSelected.size === audienceList.length;
+  $: cmpTruncated   = audienceList.length < (audiencePreview ?? 0);
+  $: cmpNoContact   = audienceList.filter(c => !hasChannelContact(c, cmpForm.channel)).length;
+  // How many of the SELECTED recipients actually have an open invoice — i.e.
+  // will get a Wompi link when generatePaymentLinks is on. null = toggle off.
+  $: cmpLinkEligible = cmpForm.generatePaymentLinks
+    ? audienceList.filter(c => cmpSelected.has(c.id) && c.invoices?.length).length
+    : null;
+  const fmtCop = (cents) => '$' + Math.round((cents || 0) / 100).toLocaleString('es-CO');
+  // Recipients we'll send to: the explicit selection, except "todos" on a
+  // truncated list → defer to the filter so clients beyond the shown 200 count.
+  $: cmpSendCount   = (cmpTruncated && cmpAllSelected) ? (audiencePreview ?? 0) : cmpSelected.size;
+
+  function toggleClient(id) {
+    const s = new Set(cmpSelected);
+    s.has(id) ? s.delete(id) : s.add(id);
+    cmpSelected = s;
+  }
+  function toggleAllClients() {
+    cmpSelected = (cmpSelected.size >= audienceList.length) ? new Set() : new Set(audienceList.map(c => c.id));
   }
 
   // tplSelected depends on the primitive templateId — safe to be reactive.
@@ -415,36 +528,118 @@ Email: contacto@internetonline.co
     }
   }
 
-  async function launchCampaign() {
-    if (!cmpForm.name.trim() || !cmpForm.templateId) {
-      cmpError = 'Nombre y plantilla son obligatorios.';
-      return;
+  // Build the {name, templateId, channel, generatePaymentLinks, audience}
+  // payload from the current form state. Shared by save-draft and launch.
+  function buildCampaignPayload() {
+    const filter = {};
+    if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
+    if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
+    if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
+    if (cmpForm.audience.overdue) filter.overdue = true;
+    // Explicit recipient selection — unless "todos" is marked on a truncated
+    // list, where we defer to the filter so everyone matching is included.
+    if (!(cmpTruncated && cmpAllSelected)) {
+      filter.clientIds = [...cmpSelected];
     }
-    if ((audiencePreview ?? 0) === 0) {
-      cmpError = 'La audiencia está vacía. Ajusta los filtros.';
-      return;
-    }
+    return {
+      name: cmpForm.name.trim(),
+      templateId: cmpForm.templateId,
+      channel: cmpForm.channel,
+      generatePaymentLinks: cmpForm.generatePaymentLinks,
+      audience: filter
+    };
+  }
+
+  // Returns an error string or '' if the form is valid. `requireRecipients`
+  // is false for save-draft (you can save an incomplete audience) and true
+  // for launch.
+  function validateCmpForm(requireRecipients) {
+    if (!cmpForm.templateId) return 'Selecciona una plantilla.';
+    if (cmpForm.name.trim().length < 2) return 'El nombre de la campaña debe tener al menos 2 caracteres.';
+    if (requireRecipients && cmpSendCount === 0) return 'Selecciona al menos un cliente.';
+    return '';
+  }
+
+  // Save configuration WITHOUT sending. Updates the draft in place (PUT) when
+  // editing one, otherwise creates a new draft.
+  async function saveDraft() {
+    const err = validateCmpForm(false);
+    if (err) { cmpError = err; return; }
     cmpSaving = true; cmpError = '';
     try {
-      const filter = {};
-      if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
-      if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
-      if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
-      if (cmpForm.audience.overdue) filter.overdue = true;
-      const created = await notificationsApi.createCampaign({
-        name: cmpForm.name.trim(),
-        templateId: cmpForm.templateId,
-        channel: cmpForm.channel,
-        generatePaymentLinks: cmpForm.generatePaymentLinks,
-        audience: filter
-      });
-      campaigns = [created, ...campaigns];
+      const payload = buildCampaignPayload();
+      let saved;
+      if (cmpEditingId) {
+        saved = await notificationsApi.updateCampaign(cmpEditingId, payload);
+        campaigns = campaigns.map(x => x.id === saved.id ? { ...x, ...saved } : x);
+      } else {
+        saved = await notificationsApi.createCampaign({ ...payload, mode: 'draft' });
+        campaigns = [saved, ...campaigns];
+      }
       cmpModalOpen = false;
       tab = 'campaigns';
-      // Start polling for live progress
+    } catch (e) { cmpError = e.message || 'No se pudo guardar el borrador.'; }
+    finally { cmpSaving = false; }
+  }
+
+  // Send now. When editing a draft we persist the edits first, then launch it;
+  // otherwise we create + launch in one call.
+  async function launchNow() {
+    const err = validateCmpForm(true);
+    if (err) { cmpError = err; return; }
+    cmpSaving = true; cmpError = '';
+    try {
+      const payload = buildCampaignPayload();
+      let created;
+      if (cmpEditingId) {
+        await notificationsApi.updateCampaign(cmpEditingId, payload);
+        created = await notificationsApi.launchCampaign(cmpEditingId);
+        campaigns = campaigns.map(x => x.id === created.id ? { ...x, ...created } : x);
+      } else {
+        created = await notificationsApi.createCampaign({ ...payload, mode: 'launch' });
+        campaigns = [created, ...campaigns];
+      }
+      cmpModalOpen = false;
+      tab = 'campaigns';
       pollCampaign(created.id);
     } catch (e) { cmpError = e.message || 'No se pudo lanzar la campaña.'; }
     finally { cmpSaving = false; }
+  }
+
+  // Launch an existing draft straight from the list (no modal).
+  async function executeDraft(c) {
+    if (!confirm(`¿Lanzar la campaña "${c.name}" ahora?`)) return;
+    try {
+      const updated = await notificationsApi.launchCampaign(c.id);
+      campaigns = campaigns.map(x => x.id === c.id ? { ...x, ...updated } : x);
+      pollCampaign(c.id);
+    } catch (e) {
+      alert(e.message || 'No se pudo lanzar la campaña.');
+    }
+  }
+
+  // Send the campaign as a TEST to a single selected client (real data, real
+  // contact). Logged separately — never counts as a campaign.
+  async function sendTest() {
+    if (!cmpForm.templateId) { cmpTestMsg = { type: 'error', text: 'Selecciona una plantilla primero.' }; return; }
+    if (!cmpTestClientId)    { cmpTestMsg = { type: 'error', text: 'Elige un cliente de la lista para la prueba.' }; return; }
+    cmpTesting = true; cmpTestMsg = null;
+    try {
+      const r = await notificationsApi.testCampaign({
+        clientId: cmpTestClientId,
+        templateId: cmpForm.templateId,
+        channel: cmpForm.channel,
+        generatePaymentLinks: cmpForm.generatePaymentLinks
+      });
+      const who = r?.client?.name || 'el cliente';
+      if ((r?.sent ?? 0) > 0) {
+        cmpTestMsg = { type: 'success', text: `Prueba enviada a ${who}.` };
+      } else {
+        const missing = cmpForm.channel === 'WHATSAPP' ? 'teléfono' : 'email';
+        cmpTestMsg = { type: 'error', text: `No se pudo enviar la prueba a ${who}. Verifica que tenga ${missing} válido.` };
+      }
+    } catch (e) { cmpTestMsg = { type: 'error', text: e.message || 'No se pudo enviar la prueba.' }; }
+    finally { cmpTesting = false; }
   }
 
   // Poll running campaigns every 2s for live counter updates.
@@ -556,19 +751,35 @@ Email: contacto@internetonline.co
     }
   }
 
+  // Ojo de contraseña: si se va a revelar y el campo está vacío pero hay una
+  // config guardada, trae la contraseña almacenada del servidor (solo admin).
+  async function toggleSmtpPassword() {
+    if (!smtpShowPassword && !smtpForm.password && smtpForm.id) {
+      try {
+        const { password } = await smtpApi.reveal(smtpForm.id);
+        smtpForm.password = password || '';
+      } catch (e) {
+        smtpMsg = { type: 'error', text: 'No se pudo obtener la contraseña guardada.' };
+        return;
+      }
+    }
+    smtpShowPassword = !smtpShowPassword;
+  }
+
   function applyPreset(name) {
     const p = SMTP_PRESETS.find(x => x.name === name);
     if (!p) return;
     smtpPreset = name;
+    // NO destructivo: el preset solo PRE-LLENA campos vacíos. Nunca borra el
+    // host/puerto/credenciales que el operador ya escribió. Cambiar de
+    // proveedor conserva tus datos; vacía un campo si quieres el valor del preset.
+    const port = smtpForm.port || p.port;
     smtpForm = {
       ...smtpForm,
       provider: name,
-      // Only overwrite host if the preset gives one — many cPanel hosts
-      // (HostGator, Bluehost, Namecheap) require the operator's own
-      // mail.<their-domain>, so the preset leaves it blank.
-      host: p.host || smtpForm.host,
-      port: p.port,
-      secure: p.secure
+      host: smtpForm.host || p.host,
+      port,
+      secure: Number(port) === 465
     };
   }
 
@@ -586,6 +797,10 @@ Email: contacto@internetonline.co
     smtpMsg = null;
     if (!smtpForm.host || !smtpForm.username || !smtpForm.fromEmail) {
       smtpMsg = { type: 'error', text: 'Host, usuario y email remitente son obligatorios.' };
+      return;
+    }
+    if (smtpForm.host.includes('@') || /\s/.test(smtpForm.host)) {
+      smtpMsg = { type: 'error', text: 'El "Servidor SMTP (host)" debe ser un servidor como mail.tudominio.com, no un correo.' };
       return;
     }
     if (!smtpForm.id && !smtpForm.password) {
@@ -909,6 +1124,12 @@ Email: contacto@internetonline.co
                 <td class="text-xs text-slate-500 whitespace-nowrap">{fmtDate(c.createdAt)}</td>
                 <td class="text-right">
                   <div class="flex items-center justify-end gap-1">
+                    {#if c.status === 'draft'}
+                      <button class="btn-icon !text-emerald-600 hover:!text-emerald-700" title="Lanzar campaña"
+                              on:click={() => executeDraft(c)}>
+                        <Play size={14} />
+                      </button>
+                    {/if}
                     {#if c.failedCount > 0 && c.status !== 'running'}
                       <button class="btn-icon" title="Reintentar fallidos" on:click={() => retryCmp(c)}>
                         <RefreshCw size={14} />
@@ -918,19 +1139,23 @@ Email: contacto@internetonline.co
                             on:click={() => { hisFilter.campaignId = c.id; tab = 'history'; loadHistory(); }}>
                       <Eye size={14} />
                     </button>
-                    <button class="btn-icon" title="Editar y relanzar (crea una nueva)"
-                            disabled={c.status === 'running'}
+                    <button class="btn-icon"
+                            title={c.status === 'draft' ? 'Editar configuración' : 'Editar configuración (guarda como borrador)'}
                             on:click={() => openEditCmp(c)}>
                       <Pencil size={14} />
                     </button>
                     <button class="btn-icon" title="Reenviar con los mismos parámetros"
-                            disabled={c.status === 'running'}
                             on:click={() => resendCmp(c)}>
                       <Copy size={14} />
                     </button>
                     <button class="btn-icon" title="Diagnóstico (debug)"
                             on:click={() => openDiagnose(c)}>
                       <Stethoscope size={14} />
+                    </button>
+                    <button class="btn-icon hover:!text-red-600" title="Eliminar campaña"
+                            disabled={c.status === 'running'}
+                            on:click={() => deleteCmp(c)}>
+                      <Trash2 size={14} />
                     </button>
                   </div>
                 </td>
@@ -1118,6 +1343,17 @@ Email: contacto@internetonline.co
                         </span>
                         <pre class="mt-1 p-3 rounded-lg bg-white border border-slate-200 font-mono text-[11px] text-slate-800 whitespace-pre-wrap leading-relaxed max-h-64 overflow-y-auto">{h.content}</pre>
                       </div>
+                      {#if (h.content || '').match(/https?:\/\/[^\s]+/)}
+                        {@const payUrl = (h.content.match(/https?:\/\/[^\s]+/) || [])[0]}
+                        <div class="flex items-center gap-2 pt-1">
+                          <span class="text-text-secondary uppercase tracking-wide font-semibold text-[10px]">Botón de pago incluido:</span>
+                          <a href={payUrl} target="_blank" rel="noopener"
+                             class="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-[#FDB913] text-[#0E255C] font-bold text-[11px] hover:bg-[#ECA600]">
+                            Pagar ahora →
+                          </a>
+                          <span class="text-[10px] text-text-secondary break-all">{payUrl}</span>
+                        </div>
+                      {/if}
                     </div>
                   </td>
                 </tr>
@@ -1240,7 +1476,7 @@ Email: contacto@internetonline.co
                        placeholder={smtpForm.id ? '(sin cambios)' : 'mínimo 1 carácter'}
                        autocomplete="new-password"
                        class="input pr-10" />
-                <button type="button" on:click={() => smtpShowPassword = !smtpShowPassword}
+                <button type="button" on:click={toggleSmtpPassword}
                         class="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-700"
                         aria-label="Mostrar/ocultar">
                   <svelte:component this={smtpShowPassword ? EyeOff : EyeIcon} size={14} />
@@ -1514,7 +1750,8 @@ Email: contacto@internetonline.co
 <!-- ════════════════════════════════════════════════════
      TEMPLATE MODAL
      ════════════════════════════════════════════════════ -->
-<Sheet bind:open={tplModalOpen} title={tplEditing ? 'Editar plantilla' : 'Nueva plantilla'} maxWidth="max-w-lg">
+<Sheet bind:open={tplModalOpen} title={tplEditing ? 'Editar plantilla' : 'Nueva plantilla'} maxWidth="max-w-4xl">
+  <div class="grid gap-5 lg:grid-cols-2 items-start">
   <form on:submit|preventDefault={saveTpl} id="tpl-form" class="space-y-4">
     {#if tplError}
       <div class="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2.5 text-sm">
@@ -1547,7 +1784,7 @@ Email: contacto@internetonline.co
       </div>
 
       <div>
-        <label for="tpl-preset" class="label">Estilo visual (header del correo)</label>
+        <label for="tpl-preset" class="label">Tipo de correo</label>
         <select id="tpl-preset" bind:value={tplForm.preset}
                 on:change={onPresetChange} class="select">
           {#each EMAIL_PRESETS as p}
@@ -1556,8 +1793,11 @@ Email: contacto@internetonline.co
         </select>
         <div class="flex items-start justify-between gap-2 mt-1.5">
           <p class="text-[11px] text-text-secondary flex-1">
-            Define el icono y título del header con gradiente azul. Al elegir uno,
-            te proponemos un asunto y cuerpo de ejemplo si el formulario está vacío.
+            Define el header (icono + título) <strong>y</strong> a qué correo del sistema aplica
+            esta plantilla cuando está activa.
+            {#if EMAIL_PRESETS.find(p => p.key === (tplForm.preset || ''))?.event}
+              <br><span class="text-brand-600 font-medium">→ {EMAIL_PRESETS.find(p => p.key === (tplForm.preset || '')).event}</span>
+            {/if}
           </p>
           {#if tplForm.preset && PRESET_SAMPLES[tplForm.preset]}
             <button type="button" on:click={useSampleNow}
@@ -1583,6 +1823,26 @@ Email: contacto@internetonline.co
       Plantilla activa
     </label>
   </form>
+
+  {#if tplForm.channel === 'EMAIL'}
+    <div class="space-y-2 lg:sticky lg:top-2">
+      <div class="flex items-center justify-between">
+        <span class="label !mb-0">Vista previa</span>
+        {#if tplPreviewLoading}<Loader2 size={13} class="animate-spin text-slate-400" />{/if}
+      </div>
+      <div class="rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div class="px-3 py-2 border-b border-slate-200 bg-white text-xs text-slate-600 truncate">
+          <span class="text-slate-400">Asunto:</span> {tplPreviewSubject || '—'}
+        </div>
+        <iframe title="Vista previa del correo" srcdoc={tplPreviewHtml}
+                class="w-full h-[440px] bg-white block" sandbox=""></iframe>
+      </div>
+      <p class="text-[11px] text-slate-400">
+        Diseño real de marca con datos de ejemplo — es exactamente lo que recibe el cliente.
+      </p>
+    </div>
+  {/if}
+  </div>
   <svelte:fragment slot="footer">
     <button type="button" on:click={() => tplModalOpen = false} class="btn-secondary" disabled={tplSaving}>Cancelar</button>
     <button type="submit" form="tpl-form" class="btn-primary" disabled={tplSaving}>
@@ -1739,8 +1999,8 @@ Email: contacto@internetonline.co
 <!-- ════════════════════════════════════════════════════
      CAMPAIGN MODAL
      ════════════════════════════════════════════════════ -->
-<Sheet bind:open={cmpModalOpen} title="Nueva campaña" maxWidth="max-w-2xl">
-  <form on:submit|preventDefault={launchCampaign} id="cmp-form" class="space-y-5">
+<Sheet bind:open={cmpModalOpen} title={cmpEditingId ? 'Editar borrador' : 'Nueva campaña'} maxWidth="max-w-2xl">
+  <form on:submit|preventDefault={launchNow} id="cmp-form" class="space-y-5">
     {#if cmpError}
       <div class="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2.5 text-sm">
         <AlertCircle size={14} class="mt-0.5" /> <span>{cmpError}</span>
@@ -1834,89 +2094,153 @@ Email: contacto@internetonline.co
           {'{{'}paymentLink{'}}'}
         </span>
       </label>
+      {#if cmpForm.generatePaymentLinks}
+        <div class="rounded-lg bg-blue-50 border border-blue-200 px-3 py-2 text-[11px] text-blue-800 leading-relaxed">
+          <strong>¿Qué se cobra?</strong> A cada cliente se le genera un link Wompi por su
+          <strong>factura pendiente más antigua</strong>, por el <strong>saldo pendiente</strong> de esa factura
+          (no es un cobro adicional). La lista de abajo muestra la factura y el monto exacto por cliente.
+          Quien no tenga facturas pendientes <strong>no recibe link</strong> (el mensaje le llega sin botón de pago).
+          {#if cmpLinkEligible !== null}
+            <br><span class="font-semibold">{cmpLinkEligible}</span> de {cmpSelected.size} seleccionados recibirán link de pago.
+          {/if}
+        </div>
+      {/if}
 
-      <!-- Expandable list of clients matching the audience filter -->
+      <!-- Recipient selection (checkboxes): pick all or just some -->
       {#if (audiencePreview ?? 0) > 0}
-        <div class="border-t border-slate-200 pt-3">
-          <button type="button"
-                  on:click={() => { audienceListOpen = !audienceListOpen; if (audienceListOpen && audienceList.length === 0) loadAudienceList(); }}
-                  class="w-full flex items-center justify-between text-sm font-medium
-                         text-text-primary hover:text-brand-700 transition">
-            <span class="inline-flex items-center gap-1.5">
-              <Eye size={14} />
-              {audienceListOpen ? 'Ocultar' : 'Ver'} clientes que recibirán esta campaña
+        <div class="border-t border-slate-200 pt-3 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-medium text-text-primary inline-flex items-center gap-1.5">
+              <Eye size={14} /> ¿Quién recibe la campaña?
             </span>
-            <svelte:component this={audienceListOpen ? ChevronUp : ChevronDown} size={14} />
-          </button>
+            <span class="text-xs text-text-secondary">
+              <strong class="text-brand-700">{cmpSendCount}</strong> de {audiencePreview} seleccionado{cmpSendCount === 1 ? '' : 's'}
+            </span>
+          </div>
 
-          {#if audienceListOpen}
-            <div class="mt-2">
-              {#if audienceListLoading}
-                <div class="flex items-center gap-2 text-xs text-text-secondary py-3">
-                  <Loader2 size={12} class="animate-spin" /> Cargando clientes...
-                </div>
-              {:else if audienceList.length === 0}
-                <div class="text-xs text-text-secondary py-2">No hay clientes que coincidan.</div>
-              {:else}
-                <div class="max-h-64 overflow-y-auto rounded-lg border border-slate-200 bg-white">
-                  <table class="w-full text-xs">
-                    <thead class="bg-slate-50 sticky top-0">
-                      <tr class="text-text-secondary">
-                        <th class="text-left px-3 py-2 font-medium">Cliente</th>
-                        <th class="text-left px-3 py-2 font-medium">Zona / Plan</th>
-                        <th class="text-left px-3 py-2 font-medium">Email</th>
-                        <th class="text-left px-3 py-2 font-medium">Teléfono</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {#each audienceList as c (c.id)}
-                        <tr class="border-t border-slate-100">
-                          <td class="px-3 py-1.5 text-slate-900">{c.name}</td>
-                          <td class="px-3 py-1.5 text-slate-600">
-                            {c.zone?.name || '—'}
-                            {#if c.plan?.name}<span class="text-slate-400"> · {c.plan.name}</span>{/if}
-                          </td>
-                          <td class="px-3 py-1.5 font-mono {!c.email ? 'text-amber-600' : 'text-slate-700'}">
-                            {c.email || '(sin email)'}
-                          </td>
-                          <td class="px-3 py-1.5 font-mono {!c.phone ? 'text-amber-600' : 'text-slate-700'}">
-                            {c.phone || '(sin tel)'}
-                          </td>
-                        </tr>
-                      {/each}
-                    </tbody>
-                  </table>
-                </div>
-                {#if audienceList.length < (audiencePreview ?? 0)}
-                  <p class="text-[11px] text-text-secondary mt-1.5">
-                    Mostrando los primeros {audienceList.length} de {audiencePreview}.
-                  </p>
-                {/if}
-                {#if cmpForm.channel === 'EMAIL' || cmpForm.channel === 'BOTH'}
-                  {@const noEmail = audienceList.filter(c => !c.email).length}
-                  {#if noEmail > 0}
-                    <p class="text-[11px] text-amber-700 mt-1.5 inline-flex items-center gap-1">
-                      <AlertCircle size={11} />
-                      {noEmail} cliente{noEmail === 1 ? '' : 's'} sin email — esos envíos quedarán como "fallidos".
-                    </p>
-                  {/if}
-                {/if}
-              {/if}
+          {#if audienceListLoading}
+            <div class="flex items-center gap-2 text-xs text-text-secondary py-3">
+              <Loader2 size={12} class="animate-spin" /> Cargando clientes...
             </div>
+          {:else if audienceList.length === 0}
+            <div class="text-xs text-text-secondary py-2">No hay clientes que coincidan.</div>
+          {:else}
+            <div class="rounded-lg border border-slate-200 bg-white overflow-hidden">
+              <!-- Seleccionar todos -->
+              <label class="flex items-center gap-2 px-3 py-2 bg-slate-50 border-b border-slate-200
+                            cursor-pointer text-xs font-semibold text-text-primary select-none">
+                <input type="checkbox" class="w-4 h-4"
+                       checked={cmpAllSelected}
+                       indeterminate={cmpSelected.size > 0 && !cmpAllSelected}
+                       on:change={toggleAllClients} />
+                Seleccionar todos ({audienceList.length})
+              </label>
+              <div class="max-h-60 overflow-y-auto">
+                <table class="w-full text-xs">
+                  <tbody>
+                    {#each audienceList as c (c.id)}
+                      <tr class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer"
+                          on:click={() => toggleClient(c.id)}>
+                        <td class="pl-3 py-1.5 w-7">
+                          <input type="checkbox" class="w-4 h-4 pointer-events-none"
+                                 checked={cmpSelected.has(c.id)}
+                                 tabindex="-1" />
+                        </td>
+                        <td class="px-2 py-1.5 text-slate-900">{c.name}</td>
+                        <td class="px-2 py-1.5 text-slate-600">
+                          {c.zone?.name || '—'}{#if c.plan?.name}<span class="text-slate-400"> · {c.plan.name}</span>{/if}
+                        </td>
+                        <td class="px-2 py-1.5 font-mono {!c.email ? 'text-amber-600' : 'text-slate-700'}">{c.email || '(sin email)'}</td>
+                        <td class="px-3 py-1.5 font-mono {!c.phone ? 'text-amber-600' : 'text-slate-700'}">{c.phone || '(sin tel)'}</td>
+                        {#if cmpForm.generatePaymentLinks}
+                          {@const inv = c.invoices?.[0]}
+                          <td class="px-3 py-1.5 whitespace-nowrap text-right">
+                            {#if inv}
+                              <span class="inline-flex items-center gap-1 rounded-md bg-emerald-50 text-emerald-700 px-1.5 py-0.5 font-medium"
+                                    title="Se cobrará la factura {inv.invoiceNumber} (vence {new Date(inv.dueDate).toLocaleDateString('es-CO')})">
+                                🧾 {inv.invoiceNumber} · {fmtCop(inv.balanceDue > 0 ? inv.balanceDue : (inv.total ?? inv.amount))}
+                              </span>
+                            {:else}
+                              <span class="text-slate-400" title="Sin facturas pendientes — el correo llega sin botón de pago">sin pendientes</span>
+                            {/if}
+                          </td>
+                        {/if}
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {#if cmpTruncated}
+              <p class="text-[11px] text-text-secondary">
+                Mostrando los primeros {audienceList.length} de {audiencePreview}.
+                {#if cmpAllSelected}Con “todos” marcado se enviará a los {audiencePreview}.{/if}
+              </p>
+            {/if}
+            {#if cmpNoContact > 0}
+              <p class="text-[11px] text-amber-700 inline-flex items-center gap-1">
+                <AlertCircle size={11} />
+                {cmpNoContact} sin {cmpForm.channel === 'WHATSAPP' ? 'teléfono' : 'email'} — si los incluyes, esos envíos quedarán como “fallidos”.
+              </p>
+            {/if}
           {/if}
         </div>
       {/if}
     </div>
+
+    <!-- Prueba: enviar la campaña a UN solo cliente real (datos reales, su
+         contacto). Se registra aparte; no cuenta como campaña ni la lanza. -->
+    {#if cmpForm.templateId && audienceList.length > 0}
+      <div class="border border-amber-200 rounded-xl p-3.5 bg-amber-50/40 space-y-2">
+        <div class="text-sm font-semibold text-text-primary inline-flex items-center gap-1.5">
+          <FlaskConical size={14} class="text-amber-600" /> Enviar prueba a un cliente
+        </div>
+        <p class="text-[11px] text-text-secondary">
+          Se envía solo a este cliente con sus datos reales para que verifiques cómo llega.
+          No cuenta como campaña ni la lanza.
+        </p>
+        <div class="flex flex-col sm:flex-row gap-2">
+          <select bind:value={cmpTestClientId} class="select flex-1 text-sm">
+            <option value="">Elegir cliente para la prueba…</option>
+            {#each audienceList as c (c.id)}
+              <option value={c.id}>{c.name}{c.email || c.phone ? ` · ${c.email || c.phone}` : ''}</option>
+            {/each}
+          </select>
+          <button type="button" on:click={sendTest} disabled={cmpTesting || !cmpTestClientId}
+                  class="btn-secondary whitespace-nowrap">
+            {#if cmpTesting}<Loader2 size={14} class="animate-spin" /> Enviando…
+            {:else}<Send size={14} /> Enviar prueba{/if}
+          </button>
+        </div>
+        {#if cmpTestMsg}
+          <p class="text-[11px] inline-flex items-center gap-1 {cmpTestMsg.type === 'success' ? 'text-emerald-700' : 'text-red-600'}">
+            {#if cmpTestMsg.type === 'success'}<CheckCircle2 size={12} />{:else}<AlertCircle size={12} />{/if}
+            {cmpTestMsg.text}
+          </p>
+        {/if}
+      </div>
+    {/if}
   </form>
 
   <svelte:fragment slot="footer">
+    <!-- The form error also renders here (sticky footer) because the in-form
+         banner sits at the top and is out of view when the modal is scrolled
+         down — the operator must always see WHY the action was rejected. -->
+    {#if cmpError}
+      <span class="flex-1 text-xs text-red-600 inline-flex items-center gap-1.5 min-w-0">
+        <AlertCircle size={13} class="shrink-0" /> <span class="truncate" title={cmpError}>{cmpError}</span>
+      </span>
+    {/if}
     <button type="button" on:click={() => cmpModalOpen = false} class="btn-secondary" disabled={cmpSaving}>Cancelar</button>
+    <button type="button" on:click={saveDraft} class="btn-secondary" disabled={cmpSaving}>
+      <Save size={15} /> Guardar borrador
+    </button>
     <button type="submit" form="cmp-form" class="btn-primary"
-            disabled={cmpSaving || (audiencePreview ?? 0) === 0}>
+            disabled={cmpSaving || cmpSendCount === 0}>
       {#if cmpSaving}
-        <Loader2 size={15} class="animate-spin" /> Lanzando...
+        <Loader2 size={15} class="animate-spin" /> Procesando...
       {:else}
-        <Send size={15} /> Lanzar a {audiencePreview ?? 0} {audiencePreview === 1 ? 'cliente' : 'clientes'}
+        <Send size={15} /> Lanzar a {cmpSendCount} {cmpSendCount === 1 ? 'cliente' : 'clientes'}
       {/if}
     </button>
   </svelte:fragment>

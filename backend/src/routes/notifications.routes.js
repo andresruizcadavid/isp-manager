@@ -3,8 +3,22 @@ import { z } from 'zod';
 import { prisma } from '../config/database.js';
 import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
 import { validateBody, validateQuery } from '../middleware/validate.middleware.js';
+import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
+import { runCampaign, retryFailed, sendToClient, loadClientForSend } from '../services/notification.campaign.service.js';
 
 const router = Router();
+
+// Sample data used ONLY to render the live preview in the template editor, so
+// the operator sees the real branded layout (same renderEmailTemplate the
+// system sends) with placeholder values instead of {{vars}}.
+const PREVIEW_SAMPLE = {
+  name: 'Andrés Gómez', plan: 'Plan Full 100MB', amount: '$65.000 COP',
+  dueDate: '15/06/2026', balance: '$65.000 COP', zone: 'San Vicente',
+  ip: '10.20.30.40', invoiceNumber: 'INV-0042',
+  email: 'cliente@correo.com', phone: '+57 300 000 0000'
+};
+const fillSampleVars = (str) =>
+  String(str || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => PREVIEW_SAMPLE[k] ?? '');
 
 const CHANNEL = z.enum(['EMAIL', 'WHATSAPP', 'BOTH']);
 const CHANNEL_SINGLE = z.enum(['EMAIL', 'WHATSAPP']);
@@ -26,18 +40,61 @@ const templateSchema = z.object({
   isActive: z.boolean().optional()
 });
 
+const audienceSchema = z.object({
+  zoneId:  z.union([z.number(), z.string()]).optional(),
+  planId:  z.string().optional(),
+  status:  z.enum(['ACTIVE', 'SUSPENDED', 'PENDING', 'INACTIVE']).optional(),
+  overdue: z.boolean().optional(),
+  // Explicit recipient selection from the UI checkboxes. When present it is
+  // authoritative: the campaign goes ONLY to these clients (the zone/plan/
+  // status filters were just used to build the candidate list). Omitted =
+  // "todos los que coinciden con los filtros".
+  clientIds: z.array(z.string().min(1)).optional()
+});
+
 const campaignSchema = z.object({
   name:       z.string().min(2),
   templateId: z.string().min(1, 'Selecciona una plantilla'),
   channel:    CHANNEL,
   generatePaymentLinks: z.boolean().optional().default(false),
-  audience:   z.object({
-    zoneId:  z.union([z.number(), z.string()]).optional(),
-    planId:  z.string().optional(),
-    status:  z.enum(['ACTIVE', 'SUSPENDED', 'PENDING', 'INACTIVE']).optional(),
-    overdue: z.boolean().optional()
-  }).optional()
+  // 'draft' just persists the configuration (no send); 'launch' runs it now.
+  mode:       z.enum(['draft', 'launch']).optional().default('launch'),
+  audience:   audienceSchema.optional()
 });
+
+// Single-client send (campaign test from the modal + manual send from the
+// client page). Reuses sendToClient — logged with campaignId=null so it never
+// touches a campaign's counters.
+const singleSendSchema = z.object({
+  clientId:   z.string().min(1, 'Falta el cliente'),
+  templateId: z.string().min(1, 'Selecciona una plantilla'),
+  channel:    CHANNEL,
+  generatePaymentLinks: z.boolean().optional().default(false)
+});
+
+// Build the Prisma `where` for an audience filter. Single source of truth for
+// /campaigns (preflight), /campaigns/:id/launch and the diagnose re-resolve.
+function audienceWhere(audience) {
+  const where = {};
+  if (audience?.clientIds?.length) where.id = { in: audience.clientIds };
+  if (audience?.zoneId)  where.zoneId  = Number(audience.zoneId);
+  if (audience?.planId)  where.planId  = audience.planId;
+  if (audience?.status)  where.status  = audience.status;
+  if (audience?.overdue) where.invoices = { some: { status: 'OVERDUE' } };
+  return where;
+}
+
+// Validate a template can be used for the requested channel. Returns
+// { tpl } on success or { error } with a human message.
+async function resolveTemplateOrError(templateId, channel) {
+  const tpl = await prisma.notificationTemplate.findUnique({ where: { id: templateId } });
+  if (!tpl) return { error: 'Plantilla no encontrada' };
+  if (!tpl.isActive) return { error: 'La plantilla está inactiva' };
+  if (channel !== 'BOTH' && channel !== tpl.channel) {
+    return { error: `La plantilla "${tpl.name}" es para ${tpl.channel}; no puedes enviarla por ${channel}.` };
+  }
+  return { tpl };
+}
 
 // ════════════════════════════════════════════════════════════
 // TEMPLATES
@@ -50,6 +107,30 @@ router.get('/templates', async (req, res) => {
     });
     res.json({ success: true, data: items });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Live branded preview for the template editor. Renders {preset, subject, body}
+// with sample data through the SAME renderEmailTemplate the system uses to send,
+// so "lo que ves es lo que llega". No DB writes. Mirrors sendEmail(): the header
+// H1 is the preset title; the operator body is the email body; the subject is
+// the inbox subject line (returned separately).
+router.post('/templates/preview', (req, res) => {
+  try {
+    const { preset, subject, body } = req.body || {};
+    const meta = (preset && EMAIL_PRESETS[preset]) || EMAIL_PRESETS.general_announcement;
+    const renderedSubject = fillSampleVars(subject) || meta.title;
+    const cta = (preset === 'invoice' || preset === 'reminder')
+      ? { text: 'Pagar ahora', url: '#' } : undefined;
+    const html = renderEmailTemplate({
+      icon:  meta.icon,
+      title: meta.title,
+      body:  fillSampleVars(body) || 'Escribe el cuerpo del mensaje para ver la vista previa…',
+      cta
+    });
+    res.json({ success: true, data: { html, subject: renderedSubject } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 router.post('/templates', validateBody(templateSchema), async (req, res) => {
@@ -142,7 +223,17 @@ router.post('/campaigns/preview-clients', async (req, res) => {
         select: {
           id: true, name: true, email: true, phone: true, status: true,
           zone: { select: { name: true } },
-          plan: { select: { name: true } }
+          plan: { select: { name: true } },
+          // Oldest open invoice — EXACTLY the one the campaign runner charges
+          // when "Generar links de pago" is on (same filter + same ordering as
+          // notification.campaign.service clientVars/createForInvoice), so the
+          // operator sees in the UI precisely what each client will be billed.
+          invoices: {
+            where: { status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
+            orderBy: { dueDate: 'asc' },
+            take: 1,
+            select: { invoiceNumber: true, balanceDue: true, total: true, amount: true, dueDate: true, status: true }
+          }
         }
       }),
       prisma.client.count({ where })
@@ -151,36 +242,34 @@ router.post('/campaigns/preview-clients', async (req, res) => {
   } catch (e) { res.status(400).json({ success: false, error: e.message }); }
 });
 
-// Create + launch campaign. The actual send happens in the background so the
-// HTTP request returns immediately with the campaign record (status=running).
-// The frontend polls /campaigns/:id to see progress.
+// Fire-and-forget launch of an already-persisted campaign row. Errors inside
+// runCampaign update the row with status=failed + detailed logs.
+function fireCampaign(id) {
+  runCampaign(id).catch(async (e) => {
+    console.error(`[campaign ${id}] runner crashed:`, e);
+    await prisma.notificationCampaign.update({
+      where: { id },
+      data: { status: 'failed', finishedAt: new Date() }
+    }).catch(() => {});
+  });
+}
+
+// Create a campaign. mode='draft' saves the configuration WITHOUT sending
+// (status=draft); mode='launch' (default) runs it immediately in the
+// background and the frontend polls /campaigns/:id for progress.
 router.post('/campaigns', validateBody(campaignSchema), async (req, res) => {
   try {
-    const { name, templateId, channel, generatePaymentLinks, audience } = req.body;
+    const { name, templateId, channel, generatePaymentLinks, audience, mode } = req.body;
+    const isDraft = mode === 'draft';
 
-    // Validate template exists and channel matches the template's channel
-    // (when sending single-channel; "BOTH" requires the template to be EMAIL
-    // or WHATSAPP and we just use it for both).
-    const tpl = await prisma.notificationTemplate.findUnique({ where: { id: templateId } });
-    if (!tpl) return res.status(400).json({ success: false, error: 'Plantilla no encontrada' });
-    if (!tpl.isActive) return res.status(400).json({ success: false, error: 'La plantilla está inactiva' });
-    if (channel !== 'BOTH' && channel !== tpl.channel) {
-      return res.status(400).json({
-        success: false,
-        error: `La plantilla "${tpl.name}" es para ${tpl.channel}; no puedes enviarla por ${channel}.`
-      });
-    }
+    const { error } = await resolveTemplateOrError(templateId, channel);
+    if (error) return res.status(400).json({ success: false, error });
 
-    // Pre-flight: verify the audience actually has people in it. A campaign
-    // with 0 recipients silently "completes" without logs and confuses the
-    // operator into thinking it failed. Reject early with a clear message.
-    {
-      const where = {};
-      if (audience?.zoneId)  where.zoneId  = Number(audience.zoneId);
-      if (audience?.planId)  where.planId  = audience.planId;
-      if (audience?.status)  where.status  = audience.status;
-      if (audience?.overdue) where.invoices = { some: { status: 'OVERDUE' } };
-      const audienceCount = await prisma.client.count({ where });
+    // Pre-flight only matters when sending now: a draft can be saved with an
+    // empty/partial audience and refined later. A launch with 0 recipients
+    // silently "completes" without logs, so reject it early.
+    if (!isDraft) {
+      const audienceCount = await prisma.client.count({ where: audienceWhere(audience) });
       if (audienceCount === 0) {
         return res.status(400).json({
           success: false,
@@ -196,23 +285,114 @@ router.post('/campaigns', validateBody(campaignSchema), async (req, res) => {
         channel,
         generatePaymentLinks,
         audienceJson: audience ? JSON.stringify(audience) : null,
-        status: 'running',
-        startedAt: new Date(),
+        status: isDraft ? 'draft' : 'running',
+        startedAt: isDraft ? null : new Date(),
         createdBy: req.user?.id || null
       }
     });
 
-    // Fire and forget. Errors inside runCampaign update the campaign row
-    // with status=failed and detailed logs — no rethrow needed here.
-    runCampaign(created.id).catch(async (e) => {
-      console.error(`[campaign ${created.id}] runner crashed:`, e);
-      await prisma.notificationCampaign.update({
-        where: { id: created.id },
-        data: { status: 'failed', finishedAt: new Date() }
-      }).catch(() => {});
-    });
+    if (!isDraft) fireCampaign(created.id);
 
-    res.status(202).json({ success: true, data: created });
+    res.status(isDraft ? 201 : 202).json({ success: true, data: created });
+  } catch (e) { res.status(400).json({ success: false, error: e.message }); }
+});
+
+// Update a DRAFT campaign's configuration. Sent campaigns are immutable
+// history — the UI clones them into a new draft instead of editing in place.
+router.put('/campaigns/:id', validateBody(campaignSchema.partial()), async (req, res) => {
+  try {
+    const existing = await prisma.notificationCampaign.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (existing.status !== 'draft') {
+      return res.status(409).json({
+        success: false,
+        error: 'Solo puedes editar campañas en borrador. Las campañas enviadas son historial; clónala en un borrador nuevo para reutilizar su configuración.'
+      });
+    }
+
+    const { name, templateId, channel, generatePaymentLinks, audience } = req.body;
+
+    // If template or channel changes, re-validate compatibility.
+    if (templateId !== undefined || channel !== undefined) {
+      const tId = templateId ?? existing.templateId;
+      const ch  = channel ?? existing.channel;
+      if (tId) {
+        const { error } = await resolveTemplateOrError(tId, ch);
+        if (error) return res.status(400).json({ success: false, error });
+      }
+    }
+
+    const data = {};
+    if (name       !== undefined) data.name       = name;
+    if (templateId !== undefined) data.templateId = templateId;
+    if (channel    !== undefined) data.channel    = channel;
+    if (generatePaymentLinks !== undefined) data.generatePaymentLinks = generatePaymentLinks;
+    if (audience   !== undefined) data.audienceJson = audience ? JSON.stringify(audience) : null;
+
+    const updated = await prisma.notificationCampaign.update({
+      where: { id: req.params.id },
+      data
+    });
+    res.json({ success: true, data: updated });
+  } catch (e) { res.status(400).json({ success: false, error: e.message }); }
+});
+
+// Launch a draft campaign. Validates template + audience, flips it to running
+// and fires the background runner. Only drafts can be launched.
+router.post('/campaigns/:id/launch', async (req, res) => {
+  try {
+    const c = await prisma.notificationCampaign.findUnique({ where: { id: req.params.id } });
+    if (!c) return res.status(404).json({ success: false, error: 'Campaña no encontrada' });
+    if (c.status === 'running') {
+      return res.status(409).json({ success: false, error: 'La campaña ya está en ejecución.' });
+    }
+    if (c.status !== 'draft') {
+      return res.status(409).json({ success: false, error: 'Solo se pueden lanzar campañas en borrador. Usa "Reenviar" para repetir una campaña ya enviada.' });
+    }
+    if (!c.templateId) {
+      return res.status(400).json({ success: false, error: 'La campaña no tiene plantilla asociada.' });
+    }
+    const { error } = await resolveTemplateOrError(c.templateId, c.channel);
+    if (error) return res.status(400).json({ success: false, error });
+
+    let audience = {};
+    try { audience = c.audienceJson ? JSON.parse(c.audienceJson) : {}; } catch { audience = {}; }
+    const audienceCount = await prisma.client.count({ where: audienceWhere(audience) });
+    if (audienceCount === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'La audiencia está vacía: ningún cliente coincide con los filtros. Ajusta la audiencia antes de lanzar.'
+      });
+    }
+
+    const updated = await prisma.notificationCampaign.update({
+      where: { id: c.id },
+      data: { status: 'running', startedAt: new Date(), finishedAt: null, sentCount: 0, failedCount: 0 }
+    });
+    fireCampaign(c.id);
+    res.status(202).json({ success: true, data: updated });
+  } catch (e) { res.status(400).json({ success: false, error: e.message }); }
+});
+
+// Send a single test/manual delivery to ONE client using a template. Used by
+// the campaign modal's "Enviar prueba" and (via the same service) the client
+// page. Logged with campaignId=null so it doesn't affect campaign counters.
+router.post('/campaigns/test', validateBody(singleSendSchema), async (req, res) => {
+  try {
+    const { clientId, templateId, channel, generatePaymentLinks } = req.body;
+    const { tpl, error } = await resolveTemplateOrError(templateId, channel);
+    if (error) return res.status(400).json({ success: false, error });
+
+    const client = await loadClientForSend(clientId);
+    if (!client) return res.status(404).json({ success: false, error: 'Cliente no encontrado' });
+
+    const result = await sendToClient({
+      client, template: tpl, channel, generatePaymentLinks, campaignId: null
+    });
+    res.json({
+      success: true,
+      data: { ...result, client: { id: client.id, name: client.name, email: client.email, phone: client.phone } }
+    });
   } catch (e) { res.status(400).json({ success: false, error: e.message }); }
 });
 
@@ -303,6 +483,22 @@ router.post('/campaigns/:id/retry', async (req, res) => {
     }
     const result = await retryFailed(req.params.id);
     res.json({ success: true, data: result });
+  } catch (e) { res.status(400).json({ success: false, error: e.message }); }
+});
+
+// Delete a campaign. Its delivery logs survive (NotificationLog.campaign is
+// onDelete: SetNull) so the send history stays auditable in the History tab.
+// Running campaigns can't be deleted — the background runner still updates the
+// row mid-flight; wait for it to finish (or for the stale sweep to fail it).
+router.delete('/campaigns/:id', async (req, res) => {
+  try {
+    const c = await prisma.notificationCampaign.findUnique({ where: { id: req.params.id } });
+    if (!c) return res.json({ success: true }); // already gone — idempotent
+    if (c.status === 'running') {
+      return res.status(409).json({ success: false, error: 'La campaña está en ejecución; espera a que termine para eliminarla.' });
+    }
+    await prisma.notificationCampaign.delete({ where: { id: req.params.id } });
+    res.json({ success: true });
   } catch (e) { res.status(400).json({ success: false, error: e.message }); }
 });
 

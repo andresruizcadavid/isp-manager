@@ -64,9 +64,13 @@
   // Operator can toggle freely; we also auto-expand the group that
   // contains the active item so the user always sees where they are.
   let expanded = {};
-  // Reset expansion every time the active group changes — keeps the
-  // active group open without locking the others closed forever.
-  $: if (activeParent) {
+  // Auto-expand the active group, but ONLY when the active group actually
+  // changes (tracked via _lastActiveParent). Without this guard the reactive
+  // re-ran on every `expanded` write — reading `expanded` made it a dependency —
+  // so collapsing the active group instantly re-opened it (the reported bug).
+  let _lastActiveParent = null;
+  $: if (activeParent?.id && activeParent.id !== _lastActiveParent) {
+    _lastActiveParent = activeParent.id;
     expanded = { ...expanded, [activeParent.id]: true };
   }
   function toggleSection(id) { expanded = { ...expanded, [id]: !expanded[id] }; }
@@ -391,7 +395,11 @@
           {@const group = section.group}
           {@const GroupIcon = group.icon || Network}
           {@const groupHasActive = activeParent?.id === group.id}
-          {@const isOpen = expanded[group.id] || groupHasActive}
+          <!-- isOpen sigue SOLO el estado `expanded` (toggle del operador). La
+               auto-apertura del grupo activo la hace el reactivo de arriba; NO
+               forzar con `|| groupHasActive` o el grupo activo nunca se podría
+               recoger (bug reportado). -->
+          {@const isOpen = expanded[group.id]}
           <button type="button" on:click={() => toggleSection(group.id)}
                   class="w-full flex items-center justify-between px-3 min-h-[44px] rounded-lg
                          text-sm font-medium transition-colors duration-150 mb-0.5

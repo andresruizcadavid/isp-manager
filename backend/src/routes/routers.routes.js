@@ -1,10 +1,34 @@
 import { Router } from 'express';
 import { prisma } from '../config/database.js';
 import { requireAdmin } from '../middleware/auth.middleware.js';
-import { buildMikrotikService, testRouterCredentials } from '../services/mikrotik.service.js';
+import { buildMikrotikService, testRouterCredentials, INTERACTIVE_OPTS } from '../services/mikrotik.service.js';
 import { probeRouter } from '../services/router-monitor.service.js';
 
 const router = Router();
+
+// ── Role gate ───────────────────────────────────────────────────────
+// The mount in app.js is `requireOperational` so field TECHNICIANs can do
+// client provisioning. Only these READ-ONLY catalog endpoints are open to
+// them; EVERYTHING else (router CRUD, credentials, sync, imports, profile
+// mutations) still requires admin-tier via this gate.
+const TECH_READABLE = [
+  /^GET \/$/,                          // router list (credentials stripped below)
+  /^GET \/\d+\/profiles$/,             // PPPoE profiles (new-client form)
+  /^GET \/\d+\/ppp-profiles$/,         // PPP profile detail list
+  /^GET \/\d+\/available-ips$/,        // free IPs for assignment
+  /^GET \/\d+\/active$/,               // active PPPoE sessions (status panel)
+  /^GET \/\d+\/ppp-secret-lookup$/     // read-only existing-account lookup (adopt flow)
+];
+router.use((req, res, next) => {
+  const key = `${req.method} ${req.path}`;
+  if (TECH_READABLE.some(re => re.test(key))) return next();
+  return requireAdmin(req, res, next);
+});
+
+// Routers carry RouterOS credentials. Admin-tier gets them (edit forms need
+// them); technicians get the sanitized shape — enough to provision clients.
+const isAdminTier = (req) => ['ADMIN', 'OPERATOR'].includes(req.user?.role);
+const sanitizeRouter = ({ password, username, port, ...rest }) => rest;
 
 // Always load routes alongside the router so callers can pick a dial-target
 // without a second round-trip. Sorted by priority so r.routes[0] is the primary.
@@ -69,7 +93,7 @@ router.get('/', async (req, res) => {
       include: ROUTER_INCLUDE,
       orderBy: { createdAt: 'desc' }
     });
-    res.json({ success: true, data: routers });
+    res.json({ success: true, data: isAdminTier(req) ? routers : routers.map(sanitizeRouter) });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -161,10 +185,34 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE router
+// DELETE router — GUARDED. A router holds critical, non-recreatable config
+// (credentials, failover routes, client links, .rsc backups). Deleting one
+// cascades its routes/backups/sessions and orphans its client accounts
+// (routerId → null). So we REFUSE to delete a router that still has client
+// accounts or backups; the operator must deactivate it instead (which keeps
+// everything intact). Only a truly empty router (no accounts, no backups) can
+// be removed — e.g. one created by mistake.
 router.delete('/:id', async (req, res) => {
   try {
-    await prisma.router.delete({ where: { id: Number(req.params.id) } });
+    const id = Number(req.params.id);
+    const router = await prisma.router.findUnique({ where: { id } });
+    if (!router) return res.json({ success: true }); // already gone — idempotent
+
+    const [accounts, backups] = await Promise.all([
+      prisma.mikrotikAccount.count({ where: { routerId: id } }),
+      prisma.routerBackup.count({ where: { routerId: id } })
+    ]);
+    if (accounts > 0 || backups > 0) {
+      const parts = [];
+      if (accounts > 0) parts.push(`${accounts} cuenta(s) de cliente`);
+      if (backups > 0)  parts.push(`${backups} backup(s) guardado(s)`);
+      return res.status(409).json({
+        success: false,
+        error: `No se puede eliminar "${router.name}" porque tiene ${parts.join(' y ')} asociado(s). Para conservar la configuración, desactívalo (botón de apagado) en lugar de borrarlo.`
+      });
+    }
+
+    await prisma.router.delete({ where: { id } });
     res.json({ success: true });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
@@ -266,8 +314,79 @@ router.get('/:id/profiles', async (req, res) => {
       include: ROUTER_INCLUDE
     });
     const mk       = buildMikrotikService(r);
-    const profiles = await mk.getPPPoEProfiles();
+    // Interactive: this is the new-client form's connectivity probe. Fail fast.
+    const profiles = await mk.getPPPoEProfiles(INTERACTIVE_OPTS);
     res.json({ success: true, data: profiles });
+  } catch (e) {
+    res.status(400).json({ success: false, error: e.message });
+  }
+});
+
+// GET /:id/ppp-secret-lookup?username=X — READ-ONLY check used by the
+// "Agregar Cliente" form to adopt accounts that already live on the router
+// (installed in the field but never registered in the system). Returns the
+// secret's data + active session + a suggested local plan + whether the
+// username is already linked to a local client. NO writes to RouterOS.
+router.get('/:id/ppp-secret-lookup', async (req, res) => {
+  try {
+    const username = String(req.query.username || '').trim();
+    if (!username) return res.status(400).json({ success: false, error: 'username requerido' });
+
+    const r  = await prisma.router.findUniqueOrThrow({
+      where: { id: Number(req.params.id) }, include: ROUTER_INCLUDE
+    });
+    const mk = buildMikrotikService(r);
+
+    const secret = await mk.findPPPoESecretByName(username, INTERACTIVE_OPTS);
+    if (!secret) return res.json({ success: true, data: { found: false } });
+
+    // Active session (best-effort) — gives us the IP actually in use + uptime.
+    let active = null;
+    try {
+      const a = await mk.findActivePPPoEByName(username, INTERACTIVE_OPTS);
+      if (a) active = { address: a.address || a['address'] || null, uptime: a.uptime || null };
+    } catch { /* session lookup is optional */ }
+
+    // Suggest a local plan whose technical profile (or name) matches the
+    // secret's profile, so the form can pre-select it.
+    const profile = secret.profile || secret['profile'] || null;
+    let suggestedPlan = null;
+    if (profile) {
+      const plans = await prisma.plan.findMany({
+        where: { isActive: true },
+        select: { id: true, name: true, mikrotikProfile: true }
+      });
+      const norm = (s) => String(s || '').trim().toLowerCase();
+      suggestedPlan = plans.find(p => norm(p.mikrotikProfile) === norm(profile))
+                   || plans.find(p => norm(p.name) === norm(profile))
+                   || null;
+      if (suggestedPlan) suggestedPlan = { id: suggestedPlan.id, name: suggestedPlan.name };
+    }
+
+    // Already linked to a local client? Then this is a duplicate, not an adopt.
+    const linked = await prisma.mikrotikAccount.findUnique({
+      where: { username },
+      select: { client: { select: { id: true, name: true } } }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        found: true,
+        secret: {
+          username: secret.name || username,
+          password: secret.password || '',
+          profile,
+          remoteAddress: secret['remote-address'] || secret.remoteAddress || null,
+          localAddress:  secret['local-address']  || secret.localAddress  || null,
+          comment:  secret.comment || '',
+          disabled: secret.disabled === 'true' || secret.disabled === true
+        },
+        active,
+        suggestedPlan,
+        linkedClient: linked?.client || null
+      }
+    });
   } catch (e) {
     res.status(400).json({ success: false, error: e.message });
   }
@@ -585,7 +704,7 @@ router.post('/:id/import-pppoe-clients', async (req, res) => {
             name:           username,
             phone:          '',
             address:        '',
-            city:           'Cali',
+            city:           'Jamundí',
             documentType:   null,
             documentNumber: null,
             email:          null,
@@ -639,10 +758,10 @@ router.get('/:id/available-ips', async (req, res) => {
     });
     const mk = buildMikrotikService(r);
 
-    // 1) Read all IP pools (read-only)
+    // 1) Read all IP pools (read-only). Interactive endpoint — fail fast.
     let pools = [];
     try {
-      pools = await mk.request('/ip/pool');
+      pools = await mk.request('/ip/pool', 'GET', null, INTERACTIVE_OPTS);
       if (!Array.isArray(pools)) pools = [];
     } catch (e) {
       return res.status(400).json({
@@ -654,14 +773,14 @@ router.get('/:id/available-ips', async (req, res) => {
     // 2) Read PPPoE secrets to know which remote-addresses are taken
     let secrets = [];
     try {
-      secrets = await mk.request('/ppp/secret');
+      secrets = await mk.request('/ppp/secret', 'GET', null, INTERACTIVE_OPTS);
       if (!Array.isArray(secrets)) secrets = [];
     } catch { secrets = []; }
 
     // 3) Active sessions — ips currently in use even if no secret claims them
     let active = [];
     try {
-      active = await mk.request('/ppp/active');
+      active = await mk.request('/ppp/active', 'GET', null, INTERACTIVE_OPTS);
       if (!Array.isArray(active)) active = [];
     } catch { active = []; }
 
@@ -856,6 +975,9 @@ router.post('/:id/import', async (req, res) => {
   try {
     const routerId  = Number(req.params.id);
     const { usernames } = req.body;
+    // Tecnología a asignar a los clientes importados. WIRELESS para antenas,
+    // FIBER por defecto. Solo afecta la ETIQUETA en BD; no toca el router.
+    const connectionType = req.body.connectionType === 'WIRELESS' ? 'WIRELESS' : 'FIBER';
 
     if (!Array.isArray(usernames) || usernames.length === 0) {
       return res.status(400).json({
@@ -916,7 +1038,8 @@ router.post('/:id/import', async (req, res) => {
               city:           'N/A',
               documentType:   'CC',
               documentNumber: username,  // placeholder — edit later
-              status: (secret['disabled'] === 'true' || 
+              connectionType,            // FIBER | WIRELESS (etiqueta de tecnología)
+              status: (secret['disabled'] === 'true' ||
                        secret['disabled'] === true)
                         ? 'SUSPENDED' : 'ACTIVE',
               notes: `Importado desde MikroTik "${r.name}" (${primaryIp(r)}) ` +
