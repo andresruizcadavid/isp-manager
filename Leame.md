@@ -1,7 +1,7 @@
 # ISP Manager — Documentación Técnica del Proyecto
 
 > Generado automáticamente mediante auditoría de código.
-> Última actualización: 2026-06-08 (Fase Portal + Wompi Links de Pago)
+> Última actualización: 2026-06-20 (Campañas: borradores/prueba/envío individual + buscador dinámico; doc de despliegue real PM2/Nginx)
 
 ---
 
@@ -683,22 +683,72 @@ systemctl reload nginx
 tail -n 100 /var/log/nginx/error.log
 ```
 
-### Despliegue de Código
+### Cómo corre producción (importante)
+
+- **No usa Docker.** Aunque el repo tiene `docker-compose.yml`, en producción NO se usa
+  (no hay `docker` instalado en `10.2.3.6`). El stack real es:
+  - **Backend:** PM2, proceso `isp-api` = `node /opt/isp-manager/backend/src/server.js` (puerto 3001).
+  - **Frontend:** **Nginx del host** sirve el build estático desde `/opt/isp-manager/frontend/build`
+    y hace proxy de `/api` → `127.0.0.1:3001`. `server_name app.internetonline.co`.
+  - **PostgreSQL** y **Redis** locales en `127.0.0.1`.
+- **Ruta del proyecto:** `/opt/isp-manager`.
+- **Acceso:** `ssh root@10.2.3.6` (llave SSH; evitar contraseña en texto).
+- ⚠️ Históricamente se desplegó por **rsync de archivos sueltos** (abajo), por eso el working
+  tree de git en el server suele estar **sucio** (muchos archivos sin commitear). Si vas a
+  desplegar por git, primero `git stash -u` esos cambios (recuperable) — ver deploy git-based.
+
+### Backups (hacer SIEMPRE antes de un deploy con migraciones)
 
 ```bash
+ssh root@10.2.3.6 'bash -lc "
+TS=$(date +%Y%m%d-%H%M%S); BK=/root/isp-backups/$TS; mkdir -p $BK
+DBURL=$(grep -E ^DATABASE_URL= /opt/isp-manager/backend/.env | cut -d= -f2- | tr -d \"\\\"\")
+pg_dump \"$DBURL\" > $BK/db.sql                                   # base de datos
+tar czf $BK/source.tgz --exclude node_modules --exclude .git -C /opt isp-manager  # código actual
+tar czf $BK/build.tgz -C /opt/isp-manager/frontend build         # frontend servido hoy
+ls -lh $BK"'
+# Restaurar DB:   psql "$DBURL" < /root/isp-backups/<TS>/db.sql
+# Restaurar build: tar xzf /root/isp-backups/<TS>/build.tgz -C /opt/isp-manager/frontend
+```
+
+### Despliegue git-based (recomendado — el usado el 2026-06-20)
+
+```bash
+ssh root@10.2.3.6
+cd /opt/isp-manager
+git config --global --add safe.directory /opt/isp-manager   # solo una vez
+git stash push -u -m pre-deploy-$(date +%F)                 # guarda los cambios sucios (recuperable: git stash list/pop)
+git fetch origin && git checkout <rama> && git pull --ff-only origin <rama>
+
 # Backend
+cd backend && npm install --no-audit --no-fund
+npx prisma migrate status          # ver si hay migraciones pendientes
+npx prisma migrate deploy          # aplica solo las pendientes (idempotente)
+npx prisma generate
+
+# Frontend (genera /opt/isp-manager/frontend/build que sirve nginx)
+cd ../frontend && npm install --include=dev --no-audit --no-fund && npm run build
+
+# Reiniciar backend (el frontend es estático, no requiere reinicio)
+pm2 restart isp-api --update-env
+
+# Verificar
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/api/health     # -> 200
+pm2 status
+```
+
+### Despliegue por rsync de archivos sueltos (método legacy)
+
+```bash
+# Backend (un archivo)
 rsync -avz --no-owner --no-group \
   backend/src/services/xxx.service.js \
   root@10.2.3.6:/opt/isp-manager/backend/src/services/xxx.service.js
 
-# Schema + migración
-rsync -avz --no-owner --no-group \
-  backend/prisma/schema.prisma \
-  root@10.2.3.6:/opt/isp-manager/backend/prisma/schema.prisma
-rsync -avz --no-owner --no-group \
-  backend/prisma/migrations/YYYYMMDDHHMMSS_new_migration/ \
-  root@10.2.3.6:/opt/isp-manager/backend/prisma/migrations/YYYYMMDDHHMMSS_new_migration/
+# Frontend: hay que reconstruir EN el server tras copiar el fuente —
+# nginx sirve frontend/build, no el código fuente.
+ssh root@10.2.3.6 "cd /opt/isp-manager/frontend && npm install --include=dev && npm run build"
 
-# Aplicar migración y reiniciar
-ssh root@10.2.3.6 "cd /opt/isp-manager/backend && npx prisma migrate deploy && npx prisma generate && pm2 restart all"
+# Aplicar migración y reiniciar backend
+ssh root@10.2.3.6 "cd /opt/isp-manager/backend && npx prisma migrate deploy && npx prisma generate && pm2 restart isp-api"
 ```

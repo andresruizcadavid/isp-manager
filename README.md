@@ -689,3 +689,30 @@ trackearlos antes de seguir agregando features.
   el monitor a un worker dedicado (lock distribuido en Redis o BullMQ).
 - **Telegram es alerts-only**, no es un canal cliente-facing. WhatsApp
   Cloud sí es cliente-facing (notificaciones de facturación, soporte).
+
+---
+
+## Despliegue en producción
+
+> ⚠️ **Producción NO usa Docker** (a pesar del `docker-compose.yml` del repo).
+> Detalle completo (backups, rollback, métodos de deploy) en
+> [Leame.md → Despliegue en Producción](Leame.md#despliegue-en-producción).
+
+- **Servidor:** `10.2.3.6` (interno) · público `app.internetonline.co` (NAT `157.151.224.139`).
+- **Cómo corre:** Backend con **PM2** (`isp-api` → `node backend/src/server.js`, puerto 3001);
+  **Nginx** del host sirve el frontend estático desde `/opt/isp-manager/frontend/build`
+  y proxea `/api` → `127.0.0.1:3001`; **PostgreSQL** y **Redis** locales.
+- **Ruta:** `/opt/isp-manager` · **Acceso:** `ssh root@10.2.3.6` (llave SSH).
+
+Deploy git-based (resumen — siempre con backup previo):
+
+```bash
+ssh root@10.2.3.6
+cd /opt/isp-manager
+git stash push -u -m pre-deploy-$(date +%F)        # el tree suele estar sucio (deploys por rsync)
+git fetch origin && git checkout <rama> && git pull --ff-only origin <rama>
+cd backend  && npm install && npx prisma migrate deploy && npx prisma generate
+cd ../frontend && npm install --include=dev && npm run build   # genera build/ que sirve nginx
+pm2 restart isp-api
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/api/health   # -> 200
+```
