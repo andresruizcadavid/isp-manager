@@ -11,7 +11,7 @@
     Mail, MessageSquare, MessageCircle, Layers, CheckCircle2, AlertCircle, Loader2,
     Save, X, Filter, RefreshCw, Eye, Server, Lock, User as UserIcon,
     Eye as EyeIcon, EyeOff, ChevronDown, ChevronUp, Copy, Stethoscope, Phone,
-    Play, FlaskConical
+    Play, FlaskConical, Search
   } from 'lucide-svelte';
 
   let tab = 'campaigns'; // campaigns | templates | history | smtp | whatsapp
@@ -319,6 +319,8 @@ Email: contacto@internetonline.co
   let cmpTestClientId = '';
   let cmpTesting = false;
   let cmpTestMsg = null;            // { type: 'success'|'error', text }
+  // Live search to filter the recipient list (name / email / phone / zone / plan).
+  let cmpSearch = '';
 
   function emptyCmp() {
     return {
@@ -334,6 +336,7 @@ Email: contacto@internetonline.co
     cmpTestClientId = '';
     cmpTesting = false;
     cmpTestMsg = null;
+    cmpSearch = '';
   }
 
   function openNewCmp() {
@@ -512,6 +515,32 @@ Email: contacto@internetonline.co
   }
   function toggleAllClients() {
     cmpSelected = (cmpSelected.size >= audienceList.length) ? new Set() : new Set(audienceList.map(c => c.id));
+  }
+
+  // ── Live recipient search ─────────────────────────────────────────
+  // Filters the already-loaded candidates client-side (name/email/phone/zone/
+  // plan). The selection (cmpSelected) persists across searches — searching
+  // only changes what's VISIBLE, never what's chosen.
+  $: cmpFilteredList = (() => {
+    const q = cmpSearch.trim().toLowerCase();
+    if (!q) return audienceList;
+    return audienceList.filter(c =>
+      (c.name || '').toLowerCase().includes(q) ||
+      (c.email || '').toLowerCase().includes(q) ||
+      (c.phone || '').toLowerCase().includes(q) ||
+      (c.zone?.name || '').toLowerCase().includes(q) ||
+      (c.plan?.name || '').toLowerCase().includes(q)
+    );
+  })();
+  // Header checkbox acts on the CURRENTLY VISIBLE (filtered) rows so the
+  // operator can "select all matching X" without touching hidden selections.
+  $: cmpVisibleAllSelected  = cmpFilteredList.length > 0 && cmpFilteredList.every(c => cmpSelected.has(c.id));
+  $: cmpVisibleSomeSelected = cmpFilteredList.some(c => cmpSelected.has(c.id));
+  function toggleAllVisible() {
+    const s = new Set(cmpSelected);
+    if (cmpVisibleAllSelected) cmpFilteredList.forEach(c => s.delete(c.id));
+    else                       cmpFilteredList.forEach(c => s.add(c.id));
+    cmpSelected = s;
   }
 
   // tplSelected depends on the primitive templateId — safe to be reactive.
@@ -2125,20 +2154,36 @@ Email: contacto@internetonline.co
           {:else if audienceList.length === 0}
             <div class="text-xs text-text-secondary py-2">No hay clientes que coincidan.</div>
           {:else}
+            <!-- Búsqueda dinámica dentro de los candidatos cargados -->
+            <div class="relative">
+              <Search size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input type="search" bind:value={cmpSearch}
+                     placeholder="Buscar por nombre, email, teléfono, zona o plan…"
+                     class="input text-sm pl-8 w-full" />
+            </div>
             <div class="rounded-lg border border-slate-200 bg-white overflow-hidden">
-              <!-- Seleccionar todos -->
+              <!-- Seleccionar todos (los visibles según la búsqueda) -->
               <label class="flex items-center gap-2 px-3 py-2 bg-slate-50 border-b border-slate-200
                             cursor-pointer text-xs font-semibold text-text-primary select-none">
                 <input type="checkbox" class="w-4 h-4"
-                       checked={cmpAllSelected}
-                       indeterminate={cmpSelected.size > 0 && !cmpAllSelected}
-                       on:change={toggleAllClients} />
-                Seleccionar todos ({audienceList.length})
+                       checked={cmpVisibleAllSelected}
+                       indeterminate={cmpVisibleSomeSelected && !cmpVisibleAllSelected}
+                       on:change={toggleAllVisible} />
+                {#if cmpSearch.trim()}
+                  Seleccionar los {cmpFilteredList.length} resultado{cmpFilteredList.length === 1 ? '' : 's'}
+                {:else}
+                  Seleccionar todos ({audienceList.length})
+                {/if}
               </label>
               <div class="max-h-60 overflow-y-auto">
+                {#if cmpFilteredList.length === 0}
+                  <div class="px-3 py-4 text-xs text-text-secondary text-center">
+                    Ningún cliente coincide con “{cmpSearch}”.
+                  </div>
+                {:else}
                 <table class="w-full text-xs">
                   <tbody>
-                    {#each audienceList as c (c.id)}
+                    {#each cmpFilteredList as c (c.id)}
                       <tr class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer"
                           on:click={() => toggleClient(c.id)}>
                         <td class="pl-3 py-1.5 w-7">
@@ -2169,6 +2214,7 @@ Email: contacto@internetonline.co
                     {/each}
                   </tbody>
                 </table>
+                {/if}
               </div>
             </div>
             {#if cmpTruncated}
