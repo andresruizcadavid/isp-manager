@@ -17,7 +17,9 @@
   let tab = 'campaigns'; // campaigns | templates | history | smtp | whatsapp
 
   // ── Shared lookups ──────────────────────────────────────
+  /** @type {import('$lib/types').Zone[]} */
   let zones = [];
+  /** @type {import('$lib/types').Plan[]} */
   let plans = [];
 
   onMount(async () => {
@@ -29,16 +31,18 @@
   });
 
   // ── Templates ───────────────────────────────────────────
+  /** @type {import('$lib/types').NotificationTemplate[]} */
   let templates = [];
   let tplLoading = false;
   async function loadTemplates() {
     tplLoading = true;
     try { templates = await notificationsApi.listTemplates(); }
-    catch (e) { console.error(e); }
+    catch (/** @type {any} */ e) { console.error(e); }
     finally { tplLoading = false; }
   }
 
   let tplModalOpen = false;
+  /** @type {import('$lib/types').NotificationTemplate | null} */
   let tplEditing = null;
   let tplForm = emptyTpl();
   let tplSaving = false;
@@ -62,7 +66,8 @@
   let tplPreviewHtml = '';
   let tplPreviewSubject = '';
   let tplPreviewLoading = false;
-  let tplPreviewTimer = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let tplPreviewTimer;
   async function loadTplPreview() {
     if (tplForm.channel !== 'EMAIL') return;
     tplPreviewLoading = true;
@@ -74,7 +79,7 @@
       });
       tplPreviewHtml = r?.html || '';
       tplPreviewSubject = r?.subject || '';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       tplPreviewHtml = '';
     } finally {
       tplPreviewLoading = false;
@@ -90,6 +95,7 @@
   // Suggested subject + body per preset. Used to seed the form when the
   // operator picks a preset and the body is still empty (or via the
   // "Usar contenido sugerido" button to override).
+  /** @type {Record<string, { subject: string, body: string }>} */
   const PRESET_SAMPLES = {
     invoice: {
       subject: 'Tu factura {{plan}} está lista',
@@ -240,6 +246,7 @@ Email: contacto@internetonline.co
     tplError = '';
     tplModalOpen = true;
   }
+  /** @param {any} t */
   function openEditTpl(t) {
     tplEditing = t;
     tplForm = {
@@ -267,16 +274,18 @@ Email: contacto@internetonline.co
         isActive: tplForm.isActive
       };
       if (tplEditing) {
-        const updated = await notificationsApi.updateTemplate(tplEditing.id, payload);
-        templates = templates.map(t => t.id === tplEditing.id ? updated : t);
+        const editing = tplEditing;
+        const updated = await notificationsApi.updateTemplate(editing.id, payload);
+        templates = templates.map(t => t.id === editing.id ? updated : t);
       } else {
         const created = await notificationsApi.createTemplate(payload);
         templates = [created, ...templates];
       }
       tplModalOpen = false;
-    } catch (e) { tplError = e.message || 'No se pudo guardar.'; }
+    } catch (/** @type {any} */ e) { tplError = e.message || 'No se pudo guardar.'; }
     finally { tplSaving = false; }
   }
+  /** @param {any} t */
   async function removeTpl(t) {
     if (!confirm(
       `¿Eliminar la plantilla "${t.name}"?\n\n` +
@@ -286,16 +295,17 @@ Email: contacto@internetonline.co
     try {
       await notificationsApi.removeTemplate(t.id);
       templates = templates.filter(x => x.id !== t.id);
-    } catch (e) { alert(e.message); }
+    } catch (/** @type {any} */ e) { alert(e.message); }
   }
 
   // ── Campaigns ───────────────────────────────────────────
+  /** @type {import('$lib/types').NotificationCampaign[]} */
   let campaigns = [];
   let cmpLoading = false;
   async function loadCampaigns() {
     cmpLoading = true;
     try { campaigns = await notificationsApi.listCampaigns(); }
-    catch (e) { console.error(e); }
+    catch (/** @type {any} */ e) { console.error(e); }
     finally { cmpLoading = false; }
   }
 
@@ -303,21 +313,27 @@ Email: contacto@internetonline.co
   let cmpForm = emptyCmp();
   let cmpSaving = false;
   let cmpError = '';
+  /** @type {number | null} */
   let audiencePreview = null;
   let previewLoading = false;
+  /** @type {any[]} */
   let audienceList = [];           // first 200 matched clients (for review)
   let audienceListLoading = false;
   let audienceListOpen = false;    // expand/collapse the review list
+  /** @type {Set<string>} */
   let cmpSelected = new Set();      // explicit recipient selection (client ids)
   // One-shot: when editing/cloning a campaign that saved an explicit
   // clientIds selection, restore THAT selection when the list loads instead
   // of the "select everyone" default. Consumed (nulled) on first load.
+  /** @type {string[] | null} */
   let cmpInitialSelection = null;
   // Id of the DRAFT campaign being edited in place (PUT). null = new/clone.
+  /** @type {string | null} */
   let cmpEditingId = null;
   // Single-client test send (the campaign is sent to just this one client).
   let cmpTestClientId = '';
   let cmpTesting = false;
+  /** @type {{ type: 'success'|'error', text: string } | null} */
   let cmpTestMsg = null;            // { type: 'success'|'error', text }
   // Live search to filter the recipient list (name / email / phone / zone / plan).
   let cmpSearch = '';
@@ -352,6 +368,7 @@ Email: contacto@internetonline.co
   // open it as a CLONE ("Copia de…") that saves as a new draft — the original
   // run + its history stay intact. Either way, editing never sends anything;
   // launching is a separate explicit action.
+  /** @param {any} c */
   function openEditCmp(c) {
     const audience = c.audienceJson
       ? (typeof c.audienceJson === 'string' ? JSON.parse(c.audienceJson) : c.audienceJson)
@@ -384,9 +401,11 @@ Email: contacto@internetonline.co
   // ── Campaign diagnostics ────────────────────────────────
   let diagOpen = false;
   let diagLoading = false;
+  /** @type {any} */
   let diagData = null;
   let diagError = '';
 
+  /** @param {any} c */
   async function openDiagnose(c) {
     diagOpen = true;
     diagLoading = true;
@@ -394,13 +413,14 @@ Email: contacto@internetonline.co
     diagData = null;
     try {
       diagData = await notificationsApi.diagnoseCampaign(c.id);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       diagError = e.message || 'No se pudo cargar el diagnóstico.';
     } finally {
       diagLoading = false;
     }
   }
 
+  /** @param {any} c */
   async function resendCmp(c) {
     if (!confirm(`Reenviar la campaña "${c.name}" con los mismos parámetros?\n\nSe creará una nueva ejecución con la misma plantilla y audiencia.`)) return;
     try {
@@ -416,19 +436,20 @@ Email: contacto@internetonline.co
       });
       campaigns = [created, ...campaigns];
       pollCampaign(created.id);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert(e.message || 'No se pudo reenviar la campaña.');
     }
   }
 
   // Delete a campaign row. The delivery history survives (the backend keeps
   // NotificationLog rows, just unlinked), so this only clears the list.
+  /** @param {any} c */
   async function deleteCmp(c) {
     if (!confirm(`¿Eliminar la campaña "${c.name}"?\n\nEl historial de envíos se conserva en la pestaña Historial.`)) return;
     try {
       await notificationsApi.removeCampaign(c.id);
       campaigns = campaigns.filter(x => x.id !== c.id);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert(e.message || 'No se pudo eliminar la campaña.');
     }
   }
@@ -457,7 +478,7 @@ Email: contacto@internetonline.co
       if (!audienceList.some(c => c.id === cmpTestClientId)) {
         cmpTestClientId = [...cmpSelected][0] || audienceList[0]?.id || '';
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       cmpError = e.message;
       audienceList = [];
       cmpSelected = new Set();
@@ -473,7 +494,7 @@ Email: contacto@internetonline.co
       if (cmpForm.audience.overdue) filter.overdue = true;
       const res = await notificationsApi.previewAudience(filter);
       audiencePreview = res?.count ?? 0;
-    } catch (e) { audiencePreview = null; cmpError = e.message; }
+    } catch (/** @type {any} */ e) { audiencePreview = null; cmpError = e.message; }
     finally { previewLoading = false; }
   }
   // Re-preview whenever audience filter changes. We depend on primitives
@@ -488,6 +509,7 @@ Email: contacto@internetonline.co
   // Helper: does this client have a contact for the chosen channel? Used ONLY
   // to warn — selection is NEVER blocked. The operator decides who receives;
   // clients without a contact will simply be logged as "fallidos".
+  /** @param {any} c @param {string} [channel] */
   function hasChannelContact(c, channel = cmpForm.channel) {
     if (channel === 'WHATSAPP') return !!c.phone;
     if (channel === 'BOTH')     return !!(c.email || c.phone);
@@ -503,11 +525,13 @@ Email: contacto@internetonline.co
   $: cmpLinkEligible = cmpForm.generatePaymentLinks
     ? audienceList.filter(c => cmpSelected.has(c.id) && c.invoices?.length).length
     : null;
+  /** @param {number} [cents] */
   const fmtCop = (cents) => '$' + Math.round((cents || 0) / 100).toLocaleString('es-CO');
   // Recipients we'll send to: the explicit selection, except "todos" on a
   // truncated list → defer to the filter so clients beyond the shown 200 count.
   $: cmpSendCount   = (cmpTruncated && cmpAllSelected) ? (audiencePreview ?? 0) : cmpSelected.size;
 
+  /** @param {string} id */
   function toggleClient(id) {
     const s = new Set(cmpSelected);
     s.has(id) ? s.delete(id) : s.add(id);
@@ -582,6 +606,7 @@ Email: contacto@internetonline.co
   // Returns an error string or '' if the form is valid. `requireRecipients`
   // is false for save-draft (you can save an incomplete audience) and true
   // for launch.
+  /** @param {boolean} requireRecipients */
   function validateCmpForm(requireRecipients) {
     if (!cmpForm.templateId) return 'Selecciona una plantilla.';
     if (cmpForm.name.trim().length < 2) return 'El nombre de la campaña debe tener al menos 2 caracteres.';
@@ -597,6 +622,7 @@ Email: contacto@internetonline.co
     cmpSaving = true; cmpError = '';
     try {
       const payload = buildCampaignPayload();
+      /** @type {any} */
       let saved;
       if (cmpEditingId) {
         saved = await notificationsApi.updateCampaign(cmpEditingId, payload);
@@ -607,7 +633,7 @@ Email: contacto@internetonline.co
       }
       cmpModalOpen = false;
       tab = 'campaigns';
-    } catch (e) { cmpError = e.message || 'No se pudo guardar el borrador.'; }
+    } catch (/** @type {any} */ e) { cmpError = e.message || 'No se pudo guardar el borrador.'; }
     finally { cmpSaving = false; }
   }
 
@@ -619,6 +645,7 @@ Email: contacto@internetonline.co
     cmpSaving = true; cmpError = '';
     try {
       const payload = buildCampaignPayload();
+      /** @type {any} */
       let created;
       if (cmpEditingId) {
         await notificationsApi.updateCampaign(cmpEditingId, payload);
@@ -631,18 +658,19 @@ Email: contacto@internetonline.co
       cmpModalOpen = false;
       tab = 'campaigns';
       pollCampaign(created.id);
-    } catch (e) { cmpError = e.message || 'No se pudo lanzar la campaña.'; }
+    } catch (/** @type {any} */ e) { cmpError = e.message || 'No se pudo lanzar la campaña.'; }
     finally { cmpSaving = false; }
   }
 
   // Launch an existing draft straight from the list (no modal).
+  /** @param {any} c */
   async function executeDraft(c) {
     if (!confirm(`¿Lanzar la campaña "${c.name}" ahora?`)) return;
     try {
       const updated = await notificationsApi.launchCampaign(c.id);
       campaigns = campaigns.map(x => x.id === c.id ? { ...x, ...updated } : x);
       pollCampaign(c.id);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert(e.message || 'No se pudo lanzar la campaña.');
     }
   }
@@ -667,12 +695,14 @@ Email: contacto@internetonline.co
         const missing = cmpForm.channel === 'WHATSAPP' ? 'teléfono' : 'email';
         cmpTestMsg = { type: 'error', text: `No se pudo enviar la prueba a ${who}. Verifica que tenga ${missing} válido.` };
       }
-    } catch (e) { cmpTestMsg = { type: 'error', text: e.message || 'No se pudo enviar la prueba.' }; }
+    } catch (/** @type {any} */ e) { cmpTestMsg = { type: 'error', text: e.message || 'No se pudo enviar la prueba.' }; }
     finally { cmpTesting = false; }
   }
 
   // Poll running campaigns every 2s for live counter updates.
+  /** @type {Map<string, ReturnType<typeof setTimeout>>} */
   let pollHandles = new Map();
+  /** @param {string} id */
   function pollCampaign(id) {
     if (pollHandles.has(id)) return;
     const tick = async () => {
@@ -693,15 +723,17 @@ Email: contacto@internetonline.co
   $: campaigns.filter(c => c.status === 'running').forEach(c => pollCampaign(c.id));
   onDestroy(() => { for (const h of pollHandles.values()) clearTimeout(h); });
 
+  /** @param {any} c */
   async function retryCmp(c) {
     if (!confirm(`Reintentar los envíos fallidos de "${c.name}"?`)) return;
     try {
       await notificationsApi.retryCampaign(c.id);
       await Promise.all([loadCampaigns(), loadHistory()]);
-    } catch (e) { alert(e.message); }
+    } catch (/** @type {any} */ e) { alert(e.message); }
   }
 
   // ── History ────────────────────────────────────────────
+  /** @type {any[]} */
   let history = [];
   let hisLoading = false;
   let hisFilter = { campaignId: '', status: '', channel: '' };
@@ -713,16 +745,17 @@ Email: contacto@internetonline.co
       if (hisFilter.status)     params.status     = hisFilter.status;
       if (hisFilter.channel)    params.channel    = hisFilter.channel;
       history = await notificationsApi.listHistory(params);
-    } catch (e) { console.error(e); }
+    } catch (/** @type {any} */ e) { console.error(e); }
     finally { hisLoading = false; }
   }
 
+  /** @param {any} h */
   async function removeHisRow(h) {
     if (!confirm(`¿Eliminar este registro de entrega?\n\nDestinatario: ${h.recipient || '—'}`)) return;
     try {
       await notificationsApi.removeHistory(h.id);
       history = history.filter(x => x.id !== h.id);
-    } catch (e) { alert(e.message); }
+    } catch (/** @type {any} */ e) { alert(e.message); }
   }
 
   async function clearHistory() {
@@ -739,15 +772,17 @@ Email: contacto@internetonline.co
       const res = await notificationsApi.clearHistory(params);
       history = [];
       alert(`${res?.deleted ?? 0} registros eliminados.`);
-    } catch (e) { alert(e.message); }
+    } catch (/** @type {any} */ e) { alert(e.message); }
   }
 
   // Inline preview of what was actually sent (subject + body) — used to
   // verify that the correct template was rendered and the right SMTP path
   // was used. Backend stores the EXACT content delivered.
+  /** @type {string | null} */
   let previewOpen = null;  // log id whose body is expanded
 
   // ── SMTP config ────────────────────────────────────────
+  /** @type {any} */
   let smtpForm = {
     id: null, provider: '', host: '', port: 587, secure: false,
     username: '', password: '', fromEmail: '', fromName: 'ISP Manager', replyTo: '',
@@ -760,6 +795,7 @@ Email: contacto@internetonline.co
   let smtpPreset = '';
   let smtpShowPassword = false;
   let smtpTestEmail = '';
+  /** @type {{ type: 'success'|'error', text: string } | null} */
   let smtpMsg = null; // { type: 'success' | 'error', text }
 
   async function loadSmtp() {
@@ -772,7 +808,7 @@ Email: contacto@internetonline.co
         smtpPreset = data.provider || '';
       }
       // else: no config yet — keep the empty form so the operator can create one.
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       smtpMsg = { type: 'error', text: e.message };
     } finally {
       smtpLoading = false;
@@ -780,21 +816,14 @@ Email: contacto@internetonline.co
     }
   }
 
-  // Ojo de contraseña: si se va a revelar y el campo está vacío pero hay una
-  // config guardada, trae la contraseña almacenada del servidor (solo admin).
-  async function toggleSmtpPassword() {
-    if (!smtpShowPassword && !smtpForm.password && smtpForm.id) {
-      try {
-        const { password } = await smtpApi.reveal(smtpForm.id);
-        smtpForm.password = password || '';
-      } catch (e) {
-        smtpMsg = { type: 'error', text: 'No se pudo obtener la contraseña guardada.' };
-        return;
-      }
-    }
+  // Ojo de contraseña: muestra/oculta lo que el operador haya escrito. La
+  // contraseña guardada NUNCA viaja de vuelta del servidor (campo write-only,
+  // ver GET /smtp "without password"), así que no se intenta recuperarla.
+  function toggleSmtpPassword() {
     smtpShowPassword = !smtpShowPassword;
   }
 
+  /** @param {string} name */
   function applyPreset(name) {
     const p = SMTP_PRESETS.find(x => x.name === name);
     if (!p) return;
@@ -855,7 +884,7 @@ Email: contacto@internetonline.co
       smtpForm = { ...smtpForm, ...saved, password: '' };
       smtpPreset = saved.provider || '';
       smtpMsg = { type: 'success', text: 'Configuración guardada correctamente.' };
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       smtpMsg = { type: 'error', text: e.message || 'No se pudo guardar.' };
     } finally { smtpSaving = false; }
   }
@@ -881,7 +910,7 @@ Email: contacto@internetonline.co
       });
       smtpMsg = { type: 'success', text: result?.message || 'Correo enviado.' };
       if (smtpForm.id) await loadSmtp(); // refresh isVerified + lastTestedAt
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       smtpMsg = { type: 'error', text: e.message || 'La prueba falló.' };
     } finally { smtpTesting = false; }
   }
@@ -898,6 +927,7 @@ Email: contacto@internetonline.co
     { key: 'SERVICE_SUSPENSION',    label: 'Servicio suspendido',   suggested: 'servicio_suspendido',  hint: 'Al suspender por mora' },
     { key: 'SERVICE_ACTIVATION',    label: 'Servicio reactivado',   suggested: 'servicio_reactivado',  hint: 'Al reactivar el servicio' }
   ];
+  /** @type {any} */
   let waForm = {
     id: null,
     token: '',
@@ -917,6 +947,7 @@ Email: contacto@internetonline.co
   let waTesting = false;
   let waTestRecipient = '';
   let waShowToken = false;
+  /** @type {{ type: 'success'|'error', text: string } | null} */
   let waMsg = null;
 
   async function loadWhatsApp() {
@@ -929,7 +960,7 @@ Email: contacto@internetonline.co
         const templateMap = { ...waForm.templateMap, ...(data.templateMap || {}) };
         waForm = { ...waForm, ...data, templateMap };
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       waMsg = { type: 'error', text: e.message };
     } finally {
       waLoading = false;
@@ -951,7 +982,7 @@ Email: contacto@internetonline.co
       });
       waForm = { ...waForm, ...saved };
       waMsg = { type: 'success', text: 'Configuración guardada.' };
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       waMsg = { type: 'error', text: e.message };
     } finally {
       waSaving = false;
@@ -973,7 +1004,7 @@ Email: contacto@internetonline.co
       });
       waMsg = { type: 'success', text: 'Mensaje de prueba enviado. Revisa el WhatsApp del número destino.' };
       await loadWhatsApp(); // refresh lastTestedAt
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       waMsg = { type: 'error', text: 'No se pudo enviar: ' + e.message };
     } finally {
       waTesting = false;
@@ -986,6 +1017,8 @@ Email: contacto@internetonline.co
   $: if (tab === 'smtp' && !smtpLoaded && !smtpLoading) loadSmtp();
 
   // ── Ajustes de notificaciones (periodicidad / on-off) ──────────
+  // any[]: la UI fusiona metadata (label/desc/security) sobre cada fila.
+  /** @type {any[]} */
   let settings = [];
   let settingsLoading = false;
   let settingsLoaded = false;
@@ -993,22 +1026,24 @@ Email: contacto@internetonline.co
   async function loadSettings() {
     settingsLoading = true;
     try { settings = await notificationsApi.listSettings(); }
-    catch (e) { console.error(e); }
+    catch (/** @type {any} */ e) { console.error(e); }
     finally { settingsLoading = false; settingsLoaded = true; }
   }
   $: if (tab === 'settings' && !settingsLoaded && !settingsLoading) loadSettings();
 
+  /** @param {any} s @param {any} patch */
   async function patchSetting(s, patch) {
     settingsSaving = s.type;
     try {
       const updated = await notificationsApi.updateSetting(s.type, patch);
       settings = settings.map(x => x.type === s.type ? { ...x, ...updated } : x);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert(e.message || 'No se pudo guardar el ajuste.');
       loadSettings(); // revertir al estado real
     } finally { settingsSaving = ''; }
   }
   // Resumen legible de la periodicidad para mostrar.
+  /** @param {any} sc */
   function scheduleSummary(sc) {
     if (!sc) return 'Por evento (inmediato)';
     const parts = [];
@@ -1019,8 +1054,11 @@ Email: contacto@internetonline.co
   }
 
   // ── Helpers ────────────────────────────────────────────
+  /** @type {Record<string, string>} */
   const CHANNEL_LABEL = { EMAIL: 'Email', WHATSAPP: 'WhatsApp', BOTH: 'Email + WhatsApp' };
+  /** @type {Record<string, any>} */
   const CHANNEL_ICON  = { EMAIL: Mail, WHATSAPP: MessageSquare, BOTH: Send };
+  /** @type {Record<string, string>} */
   const STATUS_BADGE = {
     draft:          'bg-slate-100 text-slate-600 ring-slate-200',
     running:        'bg-amber-50   text-amber-700   ring-amber-100',
@@ -1030,6 +1068,7 @@ Email: contacto@internetonline.co
     sent:           'bg-emerald-50 text-emerald-700 ring-emerald-100',
     pending:        'bg-amber-50   text-amber-700   ring-amber-100'
   };
+  /** @type {Record<string, string>} */
   const STATUS_LABEL = {
     draft: 'Borrador',
     running: 'Enviando',
@@ -1041,7 +1080,9 @@ Email: contacto@internetonline.co
   };
 
   // Build a human-readable summary of the audience filter for inline display.
+  /** @param {any} c */
   function audienceSummary(c) {
+    /** @type {any} */
     let f = {};
     try { f = c.audienceJson ? (typeof c.audienceJson === 'string' ? JSON.parse(c.audienceJson) : c.audienceJson) : {}; }
     catch { f = {}; }
@@ -1059,6 +1100,7 @@ Email: contacto@internetonline.co
     return parts.length ? parts.join(' · ') : 'todos los clientes';
   }
 
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) {
     if (!d) return '—';
     return new Date(d).toLocaleString('es-CO', {
@@ -1932,7 +1974,7 @@ Email: contacto@internetonline.co
             Define el header (icono + título) <strong>y</strong> a qué correo del sistema aplica
             esta plantilla cuando está activa.
             {#if EMAIL_PRESETS.find(p => p.key === (tplForm.preset || ''))?.event}
-              <br><span class="text-brand-600 font-medium">→ {EMAIL_PRESETS.find(p => p.key === (tplForm.preset || '')).event}</span>
+              <br><span class="text-brand-600 font-medium">→ {EMAIL_PRESETS.find(p => p.key === (tplForm.preset || ''))?.event}</span>
             {/if}
           </p>
           {#if tplForm.preset && PRESET_SAMPLES[tplForm.preset]}

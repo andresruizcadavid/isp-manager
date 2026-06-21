@@ -88,7 +88,15 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 - Restas de fechas → `.getTime()`. Props de `RegisterPaymentModal` tipadas.
 - `isAdmin(role)` en navigation.js acepta `string|null|undefined`.
 - **Sin cambios de runtime** salvo `toggleStatus` (reasignación equivalente). Build ✓.
-### Fase 2 — notifications/+page.svelte (159)  ⬜
+### Fase 2 — notifications/+page.svelte (158 → 0)  ✅
+- Mismo patrón: estado tipado (templates/campaigns/history/settings, Sets, msgs),
+  catch (27), mapas → `Record`, params de funciones, `saved`/`created` tipados.
+- `smtpForm`/`waForm` como `any` (se fusionan con datos del server).
+- `settings` como `any[]` (la UI le añade label/desc/security de metadata).
+- **BUG corregido**: `toggleSmtpPassword` llamaba `smtpApi.reveal()` (endpoint
+  inexistente; el backend nunca devuelve la contraseña → write-only). Lanzaba
+  "is not a function" atrapado por el catch (el ojo nunca revelaba). Simplificado
+  a toggle de visibilidad. Build ✓.
 ### Fase 3 — clients/+page.svelte (127)  ⬜
 ### Fase 4 — network/+page.svelte (116)  ⬜
 ### Fase 5 — clients/new (57), invoices/[id] (47), dashboard (47)  ⬜
@@ -111,3 +119,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-20 | 0 (api/) | 1695 | 1520 | Tipada toda la capa `api/*.js` + `client.js`. Capa api limpia. |
 | 2026-06-20 | 0 (stores/nav) | 1520 | 1441 | Tipados stores, `navigation.js`, `permissions.js`. Build ✓. 62 archivos restantes. |
 | 2026-06-21 | 1 | 1441 | 1150 | clients/[id] 290→0. + props RegisterPaymentModal e isAdmin. Build ✓. |
+| 2026-06-21 | 2 | 1150 | 994 | notifications 158→0. Bug toggleSmtpPassword (reveal inexistente) corregido. Build ✓. |
