@@ -18,6 +18,7 @@
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
 
+  /** @type {import('$lib/types').Client | null} */
   let client = null;
   let pageError = '';
 
@@ -38,7 +39,7 @@
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, '', cleanUrl);
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       pageError = e.message || 'Error al cargar el cliente';
     }
   });
@@ -53,24 +54,30 @@
   let deleteConfirmName = '';
 
   let editPersonal = false;
+  /** @type {Record<string, any>} */
   let formPersonal = {};
 
   // ── Payment details modal (read-only viewer for paid/partial invoices) ──
   let showPaymentDetails = false;
+  /** @type {import('$lib/types').Invoice | null} */
   let paymentDetailsInvoice = null; // the invoice whose payments we're viewing
+  /** @type {import('$lib/types').Payment[]} */
   let paymentDetailsList = [];      // payments associated with that invoice
 
+  /** @param {any} inv */
   function openPaymentDetails(inv) {
     paymentDetailsInvoice = inv;
     paymentDetailsList = paymentsForInvoice(inv);
     showPaymentDetails = true;
   }
+  /** @param {string} invoiceId */
   function openPaymentDetailsByInvoiceId(invoiceId) {
     const inv = client?.invoices?.find(i => i.id === invoiceId);
     if (inv) openPaymentDetails(inv);
   }
 
   // Plans available for the change-plan select. Loaded lazily on first edit.
+  /** @type {import('$lib/types').Plan[]} */
   let plansForEdit = [];
   let plansForEditLoaded = false;
   async function ensurePlansLoaded() {
@@ -78,12 +85,13 @@
     try {
       plansForEdit = await api.get('/plans');
       plansForEditLoaded = true;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       // Non-fatal — the select just stays empty and the operator can cancel.
       console.warn('No se pudieron cargar planes:', e.message);
     }
   }
 
+  /** @param {string|Date|null|undefined} d */
   function toDateInput(d) {
     if (!d) return '';
     try { return new Date(d).toISOString().slice(0, 10); }
@@ -121,6 +129,7 @@
   }
 
   // ── Constants ───────────────────────────────────────
+  /** @type {Record<string, string>} */
   const PAYMENT_METHOD_PT = {
     CASH: 'Efectivo',
     BANK_TRANSFER: 'Transferencia bancaria',
@@ -128,13 +137,16 @@
     WOMPI: 'Wompi',
     OTHER: 'Otro'
   };
+  /** @type {Record<string, string>} */
   const STATUS_PT  = { ACTIVE:'Activo', SUSPENDED:'Suspendido', INACTIVE:'Inactivo', PENDING:'Pendiente' };
+  /** @type {Record<string, string>} */
   const STATUS_CLS = {
     ACTIVE:    'bg-emerald-100 text-emerald-700',
     SUSPENDED: 'bg-red-100 text-red-700',
     INACTIVE:  'bg-slate-100 text-slate-600',
     PENDING:   'bg-amber-100 text-amber-700'
   };
+  /** @type {Record<string, string>} */
   const INVOICE_CLS = {
     PAID:      'bg-emerald-100 text-emerald-700',
     PARTIAL:   'bg-blue-100 text-blue-700',
@@ -146,43 +158,50 @@
   };
 
   // ── Helpers ─────────────────────────────────────────
+  /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
     if (cents == null) return '—';
     return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(cents / 100);
   }
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' });
   }
+  /** @param {string|Date|null|undefined} s */
   function fmtDateTime(s) {
     if (!s) return '—';
     return new Date(s).toLocaleString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
   }
   // Extract any http(s) URL inside payment notes (likely the receipt/evidencia).
+  /** @param {string|null|undefined} text */
   function extractUrls(text) {
     if (!text) return [];
     const matches = text.match(/https?:\/\/[^\s)<>"']+/gi);
     return matches ? [...new Set(matches)] : [];
   }
   // Find invoice number for a given invoiceId (for payment history rows).
+  /** @param {string} invoiceId */
   function invoiceNumberFor(invoiceId) {
     return client?.invoices?.find(i => i.id === invoiceId)?.invoiceNumber || null;
   }
   // Collect payments associated with an invoice. Prefer inv.payments (eager-loaded),
   // fall back to scanning client.payments by invoiceId.
+  /** @param {any} inv */
   function paymentsForInvoice(inv) {
     if (Array.isArray(inv?.payments) && inv.payments.length) return inv.payments;
     return (client?.payments || []).filter(p => p.invoiceId === inv?.id);
   }
   function getClientDuration() {
     if (!client?.createdAt) return '—';
-    const diff = Date.now() - new Date(client.createdAt);
+    const diff = Date.now() - new Date(client.createdAt).getTime();
     const months = Math.floor(diff / (1000 * 60 * 60 * 24 * 30));
     const years = Math.floor(months / 12);
     const m = months % 12;
     if (years > 0) return `${years} año${years > 1 ? 's' : ''}, ${m} mes${m !== 1 ? 'es' : ''}`;
     return `${months} mes${months !== 1 ? 'es' : ''}`;
   }
+  /** @param {string} type @param {string} message */
   function showToast(type, message) {
     if (type === 'error') error = message;
     else success = message;
@@ -190,12 +209,15 @@
   }
   // ── Reenviar cobro: el staff reenvía al CLIENTE el cobro con link de pago ──
   // (correo si tiene; si no, abre WhatsApp). El cliente es quien paga.
+  /** @type {string | null} */
   let resendBusyId = null;
+  /** @param {string} invId */
   async function resendCharge(invId) {
-    if (resendBusyId) return;
+    const c = client;
+    if (resendBusyId || !c) return;
     resendBusyId = invId;
     try {
-      const r = await api.post(`/clients/${client.id}/resend-charge`, { invoiceId: invId });
+      const r = await api.post(`/clients/${c.id}/resend-charge`, { invoiceId: invId });
       if (r?.emailSent) {
         showToast('success', 'Cobro reenviado al correo del cliente ✓');
         if (r?.waUrl) window.open(r.waUrl, '_blank'); // además, ofrecer WhatsApp
@@ -206,13 +228,15 @@
         showToast('error', 'El cliente no tiene correo ni teléfono registrado');
       }
       loadNotifications(); notifLoaded = false; // refresca el contador de notificaciones
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'No se pudo reenviar el cobro');
     } finally { resendBusyId = null; }
   }
 
   // ── Wompi: generar/reusar link y copiar o compartir por WhatsApp ──────
+  /** @type {string | null} */
   let linkBusyId = null;
+  /** @param {string} invId @param {string} mode */
   async function genLink(invId, mode) {
     if (linkBusyId) return;
     linkBusyId = invId;
@@ -227,7 +251,7 @@
         await navigator.clipboard.writeText(checkoutUrl);
         showToast('success', 'Link de pago Wompi copiado ✓');
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'No se pudo generar el link');
     } finally {
       linkBusyId = null;
@@ -235,10 +259,12 @@
   }
 
   // Phone helpers (digits-only for tel:/wa.me)
+  /** @param {string|null|undefined} p */
   function digitsOnly(p) { return (p || '').replace(/\D/g, ''); }
 
   // Copy with feedback
   let copied = '';
+  /** @param {string} value @param {string} key */
   async function copyText(value, key) {
     try {
       await navigator.clipboard.writeText(value);
@@ -249,13 +275,16 @@
 
   // ── Actions ─────────────────────────────────────────
   async function toggleStatus() {
+    const c = client;
+    if (!c) return;
     loadingAction = true; error = '';
     try {
-      const action = client.status === 'ACTIVE' ? 'suspend' : 'activate';
-      await api.post(`/clients/${client.id}/${action}`);
-      client.status = client.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
-      showToast('success', client.status === 'ACTIVE' ? 'Servicio activado' : 'Servicio suspendido');
-    } catch (e) {
+      const action = c.status === 'ACTIVE' ? 'suspend' : 'activate';
+      await api.post(`/clients/${c.id}/${action}`);
+      const newStatus = c.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE';
+      client = { ...c, status: newStatus };
+      showToast('success', newStatus === 'ACTIVE' ? 'Servicio activado' : 'Servicio suspendido');
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'Error al cambiar estado');
     } finally { loadingAction = false; }
   }
@@ -290,17 +319,19 @@
   }
 
   async function savePersonal() {
+    const c = client;
+    if (!c) return;
     loadingAction = true;
     clearTimeout(autoSaveTimer);   // a manual save supersedes any pending autosave
     try {
-      await api.put(`/clients/${client.id}`, buildPersonalPayload());
+      await api.put(`/clients/${c.id}`, buildPersonalPayload());
       // Full reload: re-fetch everything from the API so no relation is stale
-      client = await api.get(`/clients/${client.id}`);
+      client = await api.get(`/clients/${c.id}`);
       resetForm();
       editPersonal = false;
       autoSaveState = '';
       showToast('success', 'Datos actualizados');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'Error al guardar');
     } finally { loadingAction = false; }
   }
@@ -310,24 +341,28 @@
   // the last keystroke (debounced + dirty-tracked). The manual "Guardar"
   // button remains the explicit way to close the panel; autosave never
   // closes it nor resets the form mid-typing.
-  let autoSaveTimer = null;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let autoSaveTimer;
   let autoSaveState = '';        // '' | 'pending' | 'saving' | 'saved' | 'error'
   let autoSaveError = '';
+  /** @type {Date | null} */
   let autoSaveAt    = null;      // Date of last successful autosave
   let autoSnapshot  = '';        // serialized form at last save (dirty tracking)
 
   async function runAutoSave() {
+    const cur = client;
+    if (!cur) return;
     const snap = JSON.stringify(formPersonal);
     if (snap === autoSnapshot) { autoSaveState = autoSaveAt ? 'saved' : ''; return; }
     autoSaveState = 'saving';
     try {
-      await api.put(`/clients/${client.id}`, buildPersonalPayload());
+      await api.put(`/clients/${cur.id}`, buildPersonalPayload());
       autoSnapshot  = snap;
       autoSaveAt    = new Date();
       autoSaveState = 'saved';
       // Refresh the read panels silently (no resetForm — typing is sacred).
-      api.get(`/clients/${client.id}`).then(c => { client = c; }).catch(() => {});
-    } catch (e) {
+      api.get(`/clients/${cur.id}`).then(c => { client = c; }).catch(() => {});
+    } catch (/** @type {any} */ e) {
       autoSaveState = 'error';
       autoSaveError = e.message || 'No se pudo autoguardar';
     }
@@ -355,11 +390,14 @@
   let showUpdateSheet  = false;
   let updateSending    = false;
   let updateError      = '';
+  /** @type {any} */
   let updateResult     = null;     // { publicUrl, expiresAt, dispatch }
   let updateCopied     = false;
   // Canales por defecto: si el cliente tiene WhatsApp/phone lo precargamos,
   // si tiene email lo precargamos. Telegram queda off por defecto (raro).
+  /** @type {string[]} */
   let updateSendChannels   = [];
+  /** @type {string[]} */
   let updateNotifyChannels = ['TELEGRAM'];
 
   function openUpdateSheet() {
@@ -375,11 +413,13 @@
     showUpdateSheet = true;
   }
 
+  /** @param {string} ch */
   function toggleSendChannel(ch) {
     updateSendChannels = updateSendChannels.includes(ch)
       ? updateSendChannels.filter(c => c !== ch)
       : [...updateSendChannels, ch];
   }
+  /** @param {string} ch */
   function toggleNotifyChannel(ch) {
     updateNotifyChannels = updateNotifyChannels.includes(ch)
       ? updateNotifyChannels.filter(c => c !== ch)
@@ -387,15 +427,17 @@
   }
 
   async function requestUpdateToken() {
+    const c = client;
+    if (!c) return;
     updateSending = true;
     updateError = '';
     try {
       // api.post already unwraps to the inner `data` payload.
-      updateResult = await api.post(`/clients/${client.id}/update-tokens`, {
+      updateResult = await api.post(`/clients/${c.id}/update-tokens`, {
         sendChannels:   updateSendChannels,
         notifyChannels: updateNotifyChannels
       });
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       updateError = e.message || 'No se pudo generar el enlace';
     } finally {
       updateSending = false;
@@ -411,25 +453,29 @@
     } catch (_) { /* clipboard unavailable */ }
   }
 
+  /** @param {string} ch */
   function fmtChannel(ch) {
-    return { EMAIL: 'Email', WHATSAPP: 'WhatsApp', TELEGRAM: 'Telegram' }[ch] || ch;
+    return /** @type {Record<string,string>} */ ({ EMAIL: 'Email', WHATSAPP: 'WhatsApp', TELEGRAM: 'Telegram' })[ch] || ch;
   }
+  /** @param {any} result @param {string} ch */
   function channelOk(result, ch) {
     return result?.dispatch?.[ch]?.ok === true;
   }
+  /** @param {any} result @param {string} ch */
   function channelErr(result, ch) {
     const r = result?.dispatch?.[ch];
     return r && r.ok === false ? r.error : null;
   }
 
   async function deleteClient() {
-    if (deleteConfirmName !== client?.name) return;
+    const c = client;
+    if (!c || deleteConfirmName !== c.name) return;
     deleting = true;
     try {
-      await api.delete(`/clients/${client.id}`);
+      await api.delete(`/clients/${c.id}`);
       showDeleteModal = false;
       goto('/clients');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'Error al eliminar');
     } finally { deleting = false; }
   }
@@ -451,9 +497,10 @@
   // Next due date among pending invoices (oldest first)
   $: nextDue = pendingInvoices
                 .filter(i => i.dueDate)
-                .sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+                .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
   const now = new Date();
   now.setHours(0, 0, 0, 0);
+  /** @param {any} inv */
   function isOverdueInvoice(inv) {
     if (inv.status === 'OVERDUE') return true;
     if (!inv.dueDate) return false;
@@ -476,6 +523,7 @@
     showPaymentModal = true;
   }
 
+  /** @param {string} invoiceId */
   function payInvoice(invoiceId) {
     payInvoiceId = invoiceId;    // "Registrar pago" por factura → preselecciona esa
     showPaymentModal = true;
@@ -483,24 +531,30 @@
 
   async function onPaymentDone() {
     showPaymentModal = false;
+    const c = client;
     try {
-      const fresh = await api.get(`/clients/${client.id}`);
-      client = fresh;
+      if (c) client = await api.get(`/clients/${c.id}`);
     } catch {}
     showToast('success', 'Pago registrado correctamente');
   }
 
   // ── Evidence photos ─────────────────────────────────────────────────
+  /** @type {import('$lib/types').EvidencePhoto[]} */
   let evidence = [];
   let evidenceLoading = false;
   let evidenceError = '';
+  /** @type {HTMLInputElement} */
   let cameraInput;     // <input type="file" capture="environment">
+  /** @type {HTMLInputElement} */
   let galleryInput;    // <input type="file" multiple>
+  /** @type {File[]} */
   let pendingFiles = [];     // files chosen but not yet uploaded
+  /** @type {string[]} */
   let pendingPreviews = [];  // object URLs for previews
   let evidenceType = 'installation';
   let evidenceDescription = '';
   let uploading = false;
+  /** @type {any} */
   let lightboxPhoto = null;  // photo currently open in the lightbox
 
   async function loadEvidence() {
@@ -508,7 +562,7 @@
     evidenceLoading = true; evidenceError = '';
     try {
       evidence = await evidenceApi.list(client.id);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       evidenceError = e.message || 'No se pudieron cargar las evidencias';
     } finally { evidenceLoading = false; }
   }
@@ -516,6 +570,7 @@
   $: if (client?.id && evidence.length === 0 && !evidenceLoading && !evidenceError) loadEvidence();
 
   // ── Notificaciones (Centro de Notificaciones ↔ Clientes) ──────────
+  /** @type {any[]} */
   let notifications = [];
   let notifLoading = false;
   let notifError = '';
@@ -524,7 +579,7 @@
     if (!client?.id) return;
     notifLoading = true; notifError = '';
     try { notifications = await api.get(`/clients/${client.id}/notifications`); }
-    catch (e) { notifError = e.message || 'No se pudieron cargar las notificaciones'; }
+    catch (/** @type {any} */ e) { notifError = e.message || 'No se pudieron cargar las notificaciones'; }
     finally { notifLoading = false; notifLoaded = true; }
   }
   $: if (client?.id && !notifLoaded && !notifLoading) loadNotifications();
@@ -533,11 +588,13 @@
   // El operador elige una plantilla + canal y se envía solo a este cliente
   // (lo masivo vive en el Centro de Notificaciones). Reusa el pipeline de
   // campañas en el backend (POST /clients/:id/notify).
+  /** @type {import('$lib/types').NotificationTemplate[]} */
   let notifTemplates = [];
   let notifTplLoaded = false;
   let sendOpen = false;            // toggle del mini-formulario
   let sendForm = { templateId: '', channel: 'EMAIL', generatePaymentLinks: false };
   let sending = false;
+  /** @type {{ type: 'success'|'error', text: string } | null} */
   let sendMsg = null;              // { type: 'success'|'error', text }
 
   async function loadNotifTemplates() {
@@ -545,7 +602,7 @@
     try {
       const list = await notificationsApi.listTemplates();
       notifTemplates = (list || []).filter(t => t.isActive);
-    } catch (e) { /* no bloquea la ficha */ }
+    } catch (/** @type {any} */ e) { /* no bloquea la ficha */ }
     finally { notifTplLoaded = true; }
   }
   function toggleSend() {
@@ -562,10 +619,12 @@
   }
 
   async function sendNotification() {
+    const c = client;
+    if (!c) return;
     if (!sendForm.templateId) { sendMsg = { type: 'error', text: 'Selecciona una plantilla.' }; return; }
     sending = true; sendMsg = null;
     try {
-      const r = await api.post(`/clients/${client.id}/notify`, {
+      const r = await api.post(`/clients/${c.id}/notify`, {
         templateId: sendForm.templateId,
         channel: sendForm.channel,
         generatePaymentLinks: sendForm.generatePaymentLinks
@@ -578,17 +637,20 @@
         const missing = sendForm.channel === 'WHATSAPP' ? 'teléfono' : 'email';
         sendMsg = { type: 'error', text: `No se pudo enviar. Verifica que el cliente tenga ${missing} válido.` };
       }
-    } catch (e) { sendMsg = { type: 'error', text: e.message || 'No se pudo enviar la notificación.' }; }
+    } catch (/** @type {any} */ e) { sendMsg = { type: 'error', text: e.message || 'No se pudo enviar la notificación.' }; }
     finally { sending = false; }
   }
+  /** @type {Record<string, string>} */
   const NOTIF_CHANNEL_LABEL = { EMAIL: 'Email', WHATSAPP: 'WhatsApp', BOTH: 'Email + WhatsApp' };
 
   // Resumen de notificaciones: recibidas (no fallidas) / vistas (leído/abierto).
+  /** @param {any} s */
   const _ns = (s) => String(s || '').toLowerCase();
   $: notifReceived = notifications.filter(n => _ns(n.status) !== 'failed' && _ns(n.status) !== 'pending').length;
   $: notifOpened   = notifications.filter(n => ['read', 'opened'].includes(_ns(n.status))).length;
   $: notifFailed   = notifications.filter(n => _ns(n.status) === 'failed').length;
 
+  /** @type {Record<string, string>} */
   const NOTIF_TYPE_LABELS = {
     INVOICE_GENERATED: 'Factura generada', PAYMENT_REMINDER: 'Recordatorio de pago',
     PAYMENT_DUE: 'Recordatorio de pago', PAYMENT_OVERDUE: 'Pago vencido',
@@ -596,9 +658,13 @@
     SERVICE_ACTIVATION: 'Servicio reactivado', INSTALLATION_SCHEDULED: 'Instalación programada',
     GENERAL_ANNOUNCEMENT: 'Notificación'
   };
+  /** @param {string} t */
   const notifTypeLabel  = (t) => NOTIF_TYPE_LABELS[t] || 'Notificación';
+  /** @param {string|Date|null|undefined} d */
   const fmtNotifDate    = (d) => d ? new Date(d).toLocaleString('es-CO', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-  const notifStatusLabel = (s) => ({ sent: 'Enviado', delivered: 'Entregado', read: 'Leído', failed: 'Falló', pending: 'Pendiente', received: 'Recibido' }[String(s).toLowerCase()] || s);
+  /** @param {any} s */
+  const notifStatusLabel = (s) => /** @type {Record<string,string>} */ ({ sent: 'Enviado', delivered: 'Entregado', read: 'Leído', failed: 'Falló', pending: 'Pendiente', received: 'Recibido' })[String(s).toLowerCase()] || s;
+  /** @param {any} s */
   const notifStatusClass = (s) => {
     const ss = String(s).toLowerCase();
     if (ss === 'failed') return 'bg-red-50 text-red-600';
@@ -608,8 +674,11 @@
 
   // ── Inventario / equipos del cliente ──────────────────────────────
   const INV_BASE = import.meta.env.PUBLIC_API_URL || '';
+  /** @param {string|null|undefined} u */
   const invImg = (u) => u ? (u.startsWith('http') ? u : `${INV_BASE}${u}`) : '';
+  /** @type {import('$lib/types').InventoryItem[]} */
   let invItems = [];
+  /** @type {import('$lib/types').InventoryProduct[]} */
   let invProducts = [];
   let invLoading = false;
   let invLoaded = false;
@@ -627,46 +696,51 @@
       ]);
       invItems = its || [];
       invProducts = prods || [];
-    } catch (e) { /* silent — panel just shows empty */ }
+    } catch (/** @type {any} */ e) { /* silent — panel just shows empty */ }
     finally { invLoading = false; invLoaded = true; }
   }
   $: if (client?.id && !invLoaded && !invLoading) loadInventory();
 
   function openInvModal() { invForm = { productId: '', serial: '', notes: '' }; invError = ''; invModalOpen = true; }
   async function saveInvItem() {
-    if (!invForm.productId) { invError = 'Selecciona un producto.'; return; }
+    const c = client;
+    if (!c || !invForm.productId) { if (!invForm.productId) invError = 'Selecciona un producto.'; return; }
     invSaving = true; invError = '';
     try {
       await inventoryApi.createItem({
         productId: invForm.productId,
         serial:    invForm.serial.trim() || null,
-        clientId:  client.id,
+        clientId:  c.id,
         status:    'ASSIGNED',
         notes:     invForm.notes || null
       });
       invModalOpen = false;
-      invItems = await inventoryApi.listItems({ clientId: client.id });
+      invItems = await inventoryApi.listItems({ clientId: c.id });
       showToast('success', 'Equipo asignado al cliente');
-    } catch (e) { invError = e.message || 'No se pudo asignar el equipo'; }
+    } catch (/** @type {any} */ e) { invError = e.message || 'No se pudo asignar el equipo'; }
     finally { invSaving = false; }
   }
+  /** @param {any} it */
   async function removeInvItem(it) {
-    if (!confirm(`¿Quitar "${it.product?.name}" (${it.serial || 'sin serial'}) de este cliente?`)) return;
+    const c = client;
+    if (!c || !confirm(`¿Quitar "${it.product?.name}" (${it.serial || 'sin serial'}) de este cliente?`)) return;
     try {
       await inventoryApi.unassign(it.id);
-      invItems = await inventoryApi.listItems({ clientId: client.id });
+      invItems = await inventoryApi.listItems({ clientId: c.id });
       showToast('success', 'Equipo devuelto a bodega');
-    } catch (e) { showToast('error', e.message); }
+    } catch (/** @type {any} */ e) { showToast('error', e.message); }
   }
 
+  /** @param {Event} e */
   function onPickFiles(e) {
-    const list = Array.from(e.target.files || []);
+    const input = /** @type {HTMLInputElement} */ (e.target);
+    const list = Array.from(input.files || []);
     if (list.length === 0) return;
     // Filter to images only (defensive — accept attribute may be ignored).
     const images = list.filter(f => f.type.startsWith('image/'));
     if (images.length === 0) {
       showToast('error', 'Solo se aceptan imágenes.');
-      e.target.value = '';
+      input.value = '';
       return;
     }
     // Revoke any old previews to avoid memory leaks.
@@ -674,7 +748,7 @@
     pendingFiles = images;
     pendingPreviews = images.map(f => URL.createObjectURL(f));
     // Reset the input so picking the same file again still triggers change.
-    e.target.value = '';
+    input.value = '';
   }
 
   function discardPending() {
@@ -685,10 +759,11 @@
   }
 
   async function uploadPending() {
-    if (pendingFiles.length === 0) return;
+    const c = client;
+    if (!c || pendingFiles.length === 0) return;
     uploading = true;
     try {
-      const created = await evidenceApi.upload(client.id, pendingFiles, {
+      const created = await evidenceApi.upload(c.id, pendingFiles, {
         type: evidenceType,
         description: evidenceDescription
       });
@@ -696,29 +771,33 @@
       evidence = [...created, ...evidence];
       showToast('success', `${created.length} ${created.length === 1 ? 'evidencia subida' : 'evidencias subidas'} correctamente.`);
       discardPending();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'No se pudo subir la evidencia.');
     } finally { uploading = false; }
   }
 
+  /** @param {any} photo */
   async function deleteEvidence(photo) {
-    if (!confirm('¿Eliminar esta evidencia? No se puede deshacer.')) return;
+    const c = client;
+    if (!c || !confirm('¿Eliminar esta evidencia? No se puede deshacer.')) return;
     try {
-      await evidenceApi.remove(client.id, photo.id);
+      await evidenceApi.remove(c.id, photo.id);
       evidence = evidence.filter(p => p.id !== photo.id);
       if (lightboxPhoto?.id === photo.id) lightboxPhoto = null;
       showToast('success', 'Evidencia eliminada.');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'No se pudo eliminar.');
     }
   }
 
+  /** @type {Record<string, string>} */
   const EVIDENCE_TYPE_LABEL = {
     installation: 'Instalación',
     support:      'Soporte técnico',
     visit:        'Visita',
     other:        'Otro'
   };
+  /** @param {string|Date|null|undefined} s */
   function fmtEvDate(s) {
     if (!s) return '';
     return new Date(s).toLocaleString('es-CO', {
@@ -871,7 +950,7 @@
       </span>
       <span class="text-red-900 font-mono tabular-nums">· {fmtMoney(overdueAmount)} en mora</span>
       {#if nextDue}
-        <span class="text-xs text-red-700/80">· la más antigua venció el {fmtDate(overdueInvoices.slice().sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate))[0]?.dueDate)}</span>
+        <span class="text-xs text-red-700/80">· la más antigua venció el {fmtDate(overdueInvoices.slice().sort((a,b)=>new Date(a.dueDate).getTime()-new Date(b.dueDate).getTime())[0]?.dueDate)}</span>
       {/if}
     </div>
     <button on:click={openPayment}
@@ -1515,7 +1594,7 @@
                   {client.mikrotikAccount?.username || '—'}
                 </div>
                 <button class="btn-icon" title="Copiar usuario"
-                        on:click={() => copyText(client.mikrotikAccount?.username || '', 'user')}>
+                        on:click={() => copyText(client?.mikrotikAccount?.username || '', 'user')}>
                   {#if copied === 'user'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
                 </button>
               </div>
@@ -1531,7 +1610,7 @@
                   {#if showPassword}<EyeOff size={14} />{:else}<Eye size={14} />{/if}
                 </button>
                 <button class="btn-icon" title="Copiar contraseña"
-                        on:click={() => copyText(client.mikrotikAccount?.password || '', 'pwd')}>
+                        on:click={() => copyText(client?.mikrotikAccount?.password || '', 'pwd')}>
                   {#if copied === 'pwd'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
                 </button>
               </div>
@@ -1545,7 +1624,7 @@
                 </div>
                 {#if client.mikrotikAccount?.remoteAddress}
                   <button class="btn-icon" title="Copiar IP"
-                          on:click={() => copyText(client.mikrotikAccount.remoteAddress, 'ip')}>
+                          on:click={() => copyText(client?.mikrotikAccount?.remoteAddress || '', 'ip')}>
                     {#if copied === 'ip'}<Check size={14} class="text-emerald-600" />{:else}<Copy size={14} />{/if}
                   </button>
                 {/if}
@@ -1804,7 +1883,7 @@
           </div>
           <div>
             <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Estado</div>
-            <span class="badge {INVOICE_CLS[paymentDetailsInvoice?.status] || 'bg-slate-100 text-slate-600'}">
+            <span class="badge {INVOICE_CLS[paymentDetailsInvoice?.status || ''] || 'bg-slate-100 text-slate-600'}">
               {paymentDetailsInvoice?.status || '—'}
             </span>
           </div>
@@ -1814,7 +1893,7 @@
           </div>
           <div>
             <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Saldo</div>
-            <div class="text-sm font-mono tabular-nums {paymentDetailsInvoice?.balanceDue > 0 ? 'text-orange-600' : 'text-emerald-600'}">
+            <div class="text-sm font-mono tabular-nums {(paymentDetailsInvoice?.balanceDue ?? 0) > 0 ? 'text-orange-600' : 'text-emerald-600'}">
               {fmtMoney(paymentDetailsInvoice?.balanceDue ?? 0)}
             </div>
           </div>

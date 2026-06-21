@@ -52,8 +52,8 @@ export const ROLES = {
 export const ADMIN_TIER       = [ROLES.ADMIN, ROLES.OPERATOR];
 export const OPERATIONAL_TIER = [ROLES.ADMIN, ROLES.OPERATOR, ROLES.TECHNICIAN];
 
-/** @param {string} role */
-export function isAdmin(role) { return ADMIN_TIER.includes(role); }
+/** @param {string | null | undefined} role */
+export function isAdmin(role) { return !!role && ADMIN_TIER.includes(role); }
 
 // ── NAV registry ───────────────────────────────────────────────────────
 // Helpers for compact match expressions. Strings match strict-equal.

@@ -78,7 +78,16 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 > caída en las páginas grandes llega en sus propias fases (al anotar su estado),
 > ahora ya con los tipos de retorno del API disponibles.
 
-### Fase 1 — clients/[id]/+page.svelte (291)  ⬜
+### Fase 1 — clients/[id]/+page.svelte (290 → 0)  ✅
+- Anotado `client` (`Client|null`) + ~30 vars de estado y ~25 funciones helper.
+- `catch (e)` → `catch (/** @type {any} */ e)` (18).
+- Mapas de clases/labels → `Record<string,string>`.
+- Null-safety: como `client` es un `let` reasignado en closures (TS no estrecha),
+  se captura `const c = client; if (!c) return;` en los handlers; en `toggleStatus`
+  se reasigna `client = {...c, status}` para preservar la reactividad de Svelte.
+- Restas de fechas → `.getTime()`. Props de `RegisterPaymentModal` tipadas.
+- `isAdmin(role)` en navigation.js acepta `string|null|undefined`.
+- **Sin cambios de runtime** salvo `toggleStatus` (reasignación equivalente). Build ✓.
 ### Fase 2 — notifications/+page.svelte (159)  ⬜
 ### Fase 3 — clients/+page.svelte (127)  ⬜
 ### Fase 4 — network/+page.svelte (116)  ⬜
@@ -101,3 +110,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-20 | infra | 1695 | 1695 | Creado `types.d.ts` + `errores.md`. Sin cambios de conteo aún. |
 | 2026-06-20 | 0 (api/) | 1695 | 1520 | Tipada toda la capa `api/*.js` + `client.js`. Capa api limpia. |
 | 2026-06-20 | 0 (stores/nav) | 1520 | 1441 | Tipados stores, `navigation.js`, `permissions.js`. Build ✓. 62 archivos restantes. |
+| 2026-06-21 | 1 | 1441 | 1150 | clients/[id] 290→0. + props RegisterPaymentModal e isAdmin. Build ✓. |

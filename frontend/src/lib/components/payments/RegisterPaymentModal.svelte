@@ -21,8 +21,11 @@
     ChevronDown, Plus, Check
   } from 'lucide-svelte';
 
+  /** @type {import('$lib/types').Client | null} */
   export let client = null;
+  /** @type {import('$lib/types').Invoice[]} */
   export let invoices = [];
+  /** @type {string | null} */
   export let preselectInvoiceId = null;
 
   const dispatch = createEventDispatcher();
