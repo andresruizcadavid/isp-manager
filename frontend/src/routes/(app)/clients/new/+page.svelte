@@ -12,10 +12,15 @@
   import ZoneCreateSheet from '$lib/components/clients/ZoneCreateSheet.svelte';
 
   // Selected zone id (always required; sticky summary surfaces its state).
+  /** @type {number | null} */
   let selectedZoneId = null;
+  /** @type {any[]} */
   let zonesAvailable = [];       // only zones with router
+  /** @type {any[]} */
   let zonesAll = [];             // all zones (for "sin router" info)
+  /** @type {import('$lib/types').Plan[]} */
   let plans = [];
+  /** @type {import('$lib/types').Router[]} */
   let routers = [];              // for inline zone creation
   let zonesLoading = true;
   let plansLoading = true;
@@ -26,6 +31,7 @@
   let zoneSheetOpen = false;
 
   // ── Client form (no routerId — backend resolves from zone) ──
+  /** @type {any} */
   let form = {
     fullName: '', documentType: 'CC', documentNumber: '',
     email: '', phone: '', address: '', neighborhood: '',
@@ -68,7 +74,7 @@
       zonesAll = zAll || [];
       plans = p || [];
       routers = r || [];
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error cargando datos';
     } finally {
       zonesLoading = false;
@@ -85,6 +91,7 @@
   // The Sheet emits the new zone row (already with its router attached).
   // We push it into the available list and auto-select it so the operator
   // continues seamlessly without losing form state.
+  /** @param {CustomEvent<any>} e */
   function onZoneCreated(e) {
     const z = e.detail?.zone;
     if (!z) return;
@@ -117,9 +124,12 @@
   let ipsPopoverOpen = false;
   let ipsLoading = false;
   let ipsError = '';
+  /** @type {any[]} */
   let ipsAvailable = [];
+  /** @type {any} */
   let ipsTotals = null;
   let ipsTruncated = false;
+  /** @type {number | null} */
   let ipsRouterId = null;       // routerId we last fetched for; refetch when zone changes
   let ipsRouterName = '';
 
@@ -143,11 +153,12 @@
       ipsTruncated = !!data?.truncated;
       ipsRouterId = rid;
       ipsRouterName = data?.router?.name || selectedZone?.router?.name || '';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       ipsError = e.message || 'No se pudo obtener la lista de IPs disponibles.';
     } finally { ipsLoading = false; }
   }
 
+  /** @param {string} ip */
   function pickIp(ip) {
     form.mikrotik.remoteAddress = ip;
     ipsPopoverOpen = false;
@@ -172,11 +183,14 @@
   // Replaces the old free-text "Perfil PPPoE" field with a select fed by
   // the actual profiles configured on the zone's router. This prevents
   // the "input does not match any value of profile" error at create time.
+  /** @type {any[]} */
   let profiles = [];
   let profilesLoading = false;
   let profilesError = '';
+  /** @type {number | null} */
   let profilesRouterId = null;  // routerId we last fetched for
 
+  /** @param {number} routerId */
   async function loadProfiles(routerId) {
     profilesLoading = true;
     profilesError = '';
@@ -185,7 +199,7 @@
       const data = await routersApi.pppoeProfiles(routerId);
       profiles = Array.isArray(data) ? data : [];
       profilesRouterId = routerId;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       profilesError = e.message || 'No se pudieron cargar los perfiles del router';
       profilesRouterId = null;
     } finally {
@@ -227,6 +241,7 @@
   // writes, the live service is never touched).
   let lookupBusy = false;
   let lookupError = '';
+  /** @type {any} */
   let lookupResult = null;      // { found, secret, active, suggestedPlan, linkedClient }
   let lookupChecked = '';       // username we last checked (avoid re-checks)
   let lookupApplied = false;    // operator confirmed the import
@@ -243,7 +258,7 @@
       const data = await routersApi.pppSecretLookup(rid, username);
       lookupResult = data || { found: false };
       lookupChecked = username;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       lookupError = e.message || 'No se pudo consultar el router.';
     } finally { lookupBusy = false; }
   }
@@ -284,6 +299,7 @@
   let progressOpen = false;
   let progressStep = 'verifying'; // verifying | creating | authorizing | syncing | done | error
   let progressError = '';
+  /** @type {ReturnType<typeof setTimeout>[]} */
   let progressTimers = [];
 
   function clearProgressTimers() {
@@ -352,7 +368,7 @@
       progressStep = 'done';
       // Brief moment so the user sees the success state before navigating.
       setTimeout(() => goto(`/clients/${created.id}`), 800);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       clearProgressTimers();
       progressStep = 'error';
       progressError = e.message || 'No se pudo crear el cliente.';

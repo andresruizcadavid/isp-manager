@@ -15,6 +15,7 @@
   let loading = true;
   let error   = '';
   let success = '';
+  /** @type {import('$lib/types').Invoice | null} */
   let invoice = null;
 
   // ── Action state ─────────────────────────────────────────────────────
@@ -25,19 +26,23 @@
 
   // ── Send modal state ─────────────────────────────────────────────────
   let showSendModal  = false;
+  /** @type {string[]} */
   let sendChannels   = [];
   let sendPdf        = true;
   let sendPaymentLink = false;
+  /** @type {any} */
   let sendResults    = null;     // { results: [], paymentLinkUrl: string|null }
   let sendRunning    = false;
   let sendError      = '';
   let copied         = false;    // payment link copy feedback
 
   // ── Constants ────────────────────────────────────────────────────────
+  /** @type {Record<string, string>} */
   const STATUS_PT = {
     DRAFT:'Borrador', PENDING:'Pendiente', PARTIAL:'Pago parcial',
     PAID:'Pagada', OVERDUE:'Vencida', CANCELLED:'Cancelada', REFUNDED:'Reembolsada'
   };
+  /** @type {Record<string, string>} */
   const STATUS_CLS = {
     DRAFT:    'bg-slate-100 text-slate-600',
     PENDING:  'bg-amber-100 text-amber-700',
@@ -47,11 +52,13 @@
     CANCELLED:'bg-slate-100 text-slate-500',
     REFUNDED: 'bg-violet-100 text-violet-700'
   };
+  /** @type {Record<string, string>} */
   const METHOD_PT = {
     CASH:'Efectivo', BANK_TRANSFER:'Transferencia',
     WOMPI:'Wompi', NEQUI:'Nequi', BANCOLOMBIA:'Bancolombia',
     CREDIT_CARD:'Tarjeta de crédito', OTHER:'Otro'
   };
+  /** @type {Record<string, string>} */
   const PAY_STATUS_CLS = {
     COMPLETED:'bg-emerald-100 text-emerald-700',
     PENDING:  'bg-amber-100 text-amber-700',
@@ -65,35 +72,43 @@
   ];
 
   // ── Helpers ──────────────────────────────────────────────────────────
+  /** @param {number|null|undefined} c */
   function fmtMoney(c) {
     if (c == null) return '—';
     return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format(c / 100);
   }
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' });
   }
+  /** @param {string|Date|null|undefined} s */
   function fmtDateTime(s) {
     if (!s) return '—';
     return new Date(s).toLocaleString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
   }
+  /** @param {string|null|undefined} text */
   function extractUrls(text) {
     if (!text) return [];
     const matches = text.match(/https?:\/\/[^\s)<>"']+/gi);
     return matches ? [...new Set(matches)] : [];
   }
+  /** @param {any} inv */
   function periodLabel(inv) {
     if (!inv?.periodYear || !inv?.periodMonth) return null;
     return `${MONTHS_ES[inv.periodMonth - 1]} ${inv.periodYear}`;
   }
+  /** @param {string|Date} date */
   function daysUntil(date) {
     const d = (new Date(date).setHours(0,0,0,0) - new Date().setHours(0,0,0,0)) / 86_400_000;
     return Math.round(d);
   }
+  /** @param {string} kind @param {string} msg */
   function showToast(kind, msg) {
     if (kind === 'error') error = msg; else success = msg;
     setTimeout(() => { error = ''; success = ''; }, 4000);
   }
+  /** @param {any} p */
   function isImage(p) {
     return (p?.mimeType || '').startsWith('image/');
   }
@@ -123,7 +138,7 @@
     error = '';
     try {
       invoice = await invoicesApi.getOne($page.params.id);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo cargar la factura';
     } finally {
       loading = false;
@@ -132,11 +147,12 @@
 
   // ── PDF download (auth-protected, so manual blob fetch) ───────────────
   async function downloadPdf() {
-    if (!browser || !invoice) return;
+    const inv = invoice;
+    if (!browser || !inv) return;
     downloading = true;
     try {
       const token = localStorage.getItem('isp_token');
-      const res = await fetch(`/api/v1/invoices/${invoice.id}/pdf`, {
+      const res = await fetch(`/api/v1/invoices/${inv.id}/pdf`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -144,12 +160,12 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `factura-${invoice.invoiceNumber}.pdf`;
+      a.download = `factura-${inv.invoiceNumber}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'No se pudo descargar el PDF');
     } finally {
       downloading = false;
@@ -159,7 +175,7 @@
   // ── Send management modal ────────────────────────────────────────────
   function openSendModal() {
     sendChannels = [];
-    if (invoice.client?.email) sendChannels = ['email'];
+    if (invoice?.client?.email) sendChannels = ['email'];
     sendPdf = true;
     sendPaymentLink = false;
     sendResults = null;
@@ -172,6 +188,7 @@
     showSendModal = false;
     sendResults = null;
   }
+  /** @param {string} ch */
   function toggleSendChannel(ch) {
     if (sendChannels.includes(ch)) {
       sendChannels = sendChannels.filter(c => c !== ch);
@@ -180,12 +197,14 @@
     }
   }
   async function doSend() {
+    const inv = invoice;
+    if (!inv) return;
     if (sendChannels.length === 0) { sendError = 'Seleccione al menos un canal'; return; }
     sendRunning = true;
     sendError = '';
     sendResults = null;
     try {
-      const res = await invoicesApi.send(invoice.id, {
+      const res = await invoicesApi.send(inv.id, {
         channels: sendChannels,
         sendPdf,
         sendPaymentLink
@@ -194,7 +213,7 @@
       // Honest status: the backend returns 207 with success:false on partial
       // failure (the api client unwraps `data`, so inspect the rows directly).
       const rows   = res?.results || [];
-      const failed = rows.filter(r => r.status === 'failed');
+      const failed = rows.filter((/** @type {any} */ r) => r.status === 'failed');
       if (failed.length === 0) {
         showToast('success', 'Envío completado correctamente');
       } else if (failed.length === rows.length) {
@@ -202,12 +221,13 @@
       } else {
         showToast('error', `Envío parcial: ${failed.length} de ${rows.length} fallaron`);
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       sendError = e.message || 'Envío fallido';
     } finally {
       sendRunning = false;
     }
   }
+  /** @param {string} url */
   async function copyLink(url) {
     try {
       await navigator.clipboard.writeText(url);
@@ -228,13 +248,15 @@
 
   // ── Mark paid manually (admin shortcut) ──────────────────────────────
   async function markAsPaid() {
+    const inv = invoice;
+    if (!inv) return;
     if (!confirm('Marcar la factura como pagada sin registrar un pago detallado. ¿Continuar?')) return;
     actionBusy = true;
     try {
-      await invoicesApi.markPaid(invoice.id);
+      await invoicesApi.markPaid(inv.id);
       showToast('success', 'Factura marcada como pagada');
       await reload();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       showToast('error', e.message || 'No se pudo marcar como pagada');
     } finally {
       actionBusy = false;
@@ -538,9 +560,9 @@
                   {/if}
                 {/if}
 
-                {#if p.evidencePhotos?.length > 0}
+                {#if (p.evidencePhotos?.length ?? 0) > 0}
                   <div class="mt-2 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
-                    {#each p.evidencePhotos as ph}
+                    {#each p.evidencePhotos ?? [] as ph}
                       <a href={ph.fileUrl} target="_blank" rel="noopener"
                          class="block aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-50 hover:border-brand-300 group relative"
                          title={ph.fileName || 'Comprobante'}>
@@ -812,7 +834,7 @@
                 <div class="flex items-center gap-2">
                   <input type="text" readonly value={sendResults.paymentLinkUrl}
                          class="input text-xs flex-1 font-mono bg-white"
-                         on:focus={e => e.target.select()} />
+                         on:focus={e => /** @type {HTMLInputElement} */ (e.currentTarget).select()} />
                   <button class="btn-secondary text-xs whitespace-nowrap" on:click={() => copyLink(sendResults.paymentLinkUrl)}>
                     {#if copied}
                       <Check size={13} class="text-emerald-600" />

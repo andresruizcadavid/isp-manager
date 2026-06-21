@@ -7,8 +7,10 @@
     TrendingUp, Wifi, Radio, Server, Boxes, Wrench, AlarmClock
   } from 'lucide-svelte';
 
+  /** @param {number} [c] */
   const fmtCop = (c) => '$' + Math.round((c || 0) / 100).toLocaleString('es-CO');
 
+  /** @type {any} */
   let stats = null;
   let loading = true;
   let error = '';
@@ -17,7 +19,7 @@
     loading = true; error = '';
     try {
       stats = await dashboardApi.getStats();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error cargando estadísticas';
     } finally {
       loading = false;
@@ -25,24 +27,30 @@
   }
   onMount(load);
 
+  /** @param {number} [cents] */
   const fmtMoney = (cents) =>
     new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((cents || 0) / 100);
+  /** @param {number} [n] */
   const fmtNum = (n) =>
     new Intl.NumberFormat('es-CO').format(n || 0);
 
   // Status pretty names
+  /** @type {Record<string, string>} */
   const STATUS_PT = {
     ACTIVE: 'Activos', SUSPENDED: 'Suspendidos', INACTIVE: 'Inactivos', PENDING: 'Pendientes'
   };
+  /** @type {Record<string, string>} */
   const INVOICE_STATUS_PT = {
     PAID: 'Pagadas', PENDING: 'Pendientes', OVERDUE: 'Vencidas',
     CANCELLED: 'Canceladas', DRAFT: 'Borradores', REFUNDED: 'Reembolsadas'
   };
 
   // Color cycles for bars
+  /** @type {Record<string, string>} */
   const STATUS_COLOR = {
     ACTIVE: '#10b981', SUSPENDED: '#f59e0b', INACTIVE: '#94a3b8', PENDING: '#3b82f6'
   };
+  /** @type {Record<string, string>} */
   const INVOICE_COLOR = {
     PAID: '#10b981', PENDING: '#f59e0b', OVERDUE: '#ef4444',
     CANCELLED: '#94a3b8', DRAFT: '#cbd5e1', REFUNDED: '#a855f7'
@@ -50,13 +58,13 @@
   const PLAN_COLORS = ['#1e3a8a', '#7c3aed', '#0891b2', '#16a34a', '#ea580c', '#db2777'];
 
   // Derived bars (with safe defaults when stats null)
-  $: byStatus = (stats?.clientsByStatus ?? []).slice().sort((a,b) => b.count - a.count);
-  $: byPlan   = (stats?.clientsByPlan   ?? []).slice().sort((a,b) => b.count - a.count);
-  $: byInvoice = (stats?.invoicesByStatus ?? []).slice().sort((a,b) => b.count - a.count);
+  $: byStatus  = /** @type {any[]} */ (stats?.clientsByStatus  ?? []).slice().sort((/** @type {any} */ a, /** @type {any} */ b) => b.count - a.count);
+  $: byPlan    = /** @type {any[]} */ (stats?.clientsByPlan    ?? []).slice().sort((/** @type {any} */ a, /** @type {any} */ b) => b.count - a.count);
+  $: byInvoice = /** @type {any[]} */ (stats?.invoicesByStatus ?? []).slice().sort((/** @type {any} */ a, /** @type {any} */ b) => b.count - a.count);
 
-  $: maxStatus  = Math.max(1, ...byStatus.map(b => b.count));
-  $: maxPlan    = Math.max(1, ...byPlan.map(b => b.count));
-  $: maxInvoice = Math.max(1, ...byInvoice.map(b => b.count));
+  $: maxStatus  = Math.max(1, ...byStatus.map((/** @type {any} */ b) => b.count));
+  $: maxPlan    = Math.max(1, ...byPlan.map((/** @type {any} */ b) => b.count));
+  $: maxInvoice = Math.max(1, ...byInvoice.map((/** @type {any} */ b) => b.count));
 </script>
 
 <svelte:head><title>Dashboard — ISP Manager</title></svelte:head>
@@ -354,7 +362,7 @@
   <div class="card p-4">
     <h3 class="text-[13px] font-semibold text-slate-900 mb-3 flex items-center gap-2"><Radio size={15} class="text-violet-600" /> Por tecnología</h3>
     {#if stats?.byTechnology?.length}
-      {@const total = stats.byTechnology.reduce((s, t) => s + t.count, 0)}
+      {@const total = stats.byTechnology.reduce((/** @type {number} */ s, /** @type {any} */ t) => s + t.count, 0)}
       <div class="space-y-3">
         {#each stats.byTechnology as t}
           {@const pct = total ? Math.round((t.count / total) * 100) : 0}

@@ -111,7 +111,14 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 - `createConnection(...,null)` → `undefined` (el wrapper espera `string|undefined`).
 - types.d.ts: `Zone._count?`. ZoneTabs: props `activeId`(string|number)/zones/counts
   tipados (de paso bajó de 15 a 11; resto en Fase 9). Build ✓.
-### Fase 5 — clients/new (57), invoices/[id] (47), dashboard (47)  ⬜
+### Fase 5 — clients/new (57→0), invoices/[id] (47→0), dashboard (47→0)  ✅
+- clients/new: `form` como any (campo dinámico `mikrotik.reuseExisting`), estado
+  (zonas/plans/routers/ips/profiles/lookup) tipado, 5 catch, params.
+- invoices/[id]: invoice `Invoice|null` con captura const en handlers, maps→Record,
+  catch, `e.currentTarget` en on:focus, `evidencePhotos ?? []` en template.
+- dashboard: `stats` any, casts `any[]` en derivaciones (`?? []` colapsaba a never[]),
+  maps→Record, params de reduce/map/sort.
+- types.d.ts: `Invoice.wisphubId?`, `InvoiceItem.unitPrice?/amount?`, `Payment.createdBy?`. Build ✓.
 ### Fase 6 — RegisterPaymentModal (44), users (43), billing-cycles (40), plans (39)  ⬜
 ### Fase 7 — payment-links* (37+28+16), invoices (32), system/backups (30), inventory (30)  ⬜
 ### Fase 8 — (app)/+layout (29), mikrotik/routers* (25+20+6), update/[token] (22), BulkPlanChangeModal (21), zones (19)  ⬜
@@ -134,3 +141,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-21 | 2 | 1150 | 994 | notifications 158→0. Bug toggleSmtpPassword (reveal inexistente) corregido. Build ✓. |
 | 2026-06-21 | 3 | 994 | 878 | clients/+page 126→0. + tipo Router.ip. Build ✓. |
 | 2026-06-21 | 4 | 878 | 761 | network/+page 117→0. + Zone._count, ZoneTabs props, props SvelteFlow casteados. Build ✓. |
+| 2026-06-21 | 5 | 761 | 614 | clients/new + invoices/[id] + dashboard a 0. + Invoice.wisphubId, InvoiceItem.unitPrice/amount, Payment.createdBy. Build ✓. |

@@ -131,6 +131,7 @@ export interface Client {
 
 export interface Invoice {
   id: string;
+  wisphubId?: string | null;
   invoiceNumber: string;
   clientId: string;
   amount: number;
@@ -160,6 +161,9 @@ export interface InvoiceItem {
   description: string;
   price: number;
   total: number;
+  /** Alias tolerado en la UI (algunas respuestas usan unitPrice/amount). */
+  unitPrice?: number;
+  amount?: number;
   createdAt?: string;
 }
 
@@ -179,6 +183,7 @@ export interface Payment {
   updatedAt?: string;
   invoice?: Invoice | null;
   client?: Client | null;
+  createdBy?: User | null;
   evidencePhotos?: EvidencePhoto[];
 }
 
