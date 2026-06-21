@@ -16,7 +16,7 @@ export async function load({ params }) {
       error(404, 'Router no encontrado');
     }
     return { router };
-  } catch (/** @type {any} */ e) {
+  } catch (e: any) {
     if (e.message?.includes('404') || e.message?.includes('no encontrado')) {
       error(404, 'Router no encontrado');
     }

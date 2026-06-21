@@ -139,8 +139,8 @@
   /** @param {any} rt */
   function routeStatusFor(rt) {
     const live = rt.id != null ? liveRoutes[rt.id] : null;
-    const status  = live?.status ?? (rt.id == null ? 'UNKNOWN' : (router?.routes?.find(x => x.id === rt.id)?.status ?? 'UNKNOWN'));
-    const latency = live?.latency ?? router?.routes?.find(x => x.id === rt.id)?.latency;
+    const status  = live?.status ?? (rt.id == null ? 'UNKNOWN' : (router?.routes?.find((/** @type {any} */ x) => x.id === rt.id)?.status ?? 'UNKNOWN'));
+    const latency = live?.latency ?? router?.routes?.find((/** @type {any} */ x) => x.id === rt.id)?.latency;
     if (status === 'ONLINE') {
       return { label: `Online${latency != null ? ` · ${latency.toFixed(0)}ms` : ''}`, cls: 'text-emerald-600' };
     }

@@ -74,7 +74,7 @@
           <div>
             <label for="password" class="block text-sm font-medium text-text-primary mb-1.5">Contraseña</label>
             <div class="relative">
-<input id="password" type={showPassword ? 'text' : 'password'} value={password} on:input={e => password = e.target.value}
+<input id="password" type={showPassword ? 'text' : 'password'} value={password} on:input={e => password = /** @type {HTMLInputElement} */ (e.currentTarget).value}
                 placeholder="Mínimo 6 caracteres" required minlength="6"
                 class="w-full px-4 py-3 pr-11 text-sm border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600" />
               <button type="button" on:click={() => showPassword = !showPassword}

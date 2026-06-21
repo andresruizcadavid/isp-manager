@@ -28,6 +28,7 @@
     goto('/portal/login');
   }
 
+  /** @param {string} href */
   function isActive(href) {
     return pathname === href || pathname.startsWith(href + '/');
   }

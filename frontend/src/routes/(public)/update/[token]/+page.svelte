@@ -132,7 +132,7 @@
       photoUploaded = [...photoUploaded, ...(data?.photos || [])];
       photoFiles = [];
       // Reset the input element value so the same file can be re-picked.
-      const input = document.getElementById('photo-input');
+      const input = /** @type {HTMLInputElement | null} */ (document.getElementById('photo-input'));
       if (input) input.value = '';
     } catch (/** @type {any} */ e) {
       photoError = e.message || 'No se pudo subir';

@@ -36,7 +36,7 @@
 
   async function loadRouters() {
     try {
-      const list = await routersApi.getAll();
+      const list = /** @type {any} */ (await routersApi.getAll());
       routers = Array.isArray(list) ? list : (list?.data || []);
       if (!routerId && routers.length) routerId = routers[0].id;
     } catch (/** @type {any} */ e) { error = e.message; }

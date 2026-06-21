@@ -82,10 +82,12 @@
 		return item.roles.includes($user.role);
 	});
 
+	/** @param {string} [href] */
 	function handleItemClick(href) {
 		onClose();
 	}
 
+	/** @param {string} href */
 	function isActive(href) {
 		return currentPath === href || currentPath.startsWith(href + '/');
 	}

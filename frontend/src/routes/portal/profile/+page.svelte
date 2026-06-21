@@ -3,6 +3,7 @@
   import { User, Mail, Phone, MapPin, IdCard, Loader2, AlertCircle, Wifi } from 'lucide-svelte';
   import { portalApi } from '$lib/api/portal.api.js';
 
+  /** @type {any} */
   let profile = null;
   let loading = true;
   let error = '';

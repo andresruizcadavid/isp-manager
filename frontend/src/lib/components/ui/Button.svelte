@@ -1,6 +1,7 @@
 <script>
 	import { createEventDispatcher } from 'svelte';
 
+	/** @type {'button' | 'submit' | 'reset'} */
 	export let type = 'button';
 	export let variant = 'primary';
 	export let size = 'md';

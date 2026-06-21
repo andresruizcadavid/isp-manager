@@ -5,6 +5,7 @@
   import { onMount } from 'svelte';
   import { Loader2, ArrowLeft, Plus, Search } from 'lucide-svelte';
 
+  /** @type {any[]} */
   let clients = [];
   let clientsLoading = true;
   let clientSearch = '';
@@ -27,6 +28,7 @@
     c.documentNumber?.includes(clientSearch) || c.email?.toLowerCase().includes(clientSearch.toLowerCase())
   );
 
+  /** @param {any} c */
   function selectClient(c) {
     form.clientId = c.id;
     clientOpen = false;
@@ -42,6 +44,7 @@
     return clients.find(c => c.id === form.clientId);
   }
 
+  /** @param {Event} e */
   async function handleSubmit(e) {
     e.preventDefault();
     if (!form.clientId) { error = 'Selecciona un cliente'; return; }

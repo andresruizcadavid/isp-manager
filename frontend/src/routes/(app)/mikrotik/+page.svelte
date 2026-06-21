@@ -6,6 +6,7 @@
     CheckCircle2, Clock, ExternalLink
   } from 'lucide-svelte';
 
+  /** @type {import('$lib/types').Router[]} */
   let routers = [];
   let loading = true;
   let error = '';
@@ -24,6 +25,7 @@
   $: activeRouters = routers.filter(r => r.isActive).length;
   $: totalAccounts = routers.reduce((sum, r) => sum + (r._count?.mikrotikAccounts || 0), 0);
 
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return 'Nunca';
     return new Date(s).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });

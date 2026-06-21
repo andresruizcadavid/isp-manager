@@ -43,7 +43,7 @@
       ]);
       products = p || [];
       items = it || [];
-      clients = (cl?.data || cl || []).map(c => ({ id: c.id, name: c.name }));
+      clients = ((/** @type {any} */ (cl))?.data || cl || []).map((/** @type {any} */ c) => ({ id: c.id, name: c.name }));
     } catch (/** @type {any} */ e) { error = e.message || 'No se pudo cargar el inventario'; }
     finally { loading = false; }
   }

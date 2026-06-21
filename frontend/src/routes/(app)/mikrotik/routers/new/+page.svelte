@@ -11,6 +11,7 @@
   let error = '';
   let success = '';
   // Per-route ping results, keyed by row index (0..2). { status, latency }.
+  /** @type {any[]} */
   let routeResults = [null, null, null];
 
   let form = {
@@ -112,6 +113,7 @@
     } finally { testing = false; }
   }
 
+  /** @param {number} idx */
   function routeStatusFor(idx) {
     const r = routeResults[idx];
     if (!r) return { label: 'Sin probar', cls: 'text-slate-400' };

@@ -3,6 +3,7 @@
   import { CreditCard, FileText, Wifi, Loader2, AlertCircle, ArrowRight, Calendar } from 'lucide-svelte';
   import { portalApi } from '$lib/api/portal.api.js';
 
+  /** @type {any} */
   let data = null;
   let loading = true;
   let error = '';
@@ -13,9 +14,12 @@
     finally { loading = false; }
   });
 
+  /** @param {number} [c] */
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((c||0)/100); }
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' }) : ''; }
 
+  /** @type {Record<string, string>} */
   const badge = { PAID:'bg-emerald-100 text-emerald-700', PENDING:'bg-amber-100 text-amber-700', OVERDUE:'bg-red-100 text-red-700', PARTIAL:'bg-blue-100 text-blue-700' };
 </script>
 

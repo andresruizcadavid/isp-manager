@@ -40,7 +40,7 @@
     pollTimer = setInterval(async () => {
       attempts++;
       if (attempts > MAX_ATTEMPTS) {
-        clearInterval(pollTimer);
+        clearInterval(pollTimer ?? undefined);
         pollTimer = null;
         polling = false;
         return;
@@ -48,7 +48,7 @@
       try {
         const s = await portalApi.getInvoiceStatus($page.params.id);
         if (s.status === 'PAID') {
-          clearInterval(pollTimer);
+          clearInterval(pollTimer ?? undefined);
           pollTimer = null;
           polling = false;
           inv = { ...inv, status: s.status, balanceDue: s.balanceDue, paidDate: s.paidDate };

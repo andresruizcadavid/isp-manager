@@ -68,7 +68,7 @@
         <div>
           <label for="password" class="block text-sm font-medium text-text-primary mb-2">Contraseña</label>
           <div class="relative">
-<input id="password" type={showPassword ? 'text' : 'password'} value={password} on:input={e => password = e.target.value} placeholder="••••••••" required autocomplete="current-password"
+<input id="password" type={showPassword ? 'text' : 'password'} value={password} on:input={e => password = /** @type {HTMLInputElement} */ (e.currentTarget).value} placeholder="••••••••" required autocomplete="current-password"
               class="w-full px-4 py-3 pr-11 text-sm text-text-primary bg-white border border-slate-200 rounded-xl placeholder:text-text-muted
                 focus:outline-none focus:ring-2 focus:ring-brand-600/20 focus:border-brand-600 hover:border-slate-300 transition-all" />
             <button type="button" on:click={() => showPassword = !showPassword} aria-label={showPassword ? 'Ocultar' : 'Mostrar'}

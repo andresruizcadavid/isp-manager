@@ -5,8 +5,10 @@
     Circle
   } from 'lucide-svelte';
 
+  /** @type {any} */
   export let data;
 
+  /** @type {Record<string, any>} */
   const ICONS = {
     ROUTER:  Router,
     ANTENNA: Antenna,
@@ -16,6 +18,7 @@
     OTHER:   HardDrive
   };
   // Short labels shown as a chip in the upper-right of each card.
+  /** @type {Record<string, string>} */
   const TYPE_LABELS = {
     ROUTER:  'Router',
     ANTENNA: 'AP',

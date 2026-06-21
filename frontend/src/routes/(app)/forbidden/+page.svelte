@@ -3,12 +3,12 @@
   import { user } from '$lib/stores/auth.store.js';
   import { ShieldAlert, ArrowLeft, LayoutDashboard } from 'lucide-svelte';
 
-  $: roleLabel = ({
+  $: roleLabel = (/** @type {Record<string, string>} */ ({
     ADMIN:      'Administrador',
     OPERATOR:   'Administrador',
     TECHNICIAN: 'Técnico',
     VIEWER:     'Visualizador'
-  })[$user?.role] || 'Usuario';
+  }))[$user?.role || ''] || 'Usuario';
 </script>
 
 <svelte:head><title>Acceso denegado — ISP Manager</title></svelte:head>

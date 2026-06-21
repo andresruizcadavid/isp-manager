@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Download, X } from 'lucide-svelte';
 
+  /** @type {any} */
   let deferredPrompt = null;
   let showPrompt = false;
   let isInstalled = false;
@@ -11,19 +12,20 @@
   onMount(() => {
     if (typeof window === 'undefined') return;
 
+    const w = /** @type {any} */ (window);
     isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
-                   window.navigator.standalone === true;
+                   w.navigator.standalone === true;
     if (isStandalone) return;
     if (localStorage.getItem('pwa-installed')) { isInstalled = true; return; }
     if (localStorage.getItem('pwa-dismissed')) { dismissed = true; return; }
 
     // Use event captured early in app.html if available
-    if (window.__deferredPrompt) {
-      deferredPrompt = window.__deferredPrompt;
+    if (w.__deferredPrompt) {
+      deferredPrompt = w.__deferredPrompt;
       showPrompt = true;
     }
 
-    window.addEventListener('beforeinstallprompt', (e) => {
+    window.addEventListener('beforeinstallprompt', (/** @type {any} */ e) => {
       e.preventDefault();
       deferredPrompt = e;
       showPrompt = true;
@@ -39,7 +41,7 @@
   function install() {
     if (!deferredPrompt) return;
     deferredPrompt.prompt();
-    deferredPrompt.userChoice.then((choice) => {
+    deferredPrompt.userChoice.then((/** @type {any} */ choice) => {
       if (choice.outcome === 'accepted') {
         showPrompt = false;
         localStorage.setItem('pwa-installed', 'true');

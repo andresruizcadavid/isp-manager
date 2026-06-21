@@ -3,6 +3,7 @@
   import { paymentsApi } from '$lib/api/payments.api.js';
   import { error as toastError } from '$lib/stores/toast.store.js';
 
+  /** @type {any} */
   export let invoice;
   export let label = 'Pagar con Wompi';
 

@@ -8,7 +8,7 @@
   import { Loader2, X, MapPin, Router as RouterIcon, AlertCircle } from 'lucide-svelte';
   import { zonesApi } from '$lib/api/zones.api.js';
 
-  /** Available routers (id, name, apiPort, routes). Required to assign one. */
+  /** @type {any[]} Available routers (id, name, apiPort, routes). */
   export let routers = [];
   /** Whether the sheet is visible. Bind from parent. */
   export let open = false;

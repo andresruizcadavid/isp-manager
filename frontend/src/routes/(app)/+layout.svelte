@@ -182,12 +182,12 @@
         e.preventDefault();
         goto(dest);
       }
-      chordPrimed = false; clearTimeout(chordTimer);
+      chordPrimed = false; clearTimeout(chordTimer ?? undefined);
       return;
     }
     if (e.key.toLowerCase() === 'g') {
       chordPrimed = true;
-      clearTimeout(chordTimer);
+      clearTimeout(chordTimer ?? undefined);
       chordTimer = setTimeout(() => { chordPrimed = false; }, 900);
       return;
     }

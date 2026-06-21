@@ -14,7 +14,9 @@
     probeTimeoutSec: 5,
     probeDownCount: 2
   };
+  /** @type {string | null} */
   let lastTestedAt = null;
+  /** @type {string | null} */
   let lastTestResult = null;
   let loading = true;
   let saving = false;

@@ -134,8 +134,15 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 - routers/[id]/+page.ts: `@type Load` + catch tipado. routers/[id]: `data` any.
 - update/[token]: helpers public* tipados, `err` any (campo code), payload Record.
 - BulkPlanChangeModal: props Client[]/Plan[], excluded Set, callbacks. Build ✓.
-### Fase 9 — componentes ui/ + network/ + layout/ (≤15 c/u) y resto de páginas portal/  ⬜
-### Fase 10 — barrido final: archivos con 1–6 errores y warnings a11y (68)  ⬜
+### Fase 9 — todo el resto (componentes ui/, network/, layout/, portal/, mikrotik/, etc.) → 0  ✅
+- ~35 archivos pequeños: mapas→Record, props/estado tipados, handlers con
+  Event + cast de target/currentTarget, `+page.ts` con `catch (e: any)` (TS),
+  `clearTimeout/Interval(x ?? undefined)` para `ReturnType|null`.
+- Objetos-literal indexados en templates (`{{...}[x]}`) envueltos en paréntesis.
+- types.d.ts: `Router._count`, `InventoryProduct._count`.
+- **svelte-check: 0 errores.** (quedan 67 warnings a11y — fuera de alcance del tipado).
+
+### Fase 10 — warnings a11y (67)  ⬜ (opcional; no son errores de tipo)
 
 > Los conteos por archivo cambian a medida que avanza la Fase 0 (cascada). Tras
 > cada fase se re-mide con `npm run check` y se actualiza esta tabla.
@@ -157,3 +164,17 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-21 | 6 | 614 | 470 | RegisterPaymentModal + users + billing-cycles + plans a 0. Build ✓. |
 | 2026-06-21 | 7 | 470 | 331 | payment-links(+[id]+attempt) + invoices/+page + system/backups + inventory a 0. + InventoryItem.client. Build ✓. |
 | 2026-06-21 | 8 | 331 | 222 | (app)/+layout + mikrotik/routers(+[id]+page.ts) + update/[token] + BulkPlanChangeModal + zones a 0. Build ✓. |
+| 2026-06-21 | 9 | 222 | 0 | Todo el resto (ui/, network/, layout/, portal/, mikrotik/, etc.). **svelte-check 0 errores.** Build ✓. |
+
+---
+
+## ✅ COMPLETADO — 1695 → 0 errores
+
+`npm run check`: **0 errores**, 67 warnings (a11y) en 21 archivos. Build de
+producción ✓ en cada fase. Sin cambios de runtime salvo correcciones de bugs
+documentadas (toggleSmtpPassword) — todo lo demás son anotaciones JSDoc.
+
+Bugs latentes corregidos durante el barrido:
+- `toggleSmtpPassword` llamaba a `smtpApi.reveal()` (endpoint inexistente).
+- `/invoices/[id]` enviaba el monto en centavos a bulk-payment (doble ×100).
+- `Label.svelte` usaba `{htmlFor}` en vez de `for=`.

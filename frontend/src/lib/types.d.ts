@@ -241,6 +241,7 @@ export interface Router {
   sshUser?: string | null;
   /** IP principal derivada por el API (no es columna del schema). */
   ip?: string | null;
+  _count?: Record<string, number>;
   routes?: RouterRoute[];
   zones?: Zone[];
   createdAt?: string;
@@ -344,6 +345,7 @@ export interface InventoryProduct {
   imageUrl?: string | null;
   description?: string | null;
   isActive: boolean;
+  _count?: Record<string, number>;
 }
 
 export interface InventoryItem {

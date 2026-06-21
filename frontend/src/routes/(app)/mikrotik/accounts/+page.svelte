@@ -5,6 +5,7 @@
     User, Search, Eye, Power, AlertCircle, CheckCircle2, Loader2
   } from 'lucide-svelte';
 
+  /** @type {any[]} */
   let accounts = [];
   let loading = true;
   let error = '';
@@ -14,6 +15,7 @@
   async function load() {
     loading = true; error = '';
     try {
+      /** @type {Record<string, any>} */
       const params = {};
       if (q.trim()) params.search = q.trim();
       if (status) params.status = status;
@@ -25,6 +27,7 @@
   }
   onMount(load);
 
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });

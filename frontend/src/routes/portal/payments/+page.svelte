@@ -3,13 +3,16 @@
   import { CreditCard, Loader2, AlertCircle, CheckCircle2, XCircle } from 'lucide-svelte';
   import { portalApi } from '$lib/api/portal.api.js';
 
+  /** @type {any[]} */
   let payments = [];
   let loading = true;
   let error = '';
 
   onMount(async () => { try { payments = await portalApi.getPayments(); } catch (/** @type {any} */ e) { error = e.message; } finally { loading = false; } });
 
+  /** @param {number} [c] */
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((c||0)/100); }
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''; }
 </script>
 
