@@ -14,7 +14,7 @@
     Send, Link2, Share2, Bell, Boxes, Package, Plus
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
-  import CashierWizard from '$lib/components/cashier/CashierWizard.svelte';
+  import RegisterPaymentModal from '$lib/components/payments/RegisterPaymentModal.svelte';
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
 
@@ -467,38 +467,18 @@
        (sum, inv) => sum + (inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0)), 0);
 
   // ── Payment modal ───────────────────────────────────
+  // `payInvoiceId` actúa como preselección: vacío = todas las pendientes,
+  // con valor = abre el modal con esa factura marcada.
   let payInvoiceId = '';
-  let payAmount = '';
-  let payMethod = 'CASH';
-  let payNotes = '';
-  let paySaving = false;
-  let payError = '';
 
   function openPayment() {
-    payError = '';
-    const sorted = [...pendingInvoices].sort((a, b) => {
-      const aOver = a.status === 'OVERDUE' ? 0 : 1;
-      const bOver = b.status === 'OVERDUE' ? 0 : 1;
-      if (aOver !== bOver) return aOver - bOver;
-      return new Date(a.dueDate) - new Date(b.dueDate);
-    });
-    const first = sorted[0];
-    payInvoiceId = first?.id || '';
-    payAmount = first
-      ? String(Math.round((first.balanceDue > 0 ? first.balanceDue : (first.amount ?? first.total ?? 0)) / 100))
-      : '';
-    payMethod = 'CASH';
-    payNotes = '';
+    payInvoiceId = '';           // botón "Registrar pago" general → todas las pendientes
     showPaymentModal = true;
   }
 
-  function selectPayInvoice(invoiceId) {
-    payInvoiceId = invoiceId;
-    const inv = pendingInvoices.find(i => i.id === invoiceId);
-    if (inv) {
-      const remaining = inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0);
-      payAmount = String(Math.round(remaining / 100));
-    }
+  function payInvoice(invoiceId) {
+    payInvoiceId = invoiceId;    // "Registrar pago" por factura → preselecciona esa
+    showPaymentModal = true;
   }
 
   async function onPaymentDone() {
@@ -832,13 +812,13 @@
       <!-- nothing here — free plan, no debt surface -->
     {:else if pendingAmount > 0}
       <button on:click={openPayment} class="btn-primary whitespace-nowrap">
-        <CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /> Cobrar
+        <CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /> Registrar pago
         <span class="bg-white/20 px-1.5 py-0.5 rounded-md text-xs tabular-nums">{fmtMoney(pendingAmount)}</span>
       </button>
     {:else}
       <button on:click={openPayment}
               class="btn-secondary whitespace-nowrap">
-        <CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /> Cobrar
+        <CreditCard size={16} class="sm:w-3.5 sm:h-3.5" /> Registrar pago
       </button>
     {/if}
     <button class="btn-secondary whitespace-nowrap" on:click={openPersonalEdit}>
@@ -1237,9 +1217,9 @@
                       </button>
                     {:else if inv.status !== 'CANCELLED'}
                       <div class="flex items-center gap-1">
-                        <button class="text-xs text-emerald-700 hover:underline font-medium"
-                                on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
-                          Pagar
+                        <button class="text-xs text-brand-700 hover:underline font-semibold"
+                                on:click={() => payInvoice(inv.id)}>
+                          Registrar pago
                         </button>
                         <button class="text-xs text-brand-700 hover:underline font-semibold" title="Reenviar el cobro al cliente (correo + WhatsApp)"
                                 on:click={() => resendCharge(inv.id)} disabled={resendBusyId === inv.id}>
@@ -1280,9 +1260,9 @@
                   </button>
                 {:else if inv.status !== 'CANCELLED'}
                   <div class="flex items-center gap-1">
-                    <button class="btn-ghost text-xs text-emerald-700"
-                            on:click={() => { selectPayInvoice(inv.id); showPaymentModal = true; }}>
-                      Pagar
+                    <button class="btn-ghost text-xs text-brand-700 font-semibold"
+                            on:click={() => payInvoice(inv.id)}>
+                      Registrar pago
                     </button>
                     <button class="btn-ghost text-xs text-brand-700 font-semibold" title="Reenviar el cobro al cliente"
                             on:click={() => resendCharge(inv.id)} disabled={resendBusyId === inv.id}>
@@ -1916,9 +1896,14 @@
   </div>
 {/if}
 
-<!-- Cashier Wizard (multi-step: months → invoices → payment → evidence) -->
+<!-- Registrar pago (modal único: facturas pendientes + comprobante) -->
 {#if showPaymentModal}
-  <CashierWizard {client} on:done={onPaymentDone} on:close={() => showPaymentModal = false} />
+  <RegisterPaymentModal
+    {client}
+    invoices={pendingInvoices}
+    preselectInvoiceId={payInvoiceId || null}
+    on:done={onPaymentDone}
+    on:close={() => showPaymentModal = false} />
 {/if}
 
 <!-- ─── Sheet: solicitar actualización pública ─────────────────────── -->

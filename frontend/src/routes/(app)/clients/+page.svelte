@@ -5,18 +5,18 @@
   import { zonesApi } from '$lib/api/zones.api.js';
   import { plansApi } from '$lib/api/plans.api.js';
   import { routersApi } from '$lib/api/routers.api.js';
-  import { api } from '$lib/api/client.js';
   import {
     Search, Plus, Eye, EyeOff, Pencil, Trash2, Users, X,
     Power, PowerOff, ArrowUpDown, ArrowUp, ArrowDown,
     CheckCircle2, PauseCircle, Wallet, AlertCircle,
     User, Router as RouterIcon, Wifi, Save,
-    CreditCard, FileText, Loader2, SlidersHorizontal, MoreVertical,
-    Download, Database, Camera, Upload
+    CreditCard, Loader2, SlidersHorizontal, MoreVertical,
+    Download, Database
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import ResponsiveTable from '$lib/components/ui/ResponsiveTable.svelte';
   import BulkPlanChangeModal from '$lib/components/clients/BulkPlanChangeModal.svelte';
+  import RegisterPaymentModal from '$lib/components/payments/RegisterPaymentModal.svelte';
   import { user } from '$lib/stores/auth.store.js';
   import { isAdmin } from '$lib/permissions.js';
   import { Zap, CheckSquare, Square } from 'lucide-svelte';
@@ -163,42 +163,9 @@
                 : '';
   $: isReadOnly = false;
 
-  // ── Payment modal state ─────────────────────────────
+  // ── Payment modal state (RegisterPaymentModal) ──────
   let payOpen = false;
   let payClient = null;
-  let payInvoice = null;
-  let payAmount = '';
-  let payMethod = 'CASH';
-  let payNotes = '';
-  let paySaving = false;
-  let payError = '';
-  // Optional payment evidence — same UX as /invoices/[id]:
-  // camera capture on mobile + file picker + image preview + size/MIME check.
-  let payFile        = null;
-  let payFilePreview = null;
-  let payFileError   = '';
-  const PAY_EVIDENCE_MIME  = ['image/jpeg','image/png','image/webp','image/heic','image/heif','application/pdf'];
-  const PAY_EVIDENCE_BYTES = 8 * 1024 * 1024;
-  function onPayFile(e) {
-    payFileError = '';
-    const file = e.target?.files?.[0] || null;
-    if (!file) { payFile = null; payFilePreview = null; return; }
-    if (!PAY_EVIDENCE_MIME.includes(file.type)) {
-      payFileError = 'Tipo de archivo no permitido. Usa JPG / PNG / WebP / HEIC / PDF.';
-      e.target.value = ''; return;
-    }
-    if (file.size > PAY_EVIDENCE_BYTES) {
-      payFileError = `Archivo muy grande (${(file.size/1024/1024).toFixed(1)} MB). Máximo 8 MB.`;
-      e.target.value = ''; return;
-    }
-    payFile = file;
-    if (payFilePreview?.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
-    payFilePreview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
-  }
-  function clearPayFile() {
-    if (payFilePreview?.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
-    payFile = null; payFilePreview = null; payFileError = '';
-  }
 
   function emptyClient() {
     return {
@@ -602,31 +569,16 @@
   // ── Payment modal ───────────────────────────────────
   function openPaymentModal(client) {
     payClient = client;
-    // Pick the oldest pending invoice (OVERDUE first, then by dueDate asc)
-    const pending = client.pendingInvoices || [];
-    const sorted = [...pending].sort((a, b) => {
-      const aOver = a.status === 'OVERDUE' ? 0 : 1;
-      const bOver = b.status === 'OVERDUE' ? 0 : 1;
-      if (aOver !== bOver) return aOver - bOver;
-      return new Date(a.dueDate) - new Date(b.dueDate);
-    });
-    payInvoice = sorted[0] || null;
-    if (payInvoice) {
-      const remaining = payInvoice.balanceDue > 0 ? payInvoice.balanceDue : (payInvoice.amount ?? payInvoice.total ?? 0);
-      payAmount = String(Math.round(remaining / 100));
-    } else {
-      payAmount = '';
-    }
-    payMethod = 'CASH';
-    payNotes = '';
-    payError = '';
     payOpen = true;
   }
 
   function closePaymentModal() {
-    payOpen = false; payClient = null; payInvoice = null;
-    payAmount = ''; payNotes = ''; payError = '';
-    clearPayFile();
+    payOpen = false; payClient = null;
+  }
+
+  async function onListPaymentDone() {
+    closePaymentModal();
+    await load();
   }
 
   // Detect clients that came in via the MikroTik import flow. The import
@@ -683,40 +635,6 @@
     }
   }
 
-  async function submitPayment() {
-    if (!payInvoice) { payError = 'No hay factura pendiente'; return; }
-    const amt = Number(payAmount);
-    if (!amt || amt <= 0) { payError = 'Monto inválido'; return; }
-    paySaving = true; payError = '';
-    try {
-      const res = await api.post('/payments', {
-        invoiceId: payInvoice.id,
-        amount: amt,
-        paymentMethod: payMethod,
-        notes: payNotes || undefined
-      });
-      // Best-effort evidence upload: a failure here doesn't roll back the
-      // payment — operator can re-upload from the invoice detail later.
-      const paymentId = res?.data?.id || res?.id;
-      if (payFile && paymentId) {
-        try {
-          const fd = new FormData();
-          fd.append('file', payFile);
-          await fetch(`/api/v1/payments/${paymentId}/evidence`, {
-            method: 'POST',
-            credentials: 'include',
-            body: fd
-          });
-        } catch (e) {
-          console.warn('Evidence upload failed:', e?.message);
-        }
-      }
-      closePaymentModal();
-      await load();
-    } catch (e) {
-      payError = e.message || 'Error al registrar pago';
-    } finally { paySaving = false; }
-  }
 </script>
 
 <svelte:head><title>Clientes — ISP Manager</title></svelte:head>
@@ -1046,13 +964,13 @@
               <td class="col-sticky-right">
                 <div class="flex items-center justify-end gap-1">
                   {#if client.paymentStatus !== 'OK'}
-                    <button class="inline-flex items-center gap-1 px-2 py-1 rounded-md
+                    <button class="inline-flex items-center gap-1 px-2 py-1 rounded-md whitespace-nowrap
                                    bg-brand-600 hover:bg-brand-700 active:bg-brand-800
                                    text-white text-xs font-semibold
                                    transition-colors"
                             title="Registrar pago"
                             on:click={() => openPaymentModal(client)}>
-                      <CreditCard size={12} /> Pagar
+                      <CreditCard size={12} /> Registrar pago
                     </button>
                   {:else}
                     <a href="/clients/{client.id}" class="btn-icon" title="Ver detalle">
@@ -1118,10 +1036,10 @@
             <span class="{statusBadgeClass(client.status)}">{statusLabel(client.status)}</span>
             {#if client.paymentStatus === 'OVERDUE' || client.paymentStatus === 'PENDING'}
               <button type="button" on:click={() => openPaymentModal(client)}
-                      class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md
+                      class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md whitespace-nowrap
                              bg-brand-600 hover:bg-brand-700 active:bg-brand-800 active:scale-95
                              text-white text-[13px] font-semibold transition">
-                <CreditCard size={13} /> Pagar
+                <CreditCard size={13} /> Registrar pago
               </button>
             {:else}
               <span class="text-xs text-emerald-700 font-medium whitespace-nowrap">✓ Al día</span>
@@ -1779,140 +1697,13 @@
   </div>
 {/if}
 
-<!-- Modal Registrar Pago -->
+<!-- Modal Registrar Pago (componente único) -->
 {#if payOpen}
-  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" on:click|self={closePaymentModal}>
-    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
-      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-200">
-        <h2 class="text-lg font-semibold text-slate-900">Registrar Pago</h2>
-        <button on:click={closePaymentModal} class="text-slate-400 hover:text-slate-600">
-          <X size={20} />
-        </button>
-      </div>
-
-      <div class="p-6 space-y-4">
-        {#if payError}
-          <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">
-            {payError}
-          </div>
-        {/if}
-
-        {#if payClient}
-          <div class="bg-slate-50 rounded-lg p-3 border border-slate-100">
-            <div class="text-[11px] text-slate-500 uppercase tracking-wider font-semibold">Cliente</div>
-            <div class="text-sm font-medium text-slate-900">{payClient.name || '—'}</div>
-            {#if payInvoice}
-              <div class="mt-2 text-xs text-slate-600">
-                Factura <span class="font-mono">#{payInvoice.id?.slice(-6) || '—'}</span> ·
-                vence {payInvoice.dueDate ? new Date(payInvoice.dueDate).toLocaleDateString('es-CO') : '—'}
-              </div>
-              <div class="text-xs text-slate-500">
-                Saldo restante: <span class="font-semibold text-slate-900">{fmtMoney(payInvoice.balanceDue > 0 ? payInvoice.balanceDue : (payInvoice.amount ?? payInvoice.total ?? 0))}</span>
-              </div>
-            {:else}
-              <div class="mt-2 text-xs text-amber-600">⚠ Este cliente no tiene facturas pendientes</div>
-            {/if}
-          </div>
-        {/if}
-
-        <div>
-          <label for="pay-amount" class="label">Monto a pagar (COP)</label>
-          <input id="pay-amount" type="number" min="1" bind:value={payAmount} class="input" placeholder="0" />
-        </div>
-
-        <div>
-          <label for="pay-method" class="label">Método de pago</label>
-          <select id="pay-method" bind:value={payMethod} class="select">
-            <option value="CASH">Efectivo</option>
-            <option value="BANK_TRANSFER">Transferencia bancaria</option>
-            <option value="WOMPI">Wompi</option>
-            <option value="CREDIT_CARD">Tarjeta de crédito</option>
-            <option value="OTHER">Otro</option>
-          </select>
-        </div>
-
-        <div>
-          <label for="pay-notes" class="label">Notas (opcional)</label>
-          <input id="pay-notes" type="text" bind:value={payNotes} class="input" placeholder="Referencia o comentario" />
-        </div>
-
-        <div>
-          <div class="label flex items-center gap-1.5 !mb-2">
-            <FileText size={13} /> Comprobante <span class="text-text-muted font-normal">(opcional)</span>
-          </div>
-
-          {#if payFilePreview}
-            <div class="relative rounded-lg border border-slate-200 overflow-hidden">
-              <img src={payFilePreview} alt="Vista previa del comprobante"
-                   class="w-full max-h-56 object-contain bg-slate-50" />
-              <button type="button" on:click={clearPayFile}
-                      title="Quitar"
-                      class="absolute top-1.5 right-1.5 w-7 h-7 rounded-full bg-white shadow-md border border-slate-200
-                             flex items-center justify-center hover:bg-red-50 hover:border-red-200 hover:text-red-700 transition">
-                <X size={14} />
-              </button>
-            </div>
-            <div class="text-xs text-text-muted mt-1 flex items-center justify-between">
-              <span class="truncate">{payFile?.name}</span>
-              <span class="tabular-nums">{(payFile?.size / 1024).toFixed(1)} KB</span>
-            </div>
-          {:else if payFile}
-            <div class="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-slate-50">
-              <FileText size={16} class="text-slate-500 flex-shrink-0" />
-              <div class="flex-1 min-w-0">
-                <div class="text-xs font-medium text-text-primary truncate">{payFile.name}</div>
-                <div class="text-[11px] text-text-muted tabular-nums">{(payFile.size / 1024).toFixed(1)} KB</div>
-              </div>
-              <button type="button" on:click={clearPayFile} class="btn-icon">
-                <X size={14} />
-              </button>
-            </div>
-          {:else}
-            <div class="grid grid-cols-2 gap-2">
-              <label class="flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg border border-slate-200
-                            hover:border-brand-300 hover:bg-brand-50/30 cursor-pointer transition-colors text-xs font-medium text-text-primary">
-                <Camera size={14} class="text-brand-600" />
-                <span>Tomar foto</span>
-                <input type="file" accept="image/*" capture="environment"
-                       on:change={onPayFile} class="hidden" />
-              </label>
-              <label class="flex items-center justify-center gap-1.5 px-3 py-3 rounded-lg border border-slate-200
-                            hover:border-slate-300 hover:bg-slate-50 cursor-pointer transition-colors text-xs font-medium text-text-primary">
-                <Upload size={14} class="text-slate-500" />
-                <span>Subir archivo</span>
-                <input type="file" accept="image/*,application/pdf"
-                       on:change={onPayFile} class="hidden" />
-              </label>
-            </div>
-            <p class="text-[11px] text-text-muted mt-1.5">
-              Imagen (JPG / PNG / WebP / HEIC) o PDF. Máx. 8 MB.
-            </p>
-          {/if}
-
-          {#if payFileError}
-            <div class="mt-1.5 text-xs text-red-600 flex items-center gap-1.5">
-              <AlertCircle size={12} /> {payFileError}
-            </div>
-          {/if}
-        </div>
-      </div>
-
-      <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-200 bg-slate-50">
-        <button on:click={closePaymentModal} type="button" class="btn-secondary" disabled={paySaving}>
-          <X size={15} /> Cancelar
-        </button>
-        <button on:click={submitPayment} type="button" class="btn-primary"
-                disabled={paySaving || !payInvoice}>
-          {#if paySaving}
-            <div class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-            Registrando...
-          {:else}
-            <CreditCard size={15} /> Registrar Pago
-          {/if}
-        </button>
-      </div>
-    </div>
-  </div>
+  <RegisterPaymentModal
+    client={payClient}
+    invoices={payClient?.pendingInvoices || []}
+    on:done={onListPaymentDone}
+    on:close={closePaymentModal} />
 {/if}
 
 <!-- ─── Sticky bottom action bar (visible when selection has items) ─── -->
