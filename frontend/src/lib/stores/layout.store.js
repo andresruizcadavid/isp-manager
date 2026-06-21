@@ -31,6 +31,7 @@ function load() {
   } catch { return { ...DEFAULT_STATE }; }
 }
 
+/** @param {any} state */
 function persist(state) {
   if (!browser) return;
   try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {}
@@ -42,6 +43,7 @@ function createLayoutStore() {
   return {
     subscribe,
 
+    /** @param {string} d */
     setDensity(d) {
       update(s => { const next = { ...s, density: d }; persist(next); applyDensityAttr(d); return next; });
     },
@@ -53,6 +55,7 @@ function createLayoutStore() {
       });
     },
 
+    /** @param {boolean} on */
     setFocus(on) {
       update(s => { const next = { ...s, focusMode: !!on }; persist(next); return next; });
     },
@@ -64,6 +67,7 @@ function createLayoutStore() {
   };
 }
 
+/** @param {string} density */
 function applyDensityAttr(density) {
   if (!browser) return;
   document.documentElement.setAttribute('data-density', density);

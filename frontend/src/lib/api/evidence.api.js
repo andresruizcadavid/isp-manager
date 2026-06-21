@@ -1,5 +1,7 @@
 import { browser } from '$app/environment';
 
+/** @typedef {import('$lib/types').EvidencePhoto} EvidencePhoto */
+
 const BASE = import.meta.env.PUBLIC_API_URL || '';
 
 function headers() {
@@ -7,6 +9,7 @@ function headers() {
 }
 
 export const evidenceApi = {
+  /** @param {string} clientId @returns {Promise<EvidencePhoto[]>} */
   list: async (clientId) => {
     const res = await fetch(`${BASE}/api/v1/clients/${clientId}/evidence-photos`, {
       headers: headers()
@@ -16,6 +19,12 @@ export const evidenceApi = {
     return json.data ?? [];
   },
 
+  /**
+   * @param {string} clientId
+   * @param {File[] | FileList} files
+   * @param {{ type?: string, description?: string }} [meta]
+   * @returns {Promise<EvidencePhoto[]>}
+   */
   upload: async (clientId, files, meta = {}) => {
     const form = new FormData();
     for (const f of files) form.append('files', f);
@@ -32,6 +41,7 @@ export const evidenceApi = {
     return json.data ?? [];
   },
 
+  /** @param {string} clientId @param {string} photoId */
   remove: async (clientId, photoId) => {
     const res = await fetch(`${BASE}/api/v1/clients/${clientId}/evidence-photos/${photoId}`, {
       method: 'DELETE',

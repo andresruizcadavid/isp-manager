@@ -8,12 +8,15 @@ import { browser } from '$app/environment';
 import { io } from 'socket.io-client';
 
 // Updates pushed every sweep (status + latency).
+/** @type {import('svelte/store').Writable<any>} */
 export const deviceUpdates = writable(null);
 // Transitions (state change). Carries the same payload as a NetworkEvent row.
+/** @type {import('svelte/store').Writable<any>} */
 export const deviceEvents  = writable(null);
 // Connection state — useful to show "Live" / "Reconnecting" in the UI.
 export const socketStatus  = writable('disconnected');
 
+/** @type {import('socket.io-client').Socket | null} */
 let socket = null;
 
 function backendOrigin() {
@@ -36,8 +39,8 @@ export function ensureSocket() {
   socket.on('connect',       () => socketStatus.set('connected'));
   socket.on('disconnect',    () => socketStatus.set('disconnected'));
   socket.on('reconnect_attempt', () => socketStatus.set('reconnecting'));
-  socket.on('device:update', (p) => deviceUpdates.set(p));
-  socket.on('device:event',  (p) => deviceEvents.set(p));
+  socket.on('device:update', (/** @type {any} */ p) => deviceUpdates.set(p));
+  socket.on('device:event',  (/** @type {any} */ p) => deviceEvents.set(p));
   return socket;
 }
 

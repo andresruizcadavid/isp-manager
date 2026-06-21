@@ -2,8 +2,11 @@ import { api } from './client.js';
 
 export const smtpApi = {
   get:    ()         => api.get('/smtp'),
+  /** @param {any} data */
   create: (data)     => api.post('/smtp', data),
+  /** @param {string} id @param {any} data */
   update: (id, data) => api.put(`/smtp/${id}`, data),
+  /** @param {any} data */
   test:   (data)     => api.post('/smtp/test', data),
 };
 

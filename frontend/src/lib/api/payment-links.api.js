@@ -1,6 +1,18 @@
 import { api } from './client.js';
 
+/**
+ * @typedef {Object} PaymentLinkFilter
+ * @property {string} [status]
+ * @property {string} [q]
+ * @property {string} [clientId]
+ * @property {string} [dateFrom]
+ * @property {string} [dateTo]
+ * @property {number} [page]
+ * @property {number} [limit]
+ */
+
 export const paymentLinksApi = {
+  /** @param {PaymentLinkFilter} params */
   getAll: (params) => {
     const q = new URLSearchParams();
     if (params.status) q.set('status', params.status);
@@ -13,10 +25,13 @@ export const paymentLinksApi = {
     return api.get(`/payment-links?${q}`);
   },
 
+  /** @param {string} id */
   getOne: (id) => api.get(`/payment-links/${id}`),
 
+  /** @param {string} id */
   resend: (id) => api.post(`/payment-links/${id}/resend`),
 
+  /** @param {PaymentLinkFilter} params */
   getAttempts: (params) => {
     const q = new URLSearchParams();
     if (params.status) q.set('status', params.status);
@@ -29,6 +44,7 @@ export const paymentLinksApi = {
     return api.get(`/payment-links/attempts?${q}`);
   },
 
+  /** @param {string} id */
   getAttempt: (id) => api.get(`/payment-links/attempts/${id}`),
 
   getConciliation: () => api.get('/payment-links/conciliation')

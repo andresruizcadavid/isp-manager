@@ -6,6 +6,7 @@ function createToastStore() {
   const { subscribe, set, update } = writable([]);
 
   // Show success toast
+  /** @param {string} message @param {Record<string, any>} [options] */
   function success(message, options = {}) {
     toast.success(message, {
       position: 'top-right',
@@ -15,6 +16,7 @@ function createToastStore() {
   }
 
   // Show error toast
+  /** @param {string} message @param {Record<string, any>} [options] */
   function error(message, options = {}) {
     toast.error(message, {
       position: 'top-right',
@@ -24,6 +26,7 @@ function createToastStore() {
   }
 
   // Show info toast
+  /** @param {string} message @param {Record<string, any>} [options] */
   function info(message, options = {}) {
     toast.info(message, {
       position: 'top-right',
@@ -33,6 +36,7 @@ function createToastStore() {
   }
 
   // Show warning toast
+  /** @param {string} message @param {Record<string, any>} [options] */
   function warning(message, options = {}) {
     toast.warning(message, {
       position: 'top-right',
@@ -42,6 +46,7 @@ function createToastStore() {
   }
 
   // Show loading toast
+  /** @param {string} message @param {Record<string, any>} [options] */
   function loading(message, options = {}) {
     return toast.loading(message, {
       position: 'top-right',
@@ -51,6 +56,7 @@ function createToastStore() {
   }
 
   // Dismiss toast by ID
+  /** @param {string | number} [id] */
   function dismiss(id) {
     toast.dismiss(id);
   }
@@ -61,11 +67,15 @@ function createToastStore() {
   }
 
   // Promise toast - shows loading, then success/error based on promise result
+  /**
+   * @param {Promise<any>} promise
+   * @param {{ loading?: string, success?: string, error?: string }} [options]
+   */
   function promise(promise, options = {}) {
-    const { 
-      loading: loadingMessage = 'Cargando...', 
-      success: successMessage, 
-      error: errorMessage 
+    const {
+      loading: loadingMessage = 'Cargando...',
+      success: successMessage,
+      error: errorMessage
     } = options;
 
     return toast.promise(promise, {
@@ -78,14 +88,15 @@ function createToastStore() {
   }
 
   // Custom toast with action buttons
+  /**
+   * @param {string} message
+   * @param {{ action?: string, onAction?: (event: MouseEvent) => void, duration?: number }} [options]
+   */
   function custom(message, options = {}) {
     const { action, onAction, duration = 6000 } = options;
-    
+
     return toast(message, {
-      action: {
-        label: action,
-        onClick: onAction
-      },
+      action: action ? { label: action, onClick: onAction ?? (() => {}) } : undefined,
       duration,
       position: 'top-right'
     });

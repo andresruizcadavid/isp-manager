@@ -22,7 +22,8 @@ import {
 export { ROLES, ADMIN_TIER, OPERATIONAL_TIER, isAdmin, canAccess };
 
 /** Legacy adapter — the old layout iterated `[{ key, label, items: [...] }, ...]`.
- *  Map our flat tree onto that shape so any leftover callers keep working. */
+ *  Map our flat tree onto that shape so any leftover callers keep working.
+ *  @param {string} role */
 export function sidebarFor(role) {
   const tree = menuForRole(role);
   const out = [];
@@ -40,7 +41,7 @@ export function sidebarFor(role) {
         key:   node.group.id.replace(/^group-/, ''), // 'group-clients' → 'clients'
         label: node.group.label,
         roles: node.group.roles,
-        items: node.items.map(it => ({ href: it.href, label: it.label, roles: it.roles }))
+        items: node.items.map((/** @type {import('./navigation.js').NavItem} */ it) => ({ href: it.href, label: it.label, roles: it.roles }))
       });
     }
   }

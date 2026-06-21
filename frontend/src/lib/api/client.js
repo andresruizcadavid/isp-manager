@@ -10,6 +10,7 @@ const BASE = import.meta.env.PUBLIC_API_URL || '';
 const DEFAULT_TIMEOUT_MS = 20000;
 const WRITE_TIMEOUT_MS   = 45000;
 
+/** @param {string} method */
 function timeoutFor(method) {
   return method === 'GET' || method === 'DELETE' ? DEFAULT_TIMEOUT_MS : WRITE_TIMEOUT_MS;
 }
@@ -18,15 +19,22 @@ function timeoutFor(method) {
 // errors (zod) the backend returns `error.details: [{field, message}]`; we
 // surface those instead of the generic "Error de validación" so the operator
 // knows exactly what to fix.
+/** @param {any} err */
 function errorMessage(err) {
   if (!err) return 'Error del servidor';
   if (typeof err === 'string') return err;
   if (Array.isArray(err.details) && err.details.length) {
-    return err.details.map(d => d.message || d.field).filter(Boolean).join(' · ');
+    return err.details.map((/** @type {any} */ d) => d.message || d.field).filter(Boolean).join(' · ');
   }
   return err.message || 'Error del servidor';
 }
 
+/**
+ * @param {string} method
+ * @param {string} path
+ * @param {any} [body]
+ * @returns {Promise<any>}
+ */
 async function request(method, path, body = null) {
   const headers = { 'Content-Type': 'application/json' };
 
@@ -42,8 +50,8 @@ async function request(method, path, body = null) {
       body: body ? JSON.stringify(body) : null,
       signal: controller.signal
     });
-  } catch (e) {
-    if (e.name === 'AbortError') {
+  } catch (/** @type {any} */ e) {
+    if (e?.name === 'AbortError') {
       throw new Error('La solicitud tardó demasiado y se canceló. Verifica la conexión con el router e inténtalo de nuevo.');
     }
     throw e;
@@ -65,13 +73,19 @@ async function request(method, path, body = null) {
 }
 
 export const api = {
+  /** @template [T=any] @param {string} path @returns {Promise<T>} */
   get:    (path)         => request('GET',    path),
+  /** @template [T=any] @param {string} path @param {any} [body] @returns {Promise<T>} */
   post:   (path, body)   => request('POST',   path, body),
+  /** @template [T=any] @param {string} path @param {any} [body] @returns {Promise<T>} */
   put:    (path, body)   => request('PUT',    path, body),
+  /** @template [T=any] @param {string} path @returns {Promise<T>} */
   delete: (path)         => request('DELETE', path),
+  /** @template [T=any] @param {string} path @param {any} [body] @returns {Promise<T>} */
   patch:  (path, body)   => request('PATCH',  path, body),
 };
 
+/** @param {string} path */
 export async function getRaw(path) {
   const headers = { 'Content-Type': 'application/json' };
   const res = await fetch(`${BASE}/api/v1${path}`, { headers, credentials: 'include' });

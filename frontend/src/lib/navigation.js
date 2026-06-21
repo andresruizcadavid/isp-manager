@@ -28,6 +28,19 @@ import {
   Building2, Activity, Boxes
 } from 'lucide-svelte';
 
+/**
+ * @typedef {Object} NavItem
+ * @property {string} id
+ * @property {'item'|'group'|'alias'} type
+ * @property {string} [label]
+ * @property {string | ((p: string) => string)} [title]
+ * @property {string} [href]
+ * @property {any} [icon]
+ * @property {string} [parentId]
+ * @property {string[]} [roles]
+ * @property {string | RegExp | Array<string | RegExp>} [match]
+ */
+
 // ── Roles ──────────────────────────────────────────────────────────────
 export const ROLES = {
   ADMIN:      'ADMIN',
@@ -39,6 +52,7 @@ export const ROLES = {
 export const ADMIN_TIER       = [ROLES.ADMIN, ROLES.OPERATOR];
 export const OPERATIONAL_TIER = [ROLES.ADMIN, ROLES.OPERATOR, ROLES.TECHNICIAN];
 
+/** @param {string} role */
 export function isAdmin(role) { return ADMIN_TIER.includes(role); }
 
 // ── NAV registry ───────────────────────────────────────────────────────
@@ -47,8 +61,10 @@ export function isAdmin(role) { return ADMIN_TIER.includes(role); }
 // for index pages whose subroutes (/[id], /edit) should keep the parent
 // item active, but NOT when there's a sibling that already covers the
 // sub-route (the resolver handles disambiguation — see below).
+/** @param {string} prefix */
 const under = (prefix) => new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(/[^?]*)?$`);
 
+/** @type {NavItem[]} */
 export const NAV_ITEMS = [
   // ── Standalone top-level ─────────────────────────────────────────
   { id: 'dashboard', type: 'item',
@@ -184,14 +200,16 @@ export const NAV_ITEMS = [
 
 // ── Resolution helpers ────────────────────────────────────────────────
 
-/** Test whether a given match pattern (string or RegExp) matches a path. */
+/** Test whether a given match pattern (string or RegExp) matches a path.
+ *  @param {string | RegExp} pattern @param {string} pathname */
 function matches(pattern, pathname) {
   if (typeof pattern === 'string') return pathname === pattern;
   if (pattern instanceof RegExp)   return pattern.test(pathname);
   return false;
 }
 
-/** Test whether an item's `match` patterns cover the given pathname. */
+/** Test whether an item's `match` patterns cover the given pathname.
+ *  @param {NavItem} item @param {string} pathname */
 export function isItemActive(item, pathname) {
   if (!item?.match) return false;
   const list = Array.isArray(item.match) ? item.match : [item.match];
@@ -205,6 +223,7 @@ export function isItemActive(item, pathname) {
  * in declaration order. This is what makes sibling specialisations (e.g.
  * /clients/new beating /clients) work — we pick the literal-string match
  * before falling back to the broader RegExp.
+ * @param {string} pathname
  */
 export function resolveActive(pathname) {
   if (!pathname) return null;
@@ -229,13 +248,15 @@ export function resolveActive(pathname) {
   return bestStrict || firstRegex || null;
 }
 
-/** Resolve the parent group of an item (for sidebar auto-expand). */
+/** Resolve the parent group of an item (for sidebar auto-expand).
+ *  @param {NavItem | null} item */
 export function resolveParent(item) {
   if (!item?.parentId) return null;
   return NAV_ITEMS.find(i => i.id === item.parentId) || null;
 }
 
-/** Page title from the active item, falling back to a sane default. */
+/** Page title from the active item, falling back to a sane default.
+ *  @param {string} pathname */
 export function resolveTitle(pathname) {
   const item = resolveActive(pathname);
   if (!item) return 'ISP Manager';
@@ -250,6 +271,7 @@ export function resolveTitle(pathname) {
  *  Output is a flat array of "sections" preserving NAV_ITEMS order:
  *    { type:'item',  item }                 — standalone top-level
  *    { type:'group', group, items: [...]  } — collapsible group
+ *  @param {string} role
  */
 export function menuForRole(role) {
   if (!role) return [];
@@ -275,7 +297,8 @@ export function menuForRole(role) {
 
 /** True if the role can navigate to the pathname. Derived from NAV_ITEMS
  *  so it's always in sync with the menu visibility. Unmapped paths are
- *  permitted (e.g. /forbidden, /update/[token]). */
+ *  permitted (e.g. /forbidden, /update/[token]).
+ *  @param {string} pathname @param {string} role */
 export function canAccess(pathname, role) {
   if (!role) return false;
   const item = resolveActive(pathname);
