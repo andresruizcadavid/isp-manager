@@ -5,9 +5,12 @@
   import { MapPin, Router as RouterIcon, Save, AlertTriangle } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
 
+  /** @type {any[]} */
   let zones = [];
+  /** @type {import('$lib/types').Router[]} */
   let routers = [];
   let showModal = false;
+  /** @type {any} */
   let editing = null;
   let saving = false;
   let loading = true;
@@ -28,7 +31,7 @@
       // Same source as /mikrotik/routers — single source of truth.
       const data = await routersApi.getAll();
       routers = Array.isArray(data) ? data : [];
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       routersError = e.message || 'No se pudieron cargar los routers';
       routers = [];
     } finally {
@@ -39,7 +42,7 @@
   onMount(async () => {
     try {
       zones = (await zonesApi.getAll()) || [];
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message;
     } finally {
       loading = false;
@@ -54,6 +57,7 @@
     showModal = true;
   }
 
+  /** @param {any} zone */
   function openEdit(zone) {
     editing = zone;
     formError = '';
@@ -100,19 +104,20 @@
         zones = [...zones, { ...created, clientCount: 0 }];
       }
       closeModal();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       formError = e.message || 'Error al guardar';
     } finally {
       saving = false;
     }
   }
 
+  /** @param {number} id */
   async function deleteZone(id) {
     if (!confirm('¿Eliminar esta zona?')) return;
     try {
       await zonesApi.remove(id);
       zones = zones.filter(z => z.id !== id);
-    } catch(e) {
+    } catch (/** @type {any} */ e) {
       alert('No se puede eliminar: ' + e.message);
     }
   }

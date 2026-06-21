@@ -128,7 +128,12 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 ### Fase 7 — payment-links* (37+28+16), invoices (32), system/backups (30), inventory (31) → todos 0  ✅
 - Mismo patrón en los 6: estado tipado, catch, mapas→Record, params de helpers.
 - types.d.ts: `InventoryItem.client?`. Build ✓.
-### Fase 8 — (app)/+layout (29), mikrotik/routers* (25+20+6), update/[token] (22), BulkPlanChangeModal (21), zones (19)  ⬜
+### Fase 8 — (app)/+layout (23), mikrotik/routers (25)+[id] (20)+page.ts, update/[token] (22), BulkPlanChangeModal (21), zones (19) → todos 0  ✅
+- layout: estado tipado, maps→Record, `$user?.role || ''` para isAdmin/canAccess/
+  menuForRole, handlers de teclado/click con `e` tipado + cast de e.target.
+- routers/[id]/+page.ts: `@type Load` + catch tipado. routers/[id]: `data` any.
+- update/[token]: helpers public* tipados, `err` any (campo code), payload Record.
+- BulkPlanChangeModal: props Client[]/Plan[], excluded Set, callbacks. Build ✓.
 ### Fase 9 — componentes ui/ + network/ + layout/ (≤15 c/u) y resto de páginas portal/  ⬜
 ### Fase 10 — barrido final: archivos con 1–6 errores y warnings a11y (68)  ⬜
 
@@ -151,3 +156,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-21 | 5 | 761 | 614 | clients/new + invoices/[id] + dashboard a 0. + Invoice.wisphubId, InvoiceItem.unitPrice/amount, Payment.createdBy. Build ✓. |
 | 2026-06-21 | 6 | 614 | 470 | RegisterPaymentModal + users + billing-cycles + plans a 0. Build ✓. |
 | 2026-06-21 | 7 | 470 | 331 | payment-links(+[id]+attempt) + invoices/+page + system/backups + inventory a 0. + InventoryItem.client. Build ✓. |
+| 2026-06-21 | 8 | 331 | 222 | (app)/+layout + mikrotik/routers(+[id]+page.ts) + update/[token] + BulkPlanChangeModal + zones a 0. Build ✓. |

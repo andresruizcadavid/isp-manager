@@ -34,10 +34,10 @@
   // ── User-derived bits ───────────────────────────────────────────────
   $: initial     = ($user?.name || $user?.email || '?').trim().charAt(0).toUpperCase();
   $: displayName = $user?.name || $user?.email || 'Usuario';
-  $: roleLabel   = ({
+  $: roleLabel   = (/** @type {Record<string, string>} */ ({
       ADMIN: 'Administrador', OPERATOR: 'Administrador',
       TECHNICIAN: 'Técnico',  VIEWER: 'Visualizador'
-    })[$user?.role] || '—';
+    }))[$user?.role || ''] || '—';
 
   // ── Reactive navigation state ───────────────────────────────────────
   // Everything below derives from `pathname`. Reading `$page.url.pathname`
@@ -58,21 +58,24 @@
 
   // ── Sidebar menu tree (filtered by role) ────────────────────────────
   // menuForRole returns [{ type:'item', item }, { type:'group', group, items }, ...]
-  $: menu = menuForRole($user?.role);
+  $: menu = menuForRole($user?.role || '');
 
   // ── Group expand state ──────────────────────────────────────────────
   // Operator can toggle freely; we also auto-expand the group that
   // contains the active item so the user always sees where they are.
+  /** @type {Record<string, boolean>} */
   let expanded = {};
   // Auto-expand the active group, but ONLY when the active group actually
   // changes (tracked via _lastActiveParent). Without this guard the reactive
   // re-ran on every `expanded` write — reading `expanded` made it a dependency —
   // so collapsing the active group instantly re-opened it (the reported bug).
+  /** @type {string | null} */
   let _lastActiveParent = null;
   $: if (activeParent?.id && activeParent.id !== _lastActiveParent) {
     _lastActiveParent = activeParent.id;
     expanded = { ...expanded, [activeParent.id]: true };
   }
+  /** @param {string} id */
   function toggleSection(id) { expanded = { ...expanded, [id]: !expanded[id] }; }
 
   // ── Toggle drawer ───────────────────────────────────────────────────
@@ -82,12 +85,14 @@
   // ── User dropdown ───────────────────────────────────────────────────
   let userMenuOpen = false;
   function closeUserMenu() { userMenuOpen = false; }
+  /** @param {KeyboardEvent} e */
   function onUserMenuKey(e) { if (e.key === 'Escape') closeUserMenu(); }
 
   // ── Command palette ─────────────────────────────────────────────────
   let paletteOpen = false;
   let paletteQuery = '';
   let paletteIndex = 0;
+  /** @type {HTMLInputElement | undefined} */
   let paletteInput;
 
   $: paletteCommands = (() => {
@@ -112,7 +117,7 @@
       { id: 'logout', label: 'Cerrar sesión', hint: '', group: 'Cuenta',
         run: async () => { await authStore.logout(); goto('/login'); } }
     ];
-    const role = $user?.role;
+    const role = $user?.role || '';
     const allowed = all.filter(c => !c.href || canAccess(c.href, role));
     const q = paletteQuery.trim().toLowerCase();
     if (!q) return allowed;
@@ -126,11 +131,13 @@
     setTimeout(() => paletteInput?.focus(), 30);
   }
   function closePalette() { paletteOpen = false; }
+  /** @param {any} cmd */
   async function runCommand(cmd) {
     closePalette();
     if (cmd.href) { goto(cmd.href); return; }
     if (cmd.run)  { await cmd.run(); }
   }
+  /** @param {KeyboardEvent} e */
   function onPaletteKey(e) {
     if (e.key === 'Escape')      { closePalette(); return; }
     if (e.key === 'ArrowDown')   { e.preventDefault(); paletteIndex = Math.min(paletteCommands.length - 1, paletteIndex + 1); return; }
@@ -141,12 +148,15 @@
 
   // ── Global keyboard shortcuts ───────────────────────────────────────
   let chordPrimed = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let chordTimer  = null;
+  /** @param {KeyboardEvent} e */
   function isTextTarget(e) {
-    const t = e.target;
+    const t = /** @type {HTMLElement | null} */ (e.target);
     if (!t) return false;
     return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable;
   }
+  /** @param {KeyboardEvent} e */
   function handleGlobalKey(e) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault(); openPalette(); return;
@@ -162,12 +172,13 @@
     }
     if (isTextTarget(e)) return;
     if (chordPrimed) {
+      /** @type {Record<string, string>} */
       const map = {
         d: '/dashboard', c: '/clients', f: '/invoices',
         m: '/network'
       };
       const dest = map[e.key.toLowerCase()];
-      if (dest && canAccess(dest, $user?.role)) {
+      if (dest && canAccess(dest, $user?.role || '')) {
         e.preventDefault();
         goto(dest);
       }
@@ -188,9 +199,10 @@
     }
   }
 
+  /** @param {MouseEvent} e */
   function onWindowClick(e) {
     if (!userMenuOpen) return;
-    const el = e.target;
+    const el = /** @type {HTMLElement | null} */ (e.target);
     if (el?.closest?.('[data-user-menu]')) return;
     closeUserMenu();
   }

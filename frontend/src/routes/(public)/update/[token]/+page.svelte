@@ -11,12 +11,14 @@
   // flow; the token in the URL is the credential.
   const apiBase = import.meta.env.VITE_API_URL || '/api/v1';
 
+  /** @param {string} path */
   async function publicGet(path) {
     const res = await fetch(`${apiBase}${path}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(json?.error?.message || `HTTP ${res.status}`);
     return json.data;
   }
+  /** @param {string} path @param {any} body */
   async function publicPut(path, body) {
     const res = await fetch(`${apiBase}${path}`, {
       method: 'PUT',
@@ -25,12 +27,13 @@
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const err = new Error(json?.error?.message || `HTTP ${res.status}`);
+      const err = /** @type {any} */ (new Error(json?.error?.message || `HTTP ${res.status}`));
       err.code = json?.error?.code;
       throw err;
     }
     return json.data;
   }
+  /** @param {string} path @param {FormData} formData */
   async function publicUpload(path, formData) {
     const res = await fetch(`${apiBase}${path}`, { method: 'POST', body: formData });
     const json = await res.json().catch(() => ({}));
@@ -45,6 +48,7 @@
   let saving      = false;
   let saveError   = '';
   let success     = false;
+  /** @type {any} */
   let snapshot    = null;       // original data, for the "no cambió ningún campo" check
   let expiresAt   = '';
 
@@ -54,10 +58,12 @@
   };
 
   // Photo upload state
+  /** @type {File[]} */
   let photoFiles      = [];
   let photoType       = 'identity';
   let photoUploading  = false;
   let photoError      = '';
+  /** @type {any[]} */
   let photoUploaded   = [];     // list of successfully uploaded photos this session
 
   onMount(async () => {
@@ -78,7 +84,7 @@
         documentNumber: data.client.documentNumber ?? '',
         coordinates:    data.client.coordinates    ?? ''
       };
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       loadError = e.message || 'No se pudo cargar el enlace';
     } finally {
       loading = false;
@@ -91,9 +97,11 @@
     try {
       // Only send fields that the customer actually changed. Empty strings
       // ARE sent (so the customer can clear an old value).
+      /** @type {Record<string, any>} */
       const payload = {};
+      const f = /** @type {Record<string, any>} */ (form);
       for (const k of Object.keys(form)) {
-        if ((form[k] ?? '') !== (snapshot?.[k] ?? '')) payload[k] = form[k];
+        if ((f[k] ?? '') !== (snapshot?.[k] ?? '')) payload[k] = f[k];
       }
       if (Object.keys(payload).length === 0 && photoUploaded.length === 0) {
         saveError = 'No has hecho ningún cambio.';
@@ -102,7 +110,7 @@
       }
       await publicPut(`/public/client-updates/${token}`, payload);
       success = true;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       saveError = e.message || 'No se pudo guardar';
     } finally {
       saving = false;
@@ -126,18 +134,20 @@
       // Reset the input element value so the same file can be re-picked.
       const input = document.getElementById('photo-input');
       if (input) input.value = '';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       photoError = e.message || 'No se pudo subir';
     } finally {
       photoUploading = false;
     }
   }
 
+  /** @param {Event} e */
   function onPhotoSelect(e) {
-    photoFiles = Array.from(e.target.files || []);
+    photoFiles = Array.from(/** @type {HTMLInputElement} */ (e.target).files || []);
     photoError = '';
   }
 
+  /** @param {string} iso */
   function fmtExpires(iso) {
     if (!iso) return '';
     return new Date(iso).toLocaleDateString('es-CO', {

@@ -16,9 +16,9 @@
   } from 'lucide-svelte';
   import { api } from '$lib/api/client.js';
 
-  /** Array of full client objects (with .id, .name, .plan, .mikrotikAccount, .monthlyFee, .status). */
+  /** @type {import('$lib/types').Client[]} Array of full client objects. */
   export let clients = [];
-  /** Plans list (id, name, monthlyPrice, mikrotikProfile, downloadSpeed, uploadSpeed). */
+  /** @type {import('$lib/types').Plan[]} Plans list. */
   export let plans = [];
 
   const dispatch = createEventDispatcher();
@@ -31,10 +31,12 @@
   let includeSuspended = false;
   let phrase           = '';
   let submitting       = false;
+  /** @type {any} */
   let resultData       = null;
   let errorMessage     = '';
 
   // Per-client exclusion: operator can untick a row from the preview.
+  /** @type {Set<string>} */
   let excluded = new Set();
 
   // ── Derived ──────────────────────────────────────────────────────────
@@ -75,6 +77,7 @@
 
   function close() { dispatch('close'); }
 
+  /** @param {string} id */
   function toggleExclude(id) {
     if (excluded.has(id)) excluded.delete(id);
     else                  excluded.add(id);
@@ -95,7 +98,7 @@
       });
       resultData = data;
       step = 'done';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       errorMessage = e.message || 'Error al aplicar cambios';
       step = 'error';
     } finally {
@@ -107,6 +110,7 @@
     dispatch('done', { summary: resultData?.summary, results: resultData?.results });
   }
 
+  /** @param {number|null|undefined} c */
   function fmtCop(c) {
     if (c == null) return '—';
     return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format((c || 0) / 100);
@@ -331,7 +335,7 @@
                 <AlertCircle size={12} /> Clientes con error
               </div>
               <div class="max-h-[200px] overflow-y-auto divide-y divide-amber-100 text-xs">
-                {#each (resultData?.results || []).filter(r => r.status === 'failed' || r.mikrotikSync?.status === 'failed') as r}
+                {#each (resultData?.results || []).filter((/** @type {any} */ r) => r.status === 'failed' || r.mikrotikSync?.status === 'failed') as r}
                   <div class="px-3 py-2">
                     <div class="font-medium text-text-primary">{r.name}</div>
                     <div class="text-text-muted">{r.reason || r.mikrotikSync?.reason || 'unknown'}</div>

@@ -1,6 +1,7 @@
 import { error, redirect } from '@sveltejs/kit';
 import { api } from '$lib/api/client.js';
 
+/** @type {import('@sveltejs/kit').Load} */
 export async function load({ params }) {
   // The literal segment "new" has its own dedicated page for creation.
   // SvelteKit static routes win over dynamic ones, so this is just a
@@ -15,7 +16,7 @@ export async function load({ params }) {
       error(404, 'Router no encontrado');
     }
     return { router };
-  } catch (e) {
+  } catch (/** @type {any} */ e) {
     if (e.message?.includes('404') || e.message?.includes('no encontrado')) {
       error(404, 'Router no encontrado');
     }

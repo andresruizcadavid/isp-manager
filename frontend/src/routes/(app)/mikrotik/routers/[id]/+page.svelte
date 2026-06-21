@@ -5,6 +5,7 @@
     Server, User, Wifi, Loader2, AlertCircle, CheckCircle2
   } from 'lucide-svelte';
 
+  /** @type {any} */
   export let data;
   $: router = data.router;
 
@@ -16,10 +17,12 @@
   // Live ping result mirror, keyed by route id. Persisted in DB by the backend
   // — we keep a local copy so the "Probar rutas" button can show immediate
   // feedback even before the server-sent socket event arrives.
+  /** @type {Record<string, any>} */
   let liveRoutes = {};
 
   // Default-fill 3 slots so the operator can add alternativas without an
   // "Add row" button. Slots beyond the router's existing routes are empty.
+  /** @param {any[]} [routes] */
   function seedRoutes(routes) {
     const out = [
       { id: null, ip: '', label: 'Enlace principal',  priority: 1 },
@@ -74,7 +77,7 @@
       form.routes = seedRoutes(updated?.routes);
       liveRoutes = {};
       success = 'Router actualizado correctamente';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al guardar';
     } finally { saving = false; }
   }
@@ -84,7 +87,7 @@
     try {
       await routersApi.sync(router.id);
       success = 'Sincronización completada';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al sincronizar';
     } finally { syncing = false; }
   }
@@ -104,7 +107,7 @@
       liveRoutes = { ...liveRoutes };
       router = { ...router, status: result.router.status, activeRouteId: result.activeRouteId };
       success = `Estado del router: ${result.router.status}`;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo probar las rutas';
     } finally { testing = false; }
   }
@@ -120,11 +123,12 @@
       success = identity
         ? `Conexión exitosa vía ${dialIp ?? 'ruta activa'}. Identidad: ${identity}`
         : 'Conexión exitosa';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error de conexión';
     } finally { testing = false; }
   }
 
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return 'Nunca';
     return new Date(s).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -132,6 +136,7 @@
 
   // Per-row status pill: prefer live result (just pinged) over the persisted
   // status (last sweep) so the user sees immediate feedback after clicking.
+  /** @param {any} rt */
   function routeStatusFor(rt) {
     const live = rt.id != null ? liveRoutes[rt.id] : null;
     const status  = live?.status ?? (rt.id == null ? 'UNKNOWN' : (router?.routes?.find(x => x.id === rt.id)?.status ?? 'UNKNOWN'));
@@ -143,6 +148,7 @@
     return { label: 'Sin probar', cls: 'text-slate-400' };
   }
 
+  /** @param {string} status */
   function routerStatusBadge(status) {
     switch (status) {
       case 'ONLINE':   return { cls: 'badge-green',  label: 'Online' };

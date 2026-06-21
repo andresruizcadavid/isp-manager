@@ -6,13 +6,17 @@
     Settings, Trash2, AlertCircle, CheckCircle2, Loader2, X
   } from 'lucide-svelte';
 
+  /** @type {import('$lib/types').Router[]} */
   let routers = [];
   let loading = true;
   let error = '';
+  /** @type {Record<number, boolean>} */
   let testing = {};
+  /** @type {Record<number, boolean>} */
   let syncing = {};
 
   // Delete modal state
+  /** @type {any} */
   let routerToDelete = null;
   let deleteConfirmName = '';
   let deleting = false;
@@ -22,23 +26,25 @@
     loading = true; error = '';
     try {
       routers = await routersApi.getAll();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al cargar routers';
     } finally { loading = false; }
   }
   onMount(load);
 
+  /** @param {number} id */
   async function testConnection(id) {
     testing[id] = true;
     try {
       await routersApi.testRoutes(id);   // pings every route + persists status
       await load();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert('Error de conexión: ' + e.message);
     } finally { testing[id] = false; }
   }
 
   // Map RouterStatus enum to the badge styling used by the rest of the app.
+  /** @param {string} status */
   function statusBadge(status) {
     switch (status) {
       case 'ONLINE':   return { cls: 'badge-green',  label: 'Online'   };
@@ -50,27 +56,31 @@
 
   // Per-route dot color. Latency is suffixed when known so the operator can
   // tell which uplink is healthier at a glance.
+  /** @param {string} status */
   function routeDotClass(status) {
     if (status === 'ONLINE')  return 'text-emerald-500';
     if (status === 'OFFLINE') return 'text-red-500';
     return 'text-slate-300';
   }
 
+  /** @param {number} id */
   async function syncRouter(id) {
     syncing[id] = true;
     try {
       await routersApi.sync(id);
       await load();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert('Error al sincronizar: ' + e.message);
     } finally { syncing[id] = false; }
   }
 
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return 'Nunca';
     return new Date(s).toLocaleString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   }
 
+  /** @param {any} r */
   function openDelete(r) {
     routerToDelete = r;
     deleteConfirmName = '';
@@ -90,7 +100,7 @@
       routerToDelete = null;
       deleteConfirmName = '';
       await load();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       // Prisma foreign-key violation when the router still has linked accounts.
       const msg = e.message || '';
       if (/foreign key|constraint|P2003/i.test(msg)) {
