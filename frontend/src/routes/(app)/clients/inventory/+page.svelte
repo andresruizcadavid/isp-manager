@@ -9,17 +9,23 @@
   } from 'lucide-svelte';
 
   const BASE = import.meta.env.PUBLIC_API_URL || '';
+  /** @param {string|null|undefined} u */
   const imgUrl = (u) => u ? (u.startsWith('http') ? u : `${BASE}${u}`) : '';
 
   let tab = 'products';          // products | items
   let loading = true;
   let error = '';
+  /** @type {import('$lib/types').InventoryProduct[]} */
   let products = [];
+  /** @type {import('$lib/types').InventoryItem[]} */
   let items = [];
+  /** @type {any[]} */
   let clients = [];
 
   const CATEGORIES = ['ONU', 'TV Box', 'Router', 'Antena', 'Cable/Drop', 'Otro'];
+  /** @type {Record<string, string>} */
   const STATUS_LABEL = { IN_STOCK: 'En bodega', ASSIGNED: 'Asignado', RETURNED: 'Devuelto', FAULTY: 'Dañado' };
+  /** @type {Record<string, string>} */
   const STATUS_CLASS = {
     IN_STOCK: 'bg-slate-100 text-slate-600',
     ASSIGNED: 'bg-emerald-50 text-emerald-700',
@@ -38,26 +44,30 @@
       products = p || [];
       items = it || [];
       clients = (cl?.data || cl || []).map(c => ({ id: c.id, name: c.name }));
-    } catch (e) { error = e.message || 'No se pudo cargar el inventario'; }
+    } catch (/** @type {any} */ e) { error = e.message || 'No se pudo cargar el inventario'; }
     finally { loading = false; }
   }
   onMount(loadAll);
 
   // ── Product modal ──────────────────────────────────────────────
-  let pOpen = false, pSaving = false, pError = '', pEditing = null, pUploading = false;
+  let pOpen = false, pSaving = false, pError = '', pUploading = false;
+  /** @type {any} */
+  let pEditing = null;
   let pForm = emptyProduct();
   function emptyProduct() { return { name: '', category: '', description: '', imageUrl: '', isActive: true }; }
   function openNewProduct() { pForm = emptyProduct(); pEditing = null; pError = ''; pOpen = true; }
+  /** @param {any} p */
   function openEditProduct(p) {
     pForm = { name: p.name, category: p.category || '', description: p.description || '', imageUrl: p.imageUrl || '', isActive: p.isActive };
     pEditing = p; pError = ''; pOpen = true;
   }
+  /** @param {Event} e */
   async function onPickImage(e) {
-    const file = e.target.files?.[0];
+    const file = /** @type {HTMLInputElement} */ (e.target).files?.[0];
     if (!file) return;
     pUploading = true; pError = '';
     try { pForm.imageUrl = await inventoryApi.uploadImage(file); }
-    catch (err) { pError = err.message || 'No se pudo subir la imagen'; }
+    catch (/** @type {any} */ err) { pError = err.message || 'No se pudo subir la imagen'; }
     finally { pUploading = false; }
   }
   async function saveProduct() {
@@ -68,20 +78,24 @@
       if (pEditing) await inventoryApi.updateProduct(pEditing.id, payload);
       else          await inventoryApi.createProduct(payload);
       pOpen = false; await loadAll();
-    } catch (e) { pError = e.message || 'No se pudo guardar'; }
+    } catch (/** @type {any} */ e) { pError = e.message || 'No se pudo guardar'; }
     finally { pSaving = false; }
   }
+  /** @param {any} p */
   async function deleteProduct(p) {
     if (!confirm(`¿Eliminar el producto "${p.name}"?`)) return;
     try { await inventoryApi.removeProduct(p.id); await loadAll(); }
-    catch (e) { alert(e.message || 'No se pudo eliminar'); }
+    catch (/** @type {any} */ e) { alert(e.message || 'No se pudo eliminar'); }
   }
 
   // ── Item modal ─────────────────────────────────────────────────
-  let iOpen = false, iSaving = false, iError = '', iEditing = null;
+  let iOpen = false, iSaving = false, iError = '';
+  /** @type {any} */
+  let iEditing = null;
   let iForm = emptyItem();
   function emptyItem() { return { productId: '', serial: '', clientId: '', status: 'ASSIGNED', notes: '' }; }
   function openNewItem() { iForm = emptyItem(); iEditing = null; iError = ''; iOpen = true; }
+  /** @param {any} it */
   function openEditItem(it) {
     iForm = { productId: it.productId, serial: it.serial || '', clientId: it.clientId || '', status: it.status, notes: it.notes || '' };
     iEditing = it; iError = ''; iOpen = true;
@@ -100,18 +114,20 @@
       if (iEditing) await inventoryApi.updateItem(iEditing.id, payload);
       else          await inventoryApi.createItem(payload);
       iOpen = false; await loadAll();
-    } catch (e) { iError = e.message || 'No se pudo guardar'; }
+    } catch (/** @type {any} */ e) { iError = e.message || 'No se pudo guardar'; }
     finally { iSaving = false; }
   }
+  /** @param {any} it */
   async function unassignItem(it) {
     if (!confirm(`¿Devolver "${it.product?.name}" (${it.serial || 'sin serial'}) a bodega?`)) return;
     try { await inventoryApi.unassign(it.id); await loadAll(); }
-    catch (e) { alert(e.message); }
+    catch (/** @type {any} */ e) { alert(e.message); }
   }
+  /** @param {any} it */
   async function deleteItem(it) {
     if (!confirm(`¿Eliminar este equipo del inventario?`)) return;
     try { await inventoryApi.removeItem(it.id); await loadAll(); }
-    catch (e) { alert(e.message); }
+    catch (/** @type {any} */ e) { alert(e.message); }
   }
 
   // ── Filters for items ──

@@ -125,7 +125,9 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 - RegisterPaymentModal: `selected:string[]`, `payFile/payFilePreview`, captura
   `const c = client` en loadMonths/generateMonth, `onFile` con currentTarget,
   quitado `inv.number` (Invoice usa invoiceNumber). Build ✓.
-### Fase 7 — payment-links* (37+28+16), invoices (32), system/backups (30), inventory (30)  ⬜
+### Fase 7 — payment-links* (37+28+16), invoices (32), system/backups (30), inventory (31) → todos 0  ✅
+- Mismo patrón en los 6: estado tipado, catch, mapas→Record, params de helpers.
+- types.d.ts: `InventoryItem.client?`. Build ✓.
 ### Fase 8 — (app)/+layout (29), mikrotik/routers* (25+20+6), update/[token] (22), BulkPlanChangeModal (21), zones (19)  ⬜
 ### Fase 9 — componentes ui/ + network/ + layout/ (≤15 c/u) y resto de páginas portal/  ⬜
 ### Fase 10 — barrido final: archivos con 1–6 errores y warnings a11y (68)  ⬜
@@ -148,3 +150,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-21 | 4 | 878 | 761 | network/+page 117→0. + Zone._count, ZoneTabs props, props SvelteFlow casteados. Build ✓. |
 | 2026-06-21 | 5 | 761 | 614 | clients/new + invoices/[id] + dashboard a 0. + Invoice.wisphubId, InvoiceItem.unitPrice/amount, Payment.createdBy. Build ✓. |
 | 2026-06-21 | 6 | 614 | 470 | RegisterPaymentModal + users + billing-cycles + plans a 0. Build ✓. |
+| 2026-06-21 | 7 | 470 | 331 | payment-links(+[id]+attempt) + invoices/+page + system/backups + inventory a 0. + InventoryItem.client. Build ✓. |

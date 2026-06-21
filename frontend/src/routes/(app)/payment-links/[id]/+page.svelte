@@ -5,20 +5,24 @@
   import { paymentLinksApi } from '$lib/api/payment-links.api.js';
   import { Loader2, ArrowLeft, ExternalLink, CheckCircle, XCircle, Clock, RotateCw, Link2, Mail, Eye, CreditCard } from 'lucide-svelte';
 
+  /** @type {any} */
   let link = null;
   let loading = true;
   let error = '';
   let resending = false;
 
+  /** @param {number} [c] */
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format((c||0)/100); }
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'; }
+  /** @param {string|Date|null|undefined} d */
   function fmtISO(d) { return d ? new Date(d).toISOString() : '—'; }
 
   async function load() {
     loading = true; error = '';
     try {
       link = await paymentLinksApi.getOne($page.params.id);
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
     finally { loading = false; }
   }
 
@@ -27,7 +31,7 @@
     try {
       const result = await paymentLinksApi.resend($page.params.id);
       if (result.checkoutUrl) window.open(result.checkoutUrl, '_blank');
-    } catch (e) { alert(e.message); }
+    } catch (/** @type {any} */ e) { alert(e.message); }
     finally { resending = false; }
   }
 

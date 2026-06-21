@@ -11,6 +11,7 @@
   let tab = 'links';
 
   // ── Links tab ───────────────────────────────────────────
+  /** @type {any[]} */
   let links = [];
   let total = 0;
   let page = 1;
@@ -19,7 +20,9 @@
   let error = '';
   let statusFilter = '';
   let searchQ = '';
+  /** @type {any[]} */
   let summary = [];
+  /** @type {Record<string, boolean>} */
   let resending = {};
 
   const STATUS_OPTIONS = [
@@ -30,12 +33,18 @@
     { value: 'cancelled', label: 'Cancelados' }
   ];
 
+  /** @param {number} [c] */
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((c||0)/100); }
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''; }
+  /** @param {string|Date|null|undefined} d */
   function fmtDateShort(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' }) : '—'; }
+  /** @param {string} s */
   function statusIcon(s) { if (s === 'paid') return CheckCircle; if (s === 'expired' || s === 'cancelled') return XCircle; return Clock; }
+  /** @param {string} s */
   function statusClass(s) { if (s === 'paid') return 'bg-emerald-100 text-emerald-700'; if (s === 'expired') return 'bg-slate-100 text-slate-600'; if (s === 'cancelled') return 'bg-red-100 text-red-700'; return 'bg-amber-100 text-amber-700'; }
-  function statusLabel(s) { return { paid:'Pagado', pending:'Pendiente', expired:'Expirado', cancelled:'Cancelado' }[s] || s; }
+  /** @param {string} s */
+  function statusLabel(s) { return (/** @type {Record<string,string>} */ ({ paid:'Pagado', pending:'Pendiente', expired:'Expirado', cancelled:'Cancelado' }))[s] || s; }
 
   async function loadLinks() {
     loading = true; error = '';
@@ -44,25 +53,28 @@
         page, limit: 50, status: statusFilter || undefined, q: searchQ.trim() || undefined
       });
       links = data.links; total = data.total; page = data.page; pages = data.pages; summary = data.summary || [];
-    } catch (e) { error = e.message; links = []; }
+    } catch (/** @type {any} */ e) { error = e.message; links = []; }
     finally { loading = false; }
   }
 
+  /** @param {string} st */
   function summaryCount(st) { const s = summary.find(s => s.status === st); return s ? s._count : 0; }
   function goPrev() { if (page > 1) { page--; loadLinks(); } }
   function goNext() { if (page < pages) { page++; loadLinks(); } }
   function applyFilter() { page = 1; loadLinks(); }
 
+  /** @param {string} id */
   async function handleResend(id) {
     resending[id] = true;
     try {
       const result = await paymentLinksApi.resend(id);
       if (result.checkoutUrl) window.open(result.checkoutUrl, '_blank');
-    } catch (e) { alert(e.message); }
+    } catch (/** @type {any} */ e) { alert(e.message); }
     finally { resending[id] = false; }
   }
 
   // ── Attempts tab ────────────────────────────────────────
+  /** @type {any[]} */
   let attempts = [];
   let attemptsTotal = 0;
   let attemptsPage = 1;
@@ -71,6 +83,7 @@
   let attemptsError = '';
   let attemptsStatusFilter = '';
   let attemptsQ = '';
+  /** @type {any[]} */
   let attemptsSummary = [];
 
   const ATTEMPT_STATUS_OPTIONS = [
@@ -81,20 +94,24 @@
     { value: 'EXPIRED', label: 'Expirados' }
   ];
 
+  /** @param {string} s */
   function attemptClass(s) {
     if (s === 'COMPLETED') return 'bg-emerald-100 text-emerald-700';
     if (s === 'FAILED') return 'bg-red-100 text-red-700';
     if (s === 'EXPIRED') return 'bg-slate-100 text-slate-600';
     return 'bg-amber-100 text-amber-700';
   }
+  /** @param {string} s */
   function attemptLabel(s) {
-    return { PENDING:'Pendiente', COMPLETED:'Completado', FAILED:'Fallido', EXPIRED:'Expirado' }[s] || s;
+    return (/** @type {Record<string,string>} */ ({ PENDING:'Pendiente', COMPLETED:'Completado', FAILED:'Fallido', EXPIRED:'Expirado' }))[s] || s;
   }
+  /** @param {string} s */
   function attemptIcon(s) {
     if (s === 'COMPLETED') return CheckCircle;
     if (s === 'FAILED' || s === 'EXPIRED') return XCircle;
     return Clock;
   }
+  /** @param {string} st */
   function attemptsSummaryCount(st) {
     const s = attemptsSummary.find(s => s.status === st);
     return s ? s._count : 0;
@@ -108,7 +125,7 @@
       });
       attempts = data.attempts; attemptsTotal = data.total; attemptsPage = data.page; attemptsPages = data.pages;
       attemptsSummary = data.summary || [];
-    } catch (e) { attemptsError = e.message; attempts = []; }
+    } catch (/** @type {any} */ e) { attemptsError = e.message; attempts = []; }
     finally { attemptsLoading = false; }
   }
 
@@ -117,6 +134,7 @@
   function attApplyFilter() { attemptsPage = 1; loadAttempts(); }
 
   // ── Conciliation tab ────────────────────────────────────
+  /** @type {any[]} */
   let conciliationItems = [];
   let conciliationCounts = { expiredNoPayment: 0, orphanPayments: 0, attemptNoPayment: 0 };
   let conciliationLoading = false;
@@ -130,18 +148,21 @@
     { value: 'attempt_completado_sin_payment', label: 'Attempts sin Payment' }
   ];
 
+  /** @param {string} type */
   function concilIcon(type) {
     if (type === 'link_expirado_sin_pago') return Clock;
     if (type === 'pago_huertfano_sin_link') return AlertOctagon;
     return AlertTriangle;
   }
 
+  /** @param {string} type */
   function concilClass(type) {
     if (type === 'link_expirado_sin_pago') return 'bg-amber-50 border-amber-200';
     if (type === 'pago_huertfano_sin_link') return 'bg-red-50 border-red-200';
     return 'bg-orange-50 border-orange-200';
   }
 
+  /** @param {string} type */
   function concilLabel(type) {
     if (type === 'link_expirado_sin_pago') return 'Link expirado — sin pago';
     if (type === 'pago_huertfano_sin_link') return 'Pago huérfano — sin link asociado';
@@ -155,7 +176,7 @@
       const data = await paymentLinksApi.getConciliation();
       conciliationItems = data.items || [];
       conciliationCounts = data.counts || { expiredNoPayment: 0, orphanPayments: 0, attemptNoPayment: 0 };
-    } catch (e) { conciliationError = e.message; conciliationItems = []; }
+    } catch (/** @type {any} */ e) { conciliationError = e.message; conciliationItems = []; }
     finally { conciliationLoading = false; }
   }
 

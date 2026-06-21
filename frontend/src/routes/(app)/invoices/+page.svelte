@@ -8,6 +8,7 @@
     Pencil, Trash2, X, Loader2, Save
   } from 'lucide-svelte';
 
+  /** @type {import('$lib/types').Invoice[]} */
   let invoices = [];
   let total = 0;
   let loading = true;
@@ -16,6 +17,7 @@
   // KPI stats — pulled from /invoices/stats/overview with the same filters
   // the table query uses. The numbers always match the full filtered set,
   // never the visible page. Empty object until the first response lands.
+  /** @type {any} */
   let stats = {};
   let statsLoading = false;
 
@@ -23,11 +25,13 @@
   let status = '';
   let page = 1;
   const pageSize = 20;
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
   let searchTimer;
 
   /** Build the shared filter object used by BOTH the list query and the
    *  stats query. Single source of truth so they can't drift. */
   function buildFilterParams() {
+    /** @type {Record<string, any>} */
     const p = {};
     if (q.trim()) p.search = q.trim();
     if (status)   p.status = status;
@@ -41,7 +45,7 @@
       const res = await invoicesApi.getPage(params);
       invoices = res?.data ?? [];
       total    = res?.meta?.total ?? invoices.length;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al cargar facturas';
     } finally { loading = false; }
   }
@@ -52,7 +56,7 @@
     try {
       const qs = new URLSearchParams(buildFilterParams()).toString();
       stats = await api.get(`/invoices/stats/overview${qs ? '?' + qs : ''}`);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       // Non-fatal: leave previous stats in place + flag.
       console.error('stats load failed:', e.message);
     } finally { statsLoading = false; }
@@ -73,6 +77,7 @@
   function onStatusChange() { reloadAll(); }
 
   $: totalPages = Math.max(1, Math.ceil(total / pageSize));
+  /** @param {number} p */
   function setPage(p) {
     if (p < 1 || p > totalPages || p === page) return;
     page = p;
@@ -88,24 +93,31 @@
   $: kpiPendingAmt = stats?.outstandingAmount ?? 0;
   $: hasFilters    = !!(q.trim() || status);
 
+  /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
     if (cents == null) return '—';
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(cents / 100);
   }
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });
   }
+  /** @type {Record<string, string>} */
   const STATUS_PT = { DRAFT:'Borrador', PENDING:'Pendiente', PAID:'Pagada', OVERDUE:'Vencida', CANCELLED:'Cancelada', REFUNDED:'Reembolsada' };
+  /** @type {Record<string, string>} */
   const STATUS_CLS = { PAID:'badge-green', PENDING:'badge-yellow', OVERDUE:'badge-red', CANCELLED:'badge-gray', DRAFT:'badge-gray', REFUNDED:'badge-blue' };
 
   // ── Editar / Eliminar factura ──────────────────────────────
   let editOpen = false;
+  /** @type {any} */
   let editInv = null;
+  /** @type {{ amount: number | string, dueDate: string }} */
   let editForm = { amount: '', dueDate: '' };
   let editSaving = false;
   let editError = '';
 
+  /** @param {any} inv */
   function openEdit(inv) {
     editInv = inv;
     editForm = {
@@ -125,16 +137,17 @@
       await invoicesApi.update(editInv.id, { amount, dueDate: editForm.dueDate });
       editOpen = false;
       reloadAll();
-    } catch (e) { editError = e.message || 'No se pudo actualizar la factura.'; }
+    } catch (/** @type {any} */ e) { editError = e.message || 'No se pudo actualizar la factura.'; }
     finally { editSaving = false; }
   }
 
+  /** @param {any} inv */
   async function deleteInvoice(inv) {
     if (!confirm(`¿Eliminar la factura ${inv.invoiceNumber || ''}?\n\nEsta acción no se puede deshacer.`)) return;
     try {
       await invoicesApi.remove(inv.id);
       reloadAll();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert(e.message || 'No se pudo eliminar la factura.');
     }
   }

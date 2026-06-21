@@ -7,9 +7,13 @@
     Trash2, Save, Calendar, HardDrive, Clock, AlertTriangle
   } from 'lucide-svelte';
 
+  /** @type {import('$lib/types').Router[]} */
   let routers = [];
+  /** @type {number | null} */
   let routerId = null;
+  /** @type {any} */
   let schedule = null;
+  /** @type {any[]} */
   let backups = [];
   let loading = true;
   let saving = false;
@@ -35,9 +39,10 @@
       const list = await routersApi.getAll();
       routers = Array.isArray(list) ? list : (list?.data || []);
       if (!routerId && routers.length) routerId = routers[0].id;
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
   }
 
+  /** @param {number|null} rid */
   async function loadFor(rid) {
     if (!rid) return;
     loading = true; error = '';
@@ -57,7 +62,7 @@
       } else {
         form = { isActive: true, cronExpression: '0 3 * * *', retentionCount: 30 };
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo cargar';
     } finally {
       loading = false;
@@ -80,7 +85,7 @@
         retentionCount: Number(form.retentionCount)
       });
       await loadFor(routerId);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo guardar';
     } finally { saving = false; }
   }
@@ -92,36 +97,41 @@
     try {
       await api.post(`/backups/run/${routerId}`, {});
       await loadFor(routerId);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Backup falló';
     } finally { runningBackup = false; }
   }
 
+  /** @param {string} id */
   async function deleteRow(id) {
     if (!confirm('Eliminar este backup?')) return;
     try {
       await api.delete(`/backups/${id}`);
       await loadFor(routerId);
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
   }
 
+  /** @param {string} id @param {string} [name] */
   function downloadRow(id, name) {
     // Stream download — open in same tab; browser handles Content-Disposition.
     window.location.href = `/api/v1/backups/${id}/download`;
   }
 
+  /** @param {number|null|undefined} n */
   function fmtBytes(n) {
     if (!n) return '—';
     if (n < 1024) return `${n} B`;
     if (n < 1024 * 1024) return `${(n/1024).toFixed(1)} KB`;
     return `${(n/1024/1024).toFixed(2)} MB`;
   }
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleString('es-CO', {
       day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
     });
   }
+  /** @param {string} s */
   function statusBadge(s) {
     if (s === 'success') return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: '✓ OK' };
     if (s === 'failed')  return { cls: 'bg-red-50 text-red-700 border-red-200',           label: '✗ Falló' };
@@ -130,6 +140,7 @@
   }
 
   // Compose the operator-friendly description of the cron expression.
+  /** @param {string} expr */
   function cronExplain(expr) {
     const p = CRON_PRESETS.find(p => p.value === expr);
     return p ? p.label : expr;

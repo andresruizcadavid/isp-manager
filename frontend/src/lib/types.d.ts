@@ -355,6 +355,7 @@ export interface InventoryItem {
   notes?: string | null;
   assignedAt?: string;
   product?: InventoryProduct | null;
+  client?: Client | null;
 }
 
 // ── API ─────────────────────────────────────────────────────────────────

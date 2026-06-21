@@ -5,18 +5,21 @@
   import { paymentLinksApi } from '$lib/api/payment-links.api.js';
   import { Loader2, ArrowLeft, ShoppingBag, CheckCircle, XCircle, Clock, CreditCard } from 'lucide-svelte';
 
+  /** @type {any} */
   let attempt = null;
   let loading = true;
   let error = '';
 
+  /** @param {number} [c] */
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style:'currency', currency:'COP', maximumFractionDigits:0 }).format((c||0)/100); }
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : '—'; }
 
   async function load() {
     loading = true; error = '';
     try {
       attempt = await paymentLinksApi.getAttempt($page.params.id);
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
     finally { loading = false; }
   }
 
