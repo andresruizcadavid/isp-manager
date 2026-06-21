@@ -232,6 +232,8 @@ export interface Router {
   alertSent?: boolean;
   sshPort?: number | null;
   sshUser?: string | null;
+  /** IP principal derivada por el API (no es columna del schema). */
+  ip?: string | null;
   routes?: RouterRoute[];
   zones?: Zone[];
   createdAt?: string;

@@ -97,7 +97,11 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
   inexistente; el backend nunca devuelve la contraseña → write-only). Lanzaba
   "is not a function" atrapado por el catch (el ojo nunca revelaba). Simplificado
   a toggle de visibilidad. Build ✓.
-### Fase 3 — clients/+page.svelte (127)  ⬜
+### Fase 3 — clients/+page.svelte (126 → 0)  ✅
+- Estado tipado (clients/zones/plans/routers, Sets, modal/pago, ips/profiles,
+  import), 12 catch, params de funciones, mapas inline → cast `Record`.
+- `params` de búsqueda como `Record<string,any>` (se les añaden claves dinámicas).
+- Se añadió `ip?` al tipo `Router` (el API lo deriva de la ruta principal). Build ✓.
 ### Fase 4 — network/+page.svelte (116)  ⬜
 ### Fase 5 — clients/new (57), invoices/[id] (47), dashboard (47)  ⬜
 ### Fase 6 — RegisterPaymentModal (44), users (43), billing-cycles (40), plans (39)  ⬜
@@ -120,3 +124,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-20 | 0 (stores/nav) | 1520 | 1441 | Tipados stores, `navigation.js`, `permissions.js`. Build ✓. 62 archivos restantes. |
 | 2026-06-21 | 1 | 1441 | 1150 | clients/[id] 290→0. + props RegisterPaymentModal e isAdmin. Build ✓. |
 | 2026-06-21 | 2 | 1150 | 994 | notifications 158→0. Bug toggleSmtpPassword (reveal inexistente) corregido. Build ✓. |
+| 2026-06-21 | 3 | 994 | 878 | clients/+page 126→0. + tipo Router.ip. Build ✓. |

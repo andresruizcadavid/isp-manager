@@ -22,10 +22,14 @@
   import { Zap, CheckSquare, Square } from 'lucide-svelte';
 
   // ── Data ────────────────────────────────────────────
+  /** @type {import('$lib/types').Client[]} */
   let clients = [];
   let total   = 0;
+  /** @type {import('$lib/types').Zone[]} */
   let zones   = [];
+  /** @type {import('$lib/types').Plan[]} */
   let plans   = [];
+  /** @type {import('$lib/types').Router[]} */
   let routers = [];
   let loading = true;
   let error   = '';
@@ -49,6 +53,7 @@
   let pageSize = (typeof window !== 'undefined' &&
                   Number(window.localStorage?.getItem('isp:clientsPageSize'))) || 20;
   if (!PAGE_SIZE_OPTIONS.includes(pageSize)) pageSize = 20;
+  /** @param {any} e */
   function onPageSizeChange(e) {
     const next = Number(e.target?.value ?? e);
     if (!PAGE_SIZE_OPTIONS.includes(next)) return;
@@ -59,9 +64,11 @@
     page = 1;            // reset to first page so the operator sees fresh rows
     load();
   }
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
   let searchTimer;
 
   // ── Action menu state ───────────────────────────────
+  /** @type {string | null} */
   let openMenuId = null;
 
   // ── Row density toggle ─────────────────────────────
@@ -72,6 +79,7 @@
   $: activeFilterCount = (status ? 1 : 0) + (planId ? 1 : 0) + (zoneId ? 1 : 0);
 
   // Per-row mobile menu (kebab) — only one open at a time
+  /** @type {string | null} */
   let mobileMenuId = null;
 
   // ── Bulk selection state ───────────────────────────
@@ -79,6 +87,7 @@
   // selectedIds is a Set for O(1) lookup; we rebuild via reassignment
   // to trigger Svelte reactivity.
   let selectionMode = false;
+  /** @type {Set<string>} */
   let selectedIds   = new Set();
   let showBulkPlanModal = false;
 
@@ -90,6 +99,7 @@
     selectionMode = !selectionMode;
     if (!selectionMode) selectedIds = new Set();
   }
+  /** @param {string} id */
   function toggleSelectOne(id) {
     if (selectedIds.has(id)) selectedIds.delete(id);
     else                     selectedIds.add(id);
@@ -109,6 +119,7 @@
     // matching client (no pagination) and select them. Capped at 500 to
     // match the backend zod schema.
     try {
+      /** @type {Record<string, any>} */
       const params = { page: 1, limit: 500 };
       if (q.trim()) params.search = q.trim();
       if (status)   params.status = status;
@@ -117,7 +128,7 @@
       const res = await clientsApi.getPage(params);
       const ids = (res?.data || []).map(c => c.id);
       selectedIds = new Set(ids);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo seleccionar todos los clientes filtrados';
     }
   }
@@ -126,6 +137,7 @@
   // IDs, not just the current page. We fetch them in one batched call so the
   // preview has accurate plan/mikrotikAccount/monthlyFee even for off-page
   // selections.
+  /** @type {import('$lib/types').Client[]} */
   let bulkModalClients = [];
   let bulkModalLoading = false;
 
@@ -138,13 +150,14 @@
       const all = res?.data || [];
       bulkModalClients = all.filter(c => selectedIds.has(c.id));
       showBulkPlanModal = true;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudieron cargar los clientes seleccionados';
     } finally {
       bulkModalLoading = false;
     }
   }
 
+  /** @param {any} [e] */
   function onBulkPlanDone(e) {
     showBulkPlanModal = false;
     selectedIds = new Set();
@@ -153,10 +166,13 @@
   }
 
   // ── Modal state (create / edit only — view goes to /clients/[id]) ──
+  /** @type {string | null} */
   let modalMode = null;
   let modalLoading = false;
   let modalError = '';
+  /** @type {any} */
   let newClient = emptyClient();
+  /** @type {string | null} */
   let editingId = null;
   $: modalTitle = modalMode === 'create' ? 'Nuevo Cliente'
                 : modalMode === 'edit'   ? 'Editar Cliente'
@@ -165,6 +181,7 @@
 
   // ── Payment modal state (RegisterPaymentModal) ──────
   let payOpen = false;
+  /** @type {import('$lib/types').Client | null} */
   let payClient = null;
 
   function emptyClient() {
@@ -189,6 +206,7 @@
   // Loaded when the create modal opens, so successive clients keep counting.
   let nextPppoePrefix = '';
 
+  /** @param {string} s */
   function slugifyName(s) {
     const diacriticsRe = new RegExp('[̀-ͯ]', 'g');
     return (s || '')
@@ -216,9 +234,12 @@
   let ipsPopoverOpen = false;
   let ipsLoading = false;
   let ipsError = '';
+  /** @type {any[]} */
   let ipsAvailable = [];
+  /** @type {any} */
   let ipsTotals = null;
   let ipsTruncated = false;
+  /** @type {number | null} */
   let ipsRouterId = null;       // routerId we last fetched for; refetch when changed
   let ipsRouterName = '';
 
@@ -242,11 +263,12 @@
       ipsTruncated = !!data?.truncated;
       ipsRouterId = rid;
       ipsRouterName = data?.router?.name || '';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       ipsError = e.message || 'No se pudo obtener la lista de IPs disponibles.';
     } finally { ipsLoading = false; }
   }
 
+  /** @param {string} ip */
   function pickIp(ip) {
     newClient.mikrotik.remoteAddress = ip;
     ipsPopoverOpen = false;
@@ -270,11 +292,14 @@
   // Drives the "Perfil PPPoE" select in the edit modal. Reactive to the
   // currently-selected router on the form — when the operator changes
   // routers we drop the stale list and refetch.
+  /** @type {any[]} */
   let profiles = [];
   let profilesLoading = false;
   let profilesError = '';
+  /** @type {number | null} */
   let profilesRouterId = null;
 
+  /** @param {number} routerId */
   async function loadProfiles(routerId) {
     profilesLoading = true;
     profilesError = '';
@@ -283,7 +308,7 @@
       const data = await routersApi.pppoeProfiles(routerId);
       profiles = Array.isArray(data) ? data : [];
       profilesRouterId = routerId;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       profilesError = e.message || 'No se pudieron cargar los perfiles del router';
       profilesRouterId = null;
     } finally {
@@ -315,6 +340,7 @@
   async function load() {
     loading = true; error = '';
     try {
+      /** @type {Record<string, any>} */
       const params = { page, limit: pageSize, sortBy, sortOrder: sortDir };
       if (q.trim())     params.search  = q.trim();
       if (status)       params.status  = status;
@@ -325,7 +351,7 @@
       const res = await clientsApi.getPage(params);
       clients = res?.data ?? [];
       total   = res?.meta?.total ?? clients.length;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al cargar clientes';
     } finally {
       loading = false;
@@ -372,11 +398,13 @@
   function onFilterChange() { page = 1; load(); }
 
   // ── Sorting ─────────────────────────────────────────
+  /** @param {string} col */
   function toggleSort(col) {
     if (sortBy === col) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
     else { sortBy = col; sortDir = 'asc'; }
     load();
   }
+  /** @param {string} col */
   function sortIcon(col) {
     if (sortBy !== col) return ArrowUpDown;
     return sortDir === 'asc' ? ArrowUp : ArrowDown;
@@ -384,6 +412,7 @@
 
   // ── Pagination ──────────────────────────────────────
   $: totalPages = Math.max(1, Math.ceil(total / pageSize));
+  /** @param {number} p */
   function setPage(p) {
     if (p < 1 || p > totalPages || p === page) return;
     page = p;
@@ -400,49 +429,57 @@
   $: kpiBalance    = clients.reduce((s, c) => s + (c.balance || 0), 0);
 
   // ── UI helpers ──────────────────────────────────────
+  /** @param {string|null|undefined} name */
   function initials(name) {
     if (!name) return '?';
     return name.trim().split(/\s+/).slice(0, 2).map(s => s[0] || '').join('').toUpperCase() || '?';
   }
+  /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((cents || 0) / 100);
   }
 
+  /** @param {string} s */
   function statusLabel(s) {
-    return ({ ACTIVE:'Activo', SUSPENDED:'Suspendido', INACTIVE:'Inactivo', PENDING:'Pendiente' })[s] || s;
+    return (/** @type {Record<string,string>} */ ({ ACTIVE:'Activo', SUSPENDED:'Suspendido', INACTIVE:'Inactivo', PENDING:'Pendiente' }))[s] || s;
   }
+  /** @param {string} s */
   function statusBadgeClass(s) {
-    return ({ ACTIVE:'badge-green', SUSPENDED:'badge-red', PENDING:'badge-yellow', INACTIVE:'badge-gray' })[s] || 'badge-gray';
+    return (/** @type {Record<string,string>} */ ({ ACTIVE:'badge-green', SUSPENDED:'badge-red', PENDING:'badge-yellow', INACTIVE:'badge-gray' }))[s] || 'badge-gray';
   }
 
   // ── Action handlers ─────────────────────────────────
+  /** @param {MouseEvent} e */
   function closeMenuOnClick(e) {
-    if (!e.target.closest('[data-action-menu]')) openMenuId = null;
+    if (!(/** @type {HTMLElement} */ (e.target)).closest('[data-action-menu]')) openMenuId = null;
   }
   onMount(() => { document.addEventListener('click', closeMenuOnClick); });
   onDestroy(() => { document.removeEventListener('click', closeMenuOnClick); });
 
+  /** @param {any} c */
   async function suspendClient(c) {
     openMenuId = null;
     try {
       await clientsApi.suspend(c.id);
       await load();
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
   }
+  /** @param {any} c */
   async function activateClient(c) {
     openMenuId = null;
     try {
       await clientsApi.activate(c.id);
       await load();
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
   }
+  /** @param {any} c */
   async function deleteClient(c) {
     openMenuId = null;
     if (!confirm(`¿Eliminar al cliente "${c.name}"? Esta acción no se puede deshacer.`)) return;
     try {
       await clientsApi.remove(c.id);
       await load();
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
   }
 
   // ── Modal ───────────────────────────────────────────
@@ -462,6 +499,7 @@
     }
   }
 
+  /** @param {any} client @param {string} mode */
   async function openClientModal(client, mode) {
     modalError = '';
     modalLoading = true;
@@ -469,7 +507,7 @@
     editingId = client.id;
     newClient = emptyClient();
     try {
-      const data = await clientsApi.getOne(client.id);
+      const data = /** @type {any} */ (await clientsApi.getOne(client.id));
       const c = data?.client || data;  // tolerate either shape
       // Strip leading +57 from phone if present
       const rawPhone = c.phone || '';
@@ -506,7 +544,7 @@
           status:        c.mikrotikAccount?.status        || c.status         || 'ACTIVE',
         }
       };
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       modalError = e.message || 'Error al cargar cliente';
     } finally {
       modalLoading = false;
@@ -549,7 +587,7 @@
       await clientsApi.create(buildPayload());
       closeModal();
       await load();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       modalError = e.message || 'Error al crear cliente';
     } finally { modalLoading = false; }
   }
@@ -561,12 +599,13 @@
       await clientsApi.update(editingId, buildPayload());
       closeModal();
       await load();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       modalError = e.message || 'Error al guardar cambios';
     } finally { modalLoading = false; }
   }
 
   // ── Payment modal ───────────────────────────────────
+  /** @param {import('$lib/types').Client} client */
   function openPaymentModal(client) {
     payClient = client;
     payOpen = true;
@@ -584,6 +623,7 @@
   // Detect clients that came in via the MikroTik import flow. The import
   // writes a distinctive prefix into `notes` — cheap and schema-free.
   const IMPORT_PREFIX = 'Importado desde MikroTik';
+  /** @param {any} c */
   function isImported(c) {
     return typeof c?.notes === 'string' && c.notes.startsWith(IMPORT_PREFIX);
   }
@@ -593,7 +633,9 @@
   let importRouterId = '';
   let importStep = 'pick';   // pick | connecting | reading | comparing | importing | done | error
   let importError = '';
+  /** @type {any} */
   let importSummary = null;  // { total, imported, skipped, errors, details }
+  /** @type {ReturnType<typeof setTimeout>[]} */
   let importTimers = [];
 
   function openImport() {
@@ -628,7 +670,7 @@
       importStep = 'done';
       // Refresh the clients list so the new rows appear.
       await load();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       importTimers.forEach(clearTimeout); importTimers = [];
       importError = e.message || 'No se pudo importar.';
       importStep = 'error';
@@ -1271,7 +1313,7 @@
 
         {#if importSummary?.details && importSummary.errors > 0}
           <div class="border border-slate-200 rounded-lg max-h-32 overflow-y-auto p-2 mb-5 text-xs">
-            {#each importSummary.details.filter(d => d.status === 'error') as d}
+            {#each importSummary.details.filter((/** @type {any} */ d) => d.status === 'error') as d}
               <div class="font-mono text-red-700 truncate" title={d.reason}>{d.username}: {d.reason}</div>
             {/each}
           </div>
