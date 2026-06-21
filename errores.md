@@ -102,7 +102,15 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
   import), 12 catch, params de funciones, mapas inline → cast `Record`.
 - `params` de búsqueda como `Record<string,any>` (se les añaden claves dinámicas).
 - Se añadió `ip?` al tipo `Router` (el API lo deriva de la ruta principal). Build ✓.
-### Fase 4 — network/+page.svelte (116)  ⬜
+### Fase 4 — network/+page.svelte (117 → 0)  ✅
+- Estado tipado (stores nodes/edges, devices/connections/zones, Maps, viewport,
+  form/editing como any), 10 catch, params (incl. destructuring de SvelteFlow).
+- Mapas/objetos dinámicos (`byZone`, `savedViews`) → `Record`.
+- Props de SvelteFlow con tipos estrictos: `nodeTypes`/`CANVAS_EXTENT`/`SMOOTH`
+  casteados; `snapToGrid` (no existe en los tipos de la versión) pasado por spread.
+- `createConnection(...,null)` → `undefined` (el wrapper espera `string|undefined`).
+- types.d.ts: `Zone._count?`. ZoneTabs: props `activeId`(string|number)/zones/counts
+  tipados (de paso bajó de 15 a 11; resto en Fase 9). Build ✓.
 ### Fase 5 — clients/new (57), invoices/[id] (47), dashboard (47)  ⬜
 ### Fase 6 — RegisterPaymentModal (44), users (43), billing-cycles (40), plans (39)  ⬜
 ### Fase 7 — payment-links* (37+28+16), invoices (32), system/backups (30), inventory (30)  ⬜
@@ -125,3 +133,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-21 | 1 | 1441 | 1150 | clients/[id] 290→0. + props RegisterPaymentModal e isAdmin. Build ✓. |
 | 2026-06-21 | 2 | 1150 | 994 | notifications 158→0. Bug toggleSmtpPassword (reveal inexistente) corregido. Build ✓. |
 | 2026-06-21 | 3 | 994 | 878 | clients/+page 126→0. + tipo Router.ip. Build ✓. |
+| 2026-06-21 | 4 | 878 | 761 | network/+page 117→0. + Zone._count, ZoneTabs props, props SvelteFlow casteados. Build ✓. |

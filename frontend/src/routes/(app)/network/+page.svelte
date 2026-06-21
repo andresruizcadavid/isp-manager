@@ -19,6 +19,7 @@
     Settings, Activity, CircleDot, Check, Clock, Loader2, AlertCircle
   } from 'lucide-svelte';
 
+  /** @type {any} */
   const nodeTypes = { device: DeviceNode };
 
   // Canvas bounds: hard origin at (0,0) so the operator can't pan or place
@@ -27,19 +28,32 @@
   // Number.POSITIVE_INFINITY is what SvelteFlow accepts for "no limit".
   const ORIGIN = 0;
   const INF = Number.POSITIVE_INFINITY;
+  /** @type {[[number, number], [number, number]]} */
   const CANVAS_EXTENT = [[ORIGIN, ORIGIN], [INF, INF]];
+  /** SvelteFlow edge/connection-line type (casted: the installed lib types are stricter). */
+  const SMOOTH = /** @type {any} */ ('smoothstep');
+  /** Props no tipados en SvelteFlowProps de esta versión; se pasan por spread. */
+  const flowExtra = /** @type {any} */ ({ snapToGrid: true });
 
+  /** @type {import('svelte/store').Writable<any[]>} */
   const nodes = writable([]);
+  /** @type {import('svelte/store').Writable<any[]>} */
   const edges = writable([]);
 
+  /** @type {any[]} */
   let devices = [];           // raw devices from API (id-indexed via map)
+  /** @type {Map<string, any>} */
   let devicesById = new Map();
+  /** @type {any[]} */
   let connections = [];       // raw NetworkConnection rows
+  /** @type {string | null} */
   let selectedId = null;
   let loading = true;
 
   // Zones / tabs
+  /** @type {any[]} */
   let zones = [];             // [{ id, name, color, _count }]
+  /** @type {string | number} */
   let activeZoneTab = 'all';  // 'all' | 'none' | Int
 
   // Shared viewports (pan+zoom) per tab — persisted on the backend so every
@@ -47,15 +61,19 @@
   // SvelteFlow's `viewport` prop expects a Writable store ($viewport is
   // dereferenced inside the component), not a plain object — passing a
   // POJO crashes the render. Hence writable() here.
+  /** @type {Record<string, any>} */
   let savedViews = {};                 // key -> { posX, posY, zoom }
   const viewport = writable({ x: 0, y: 0, zoom: 1 });
   let viewportDirty = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let viewportSaveTimer = null;
   let suppressViewportSave = false;
 
   // CRUD modal state
   let formOpen = false;
+  /** @type {any} */
   let editing = null;         // null = create mode; object = edit
+  /** @type {any} */
   let form = { name: '', ip: '', type: 'ROUTER', notes: '', zoneId: null };
   let saving = false;
   let formError = '';
@@ -71,6 +89,7 @@
   const IP_RE = /^(\d{1,3}\.){3}\d{1,3}$/;
 
   // ── Edge color from device statuses ───────────────────────
+  /** @param {string} sourceId @param {string} targetId */
   function edgeColor(sourceId, targetId) {
     const s = devicesById.get(sourceId)?.status;
     const t = devicesById.get(targetId)?.status;
@@ -80,6 +99,7 @@
     return '#94a3b8';                                            // gray
   }
 
+  /** @param {any} d */
   function toNode(d) {
     return {
       id: d.id,
@@ -90,6 +110,7 @@
     };
   }
 
+  /** @param {any} c */
   function toEdge(c) {
     return {
       id: c.id,
@@ -102,6 +123,7 @@
   }
 
   // Returns true if device d should render in the current tab.
+  /** @param {any} d */
   function isInActiveTab(d) {
     if (activeZoneTab === 'all') return true;
     if (activeZoneTab === 'none') return d.zoneId == null;
@@ -120,12 +142,14 @@
       .map(toEdge));
   }
 
+  /** @param {any[]} conns */
   function rebuildEdges(conns) {
     connections = conns;
     applyFilter();
   }
 
   $: tabCounts = (() => {
+    /** @type {Record<string, number>} */
     const byZone = {};
     let none = 0;
     for (const d of devices) {
@@ -170,7 +194,7 @@
       for (const d of snapped) {
         networkApi.updatePosition(d.id, d.posX, d.posY).catch(() => {});
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       toasts.error('No se pudieron cargar los dispositivos: ' + e.message);
     } finally {
       loading = false;
@@ -178,6 +202,7 @@
   }
 
   // ── Viewport persistence (per tab, shared via DB) ────────
+  /** @param {string | number} tab */
   function viewportKeyForTab(tab) {
     if (tab === 'all')  return 'all';
     if (tab === 'none') return 'none';
@@ -191,6 +216,7 @@
   // applies the saved view or computes a one-time fit from the node
   // bounding box.
 
+  /** @param {string | number} tab */
   function restoreViewportForTab(tab) {
     const key = viewportKeyForTab(tab);
     const v = savedViews[key];
@@ -228,6 +254,7 @@
     setTimeout(() => { suppressViewportSave = false; }, 300);
   }
 
+  /** @param {{ x: number, y: number, zoom: number }} vp */
   function queueViewportSave({ x, y, zoom }) {
     if (suppressViewportSave) return;
     viewportDirty = true;
@@ -239,17 +266,19 @@
         await networkApi.saveView(key, x, y, zoom);
         savedViews = { ...savedViews, [key]: { posX: x, posY: y, zoom } };
         viewportDirty = false;
-      } catch (e) {
+      } catch (/** @type {any} */ e) {
         toasts.error('No se pudo guardar el encuadre del mapa: ' + e.message);
       }
     }, 400);
   }
 
+  /** @param {any} vp */
   function handleMoveEnd(vp) {
     if (vp) queueViewportSave(vp);
   }
 
   // ── Zone tabs handlers ────────────────────────────────────
+  /** @param {CustomEvent<any>} e */
   function handleSelectZone(e) {
     activeZoneTab = e.detail;
     applyFilter();
@@ -257,6 +286,7 @@
     // Each tab has its own saved framing; restore it on switch.
     setTimeout(() => restoreViewportForTab(activeZoneTab), 50);
   }
+  /** @param {CustomEvent<any>} e */
   async function handleCreateZone(e) {
     try {
       const created = await zonesApi.create({ name: e.detail.name });
@@ -265,20 +295,22 @@
       applyFilter();
       syncUrl();
       toasts.success(`Zona "${created.name}" creada`);
-    } catch (err) {
+    } catch (/** @type {any} */ err) {
       toasts.error(err.message);
     }
   }
+  /** @param {CustomEvent<any>} e */
   async function handleRenameZone(e) {
     const { id, name } = e.detail;
     try {
       await zonesApi.update(id, { name });
       zones = zones.map(z => z.id === id ? { ...z, name } : z);
       toasts.success('Zona renombrada');
-    } catch (err) {
+    } catch (/** @type {any} */ err) {
       toasts.error(err.message);
     }
   }
+  /** @param {CustomEvent<any>} e */
   async function handleDeleteZone(e) {
     const { id } = e.detail;
     try {
@@ -290,7 +322,7 @@
       await refresh();
       syncUrl();
       toasts.success('Zona eliminada');
-    } catch (err) {
+    } catch (/** @type {any} */ err) {
       toasts.error('No se pudo eliminar: ' + err.message);
     }
   }
@@ -303,8 +335,12 @@
   }
 
   // ── Live updates from socket.io ───────────────────────────
-  let updateUnsub, eventUnsub;
+  /** @type {(() => void) | undefined} */
+  let updateUnsub;
+  /** @type {(() => void) | undefined} */
+  let eventUnsub;
 
+  /** @param {any} u */
   function applyDeviceUpdate(u) {
     if (!u) return;
     const dev = devicesById.get(u.id);
@@ -337,6 +373,7 @@
     formError = '';
     formOpen = true;
   }
+  /** @param {any} d */
   function openEdit(d) {
     editing = d;
     form = {
@@ -355,7 +392,7 @@
   function pickSpawnPosition() {
     const visible = devices.filter(isInActiveTab);
     const STEP = 200;
-    const collides = (x, y) => visible.some(d => Math.abs(d.posX - x) < STEP && Math.abs(d.posY - y) < STEP);
+    const collides = (/** @type {number} */ x, /** @type {number} */ y) => visible.some(d => Math.abs(d.posX - x) < STEP && Math.abs(d.posY - y) < STEP);
     for (let row = 0; row < 12; row++) {
       for (let col = 0; col < 12; col++) {
         const x = 80 + col * STEP;
@@ -381,12 +418,13 @@
       }
       formOpen = false;
       await refresh();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       formError = e.message;
     } finally {
       saving = false;
     }
   }
+  /** @param {string} id */
   async function removeDevice(id) {
     if (!confirm('¿Eliminar este dispositivo del mapa?')) return;
     try {
@@ -394,7 +432,7 @@
       selectedId = null;
       await refresh();
       toasts.success('Dispositivo eliminado');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       toasts.error(e.message);
     }
   }
@@ -403,7 +441,7 @@
     try {
       const r = await networkApi.probeNow();
       toasts.success(`Probe ejecutado: ${r.swept} nodos · ${r.transitions} cambios`);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       toasts.error(e.message);
     }
   }
@@ -422,10 +460,14 @@
   //   error    — last save failed; pending stays queued for retry
   let syncState = 'synced';
   let syncError = '';
+  /** @type {Date | null} */
   let lastSavedAt = null;
+  /** @type {Map<string, { x: number, y: number }>} */
   const pendingMoves = new Map();    // nodeId -> { x, y } latest desired position
+  /** @type {ReturnType<typeof setTimeout> | null} */
   let flushTimer = null;
 
+  /** @param {string} id @param {number} x @param {number} y @param {{ eager?: boolean }} [opts] */
   function queueMove(id, x, y, { eager = false } = {}) {
     pendingMoves.set(id, { x, y });
     syncState = 'dirty';
@@ -455,7 +497,7 @@
       });
       lastSavedAt = new Date();
       syncState = pendingMoves.size > 0 ? 'dirty' : 'synced';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       // Put the batch back so the next flush retries. The user sees "Error".
       for (const [id, pos] of batch) pendingMoves.set(id, pos);
       syncState = 'error';
@@ -463,10 +505,12 @@
     }
   }
 
+  /** @param {any} ev */
   function handleNodeDrag({ targetNode }) {
     if (!targetNode?.id || !targetNode?.position) return;
     queueMove(targetNode.id, targetNode.position.x, targetNode.position.y);
   }
+  /** @param {any} ev */
   function handleNodeDragStop({ targetNode }) {
     if (!targetNode?.id || !targetNode?.position) return;
     queueMove(targetNode.id, targetNode.position.x, targetNode.position.y, { eager: true });
@@ -477,6 +521,7 @@
   // with the new positions. We compare each tick against a "last known"
   // map and queue diffs. This catches keyboard moves and programmatic
   // updates too.
+  /** @type {Map<string, { x: number, y: number }>} */
   const lastKnownPos = new Map();
   function startNodesPositionWatch() {
     nodes.subscribe((arr) => {
@@ -528,15 +573,16 @@
 
   // Connection is a PROP (onconnect), not an event. Receives the Connection
   // object directly: { source, target, sourceHandle, targetHandle }.
+  /** @param {any} connection */
   async function onConnect(connection) {
     const { source, target } = connection || {};
     if (!source || !target || source === target) return;
     try {
-      const created = await networkApi.createConnection(source, target, null);
+      const created = await networkApi.createConnection(source, target, undefined);
       connections = [...connections, created];
       edges.update(arr => [...arr, toEdge(created)]);
       toasts.success('Conexión creada');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       toasts.error(e.message);
     }
   }
@@ -545,6 +591,7 @@
   // Handles BOTH edges deleted via the Delete key AND nodes deleted that
   // way (cascading their edges) — we persist the edge deletion explicitly
   // since SvelteFlow only mutates its in-memory copy.
+  /** @param {{ nodes?: any[], edges?: any[] }} payload */
   async function onDelete({ nodes: deletedNodes = [], edges: deletedEdges = [] }) {
     for (const e of deletedEdges) {
       try { await networkApi.removeConnection(e.id); } catch {}
@@ -557,6 +604,7 @@
     }
   }
 
+  /** @param {{ nodes?: any[] }} payload */
   function handleSelectionChange({ nodes: selected }) {
     selectedId = selected?.[0]?.id ?? null;
   }
@@ -565,7 +613,9 @@
   // We synthesize double-click with a 350ms window between two clicks on
   // the same node id. Resolves device from devicesById so the modal sees
   // the latest status/latency, not a stale copy bundled in the node object.
+  /** @type {{ id: string | null, t: number }} */
   let _lastNodeClick = { id: null, t: 0 };
+  /** @param {{ node?: any }} payload */
   function handleNodeClick({ node }) {
     if (!node?.id) return;
     const now = Date.now();
@@ -670,9 +720,9 @@
         nodeExtent={CANVAS_EXTENT}
         onMoveEnd={(_, vp) => handleMoveEnd(vp)}
         snapGrid={[16, 16]}
-        snapToGrid
-        defaultEdgeOptions={{ type: 'smoothstep' }}
-        connectionLineType="smoothstep"
+        {...flowExtra}
+        defaultEdgeOptions={{ type: SMOOTH }}
+        connectionLineType={SMOOTH}
         onconnect={onConnect}
         ondelete={onDelete}
         on:nodedrag={(e) => handleNodeDrag(e.detail)}

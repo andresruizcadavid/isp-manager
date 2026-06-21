@@ -52,6 +52,8 @@ export interface Zone {
   color?: string | null;
   routerId?: number | null;
   router?: Router | null;
+  /** Conteos agregados que añade el listado (_count.clients, etc.). */
+  _count?: Record<string, number>;
   createdAt?: string;
   updatedAt?: string;
 }

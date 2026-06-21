@@ -13,8 +13,11 @@
   import { createEventDispatcher, tick } from 'svelte';
   import { Plus, X, Trash2, Pencil } from 'lucide-svelte';
 
+  /** @type {any[]} */
   export let zones = [];           // [{ id, name, color, _count? }]
+  /** @type {string | number} */
   export let activeId = 'all';     // 'all' | 'none' | Int
+  /** @type {{ all: number, none: number, byZone: Record<string, number> }} */
   export let counts = { all: 0, none: 0, byZone: {} };
 
   const dispatch = createEventDispatcher();
