@@ -3,23 +3,30 @@
   import { FileText, Loader2, AlertCircle, ExternalLink } from 'lucide-svelte';
   import { portalApi } from '$lib/api/portal.api.js';
 
+  /** @type {any[]} */
   let invoices = [];
   let loading = true;
   let error = '';
+  /** @type {Record<string, boolean>} */
   let paying = {};
 
-  onMount(async () => { try { invoices = await portalApi.getInvoices(); } catch (e) { error = e.message; } finally { loading = false; } });
+  onMount(async () => { try { invoices = await portalApi.getInvoices(); } catch (/** @type {any} */ e) { error = e.message; } finally { loading = false; } });
 
+  /** @param {number} [c] */
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((c||0)/100); }
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' }) : ''; }
 
+  /** @type {Record<string, string>} */
   const badge = { PAID:'bg-emerald-100 text-emerald-700', PENDING:'bg-amber-100 text-amber-700', OVERDUE:'bg-red-100 text-red-700', PARTIAL:'bg-blue-100 text-blue-700', CANCELLED:'bg-slate-100 text-slate-500' };
+  /** @type {Record<string, string>} */
   const label = { PAID:'Pagada', PENDING:'Pendiente', OVERDUE:'Vencida', PARTIAL:'Parcial', CANCELLED:'Anulada' };
 
+  /** @param {string} id */
   async function handlePay(id) {
     paying = {...paying, [id]: true};
     try { const r = await portalApi.payInvoice(id); window.open(r.checkoutUrl, '_blank'); }
-    catch (e) { alert(e.message); }
+    catch (/** @type {any} */ e) { alert(e.message); }
     finally { paying = {...paying, [id]: false}; }
   }
 </script>

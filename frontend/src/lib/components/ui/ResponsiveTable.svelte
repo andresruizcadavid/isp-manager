@@ -23,7 +23,7 @@
    * can stay fully customized.
    */
 
-  /** Items to iterate for the mobile card view. */
+  /** @type {any[]} Items to iterate for the mobile card view. */
   export let items = [];
   /** Toggle table classes (passed to the desktop <table>). */
   export let tableClass = 'data-table';

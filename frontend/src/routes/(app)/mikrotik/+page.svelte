@@ -14,7 +14,7 @@
     loading = true; error = '';
     try {
       routers = await routersApi.getAll();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al cargar routers';
     } finally { loading = false; }
   }

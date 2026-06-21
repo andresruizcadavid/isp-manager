@@ -31,7 +31,7 @@
       const json = await res.json();
       if (!res.ok) throw new Error(json.error?.message || 'Error');
       success = true;
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
     finally { loading = false; }
   }
 </script>

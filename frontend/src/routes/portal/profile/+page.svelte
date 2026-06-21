@@ -7,7 +7,7 @@
   let loading = true;
   let error = '';
 
-  onMount(async () => { try { profile = await portalApi.getProfile(); } catch (e) { error = e.message; } finally { loading = false; } });
+  onMount(async () => { try { profile = await portalApi.getProfile(); } catch (/** @type {any} */ e) { error = e.message; } finally { loading = false; } });
 </script>
 
 <svelte:head><title>Mi Perfil — Mi Portal</title></svelte:head>

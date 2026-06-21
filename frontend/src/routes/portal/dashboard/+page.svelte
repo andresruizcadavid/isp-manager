@@ -9,7 +9,7 @@
 
   onMount(async () => {
     try { data = await portalApi.getDashboard(); }
-    catch (e) { error = e.message; }
+    catch (/** @type {any} */ e) { error = e.message; }
     finally { loading = false; }
   });
 

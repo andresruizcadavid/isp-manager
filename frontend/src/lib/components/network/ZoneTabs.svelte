@@ -24,9 +24,11 @@
 
   let creating = false;
   let newName = '';
+  /** @type {string | number | null} */
   let renamingId = null;
   let renameValue = '';
 
+  /** @param {string | number} id */
   function setActive(id) {
     if (renamingId != null) return;
     dispatch('select', id);
@@ -35,7 +37,7 @@
   async function startCreate() {
     creating = true; newName = '';
     await tick();
-    document.querySelector('.create-input')?.focus();
+    /** @type {HTMLElement | null} */ (document.querySelector('.create-input'))?.focus();
   }
   async function submitCreate() {
     const name = newName.trim();
@@ -45,13 +47,15 @@
   }
   function cancelCreate() { creating = false; newName = ''; }
 
+  /** @param {any} zone @param {Event} [e] */
   async function startRename(zone, e) {
     e?.stopPropagation();
     renamingId = zone.id;
     renameValue = zone.name;
     await tick();
-    document.querySelector(`#rename-${zone.id}`)?.select?.();
+    /** @type {HTMLInputElement | null} */ (document.querySelector(`#rename-${zone.id}`))?.select?.();
   }
+  /** @param {any} zone */
   function submitRename(zone) {
     const name = renameValue.trim();
     renamingId = null;
@@ -59,6 +63,7 @@
   }
   function cancelRename() { renamingId = null; }
 
+  /** @param {any} zone @param {Event} e */
   function confirmDelete(zone, e) {
     e.stopPropagation();
     const n = counts.byZone[zone.id] || 0;

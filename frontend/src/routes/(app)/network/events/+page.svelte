@@ -5,7 +5,9 @@
   import { toastStore as toasts } from '$lib/stores/toast.store.js';
   import { ArrowLeft, Download, Filter, RotateCw } from 'lucide-svelte';
 
+  /** @type {any[]} */
   let events = [];
+  /** @type {any[]} */
   let devices = [];
   let loading = true;
 
@@ -21,6 +23,7 @@
   ];
 
   function buildQuery() {
+    /** @type {Record<string, any>} */
     const q = {};
     if (f.deviceId) q.deviceId = f.deviceId;
     if (f.status)   q.status   = f.status;
@@ -33,7 +36,7 @@
     loading = true;
     try {
       events = await networkApi.listEvents(buildQuery());
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       toasts.error(e.message);
     } finally {
       loading = false;
@@ -60,6 +63,7 @@
       .catch(e => toasts.error('CSV: ' + e.message));
   }
 
+  /** @type {(() => void) | undefined} */
   let unsub;
   onMount(async () => {
     ensureSocket();
@@ -68,9 +72,11 @@
   });
   onDestroy(() => unsub?.());
 
+  /** @param {string|Date} d */
   function fmt(d) {
     return new Date(d).toLocaleString();
   }
+  /** @param {string} [s] */
   function statusClass(s) { return 'status-' + (s||'unknown').toLowerCase(); }
 </script>
 

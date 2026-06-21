@@ -2,6 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 
 	export let value = '';
+	/** @type {any[]} */
 	export let options = [];
 	export let placeholder = 'Seleccione una opción';
 	export let disabled = false;
@@ -17,27 +18,31 @@
 
 	const baseClasses = 'block w-full rounded-lg border transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2';
 	
+	/** @type {Record<string, string>} */
 	const sizeClasses = {
 		sm: 'px-3 py-1.5 text-sm',
 		md: 'px-4 py-2 text-sm',
 		lg: 'px-6 py-3 text-base'
 	};
 
-	const stateClasses = error 
-		? 'border-error focus:ring-error' 
+	const stateClasses = error
+		? 'border-error focus:ring-error'
 		: 'border-base-300 focus:ring-primary';
 
 	$: selectClasses = `${baseClasses} ${sizeClasses[size]} ${stateClasses} ${disabled ? 'bg-base-200 cursor-not-allowed' : 'bg-base-100'} ${className}`;
 
+	/** @param {Event} event */
 	function handleChange(event) {
-		value = event.target.value;
+		value = /** @type {HTMLSelectElement} */ (event.target).value;
 		dispatch('change', { value });
 	}
 
+	/** @param {Event} event */
 	function handleFocus(event) {
 		dispatch('focus', event);
 	}
 
+	/** @param {Event} event */
 	function handleBlur(event) {
 		dispatch('blur', event);
 	}

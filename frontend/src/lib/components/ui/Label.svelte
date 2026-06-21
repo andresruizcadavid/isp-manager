@@ -6,7 +6,7 @@
 	$: labelClasses = `block text-sm font-medium text-base-content ${required ? 'text-error' : ''} ${className}`;
 </script>
 
-<label {htmlFor} class={labelClasses}>
+<label for={htmlFor} class={labelClasses}>
 	<slot />
 	{#if required}
 		<span class="text-error">*</span>

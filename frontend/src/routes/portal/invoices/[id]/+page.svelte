@@ -5,17 +5,21 @@
   import { ArrowLeft, ExternalLink, Loader2, AlertCircle, CreditCard, CheckCircle } from 'lucide-svelte';
   import { portalApi } from '$lib/api/portal.api.js';
 
+  /** @type {any} */
   let inv = null;
   let loading = true;
   let error = '';
   let paying = false;
   let polling = false;
+  /** @type {ReturnType<typeof setInterval> | null} */
   let pollTimer = null;
 
-  onMount(async () => { try { inv = await portalApi.getInvoice($page.params.id); } catch (e) { error = e.message; } finally { loading = false; } });
+  onMount(async () => { try { inv = await portalApi.getInvoice($page.params.id); } catch (/** @type {any} */ e) { error = e.message; } finally { loading = false; } });
   onDestroy(() => { if (pollTimer) clearInterval(pollTimer); });
 
+  /** @param {number} [c] */
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((c||0)/100); }
+  /** @param {string|Date|null|undefined} d */
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric' }) : ''; }
 
   async function handlePay() {
@@ -25,7 +29,7 @@
       window.open(r.checkoutUrl, '_blank');
       startPolling();
     }
-    catch (e) { alert(e.message); }
+    catch (/** @type {any} */ e) { alert(e.message); }
     finally { paying = false; }
   }
 
@@ -51,7 +55,7 @@
           // Re-fetch full invoice to refresh payments list
           inv = await portalApi.getInvoice($page.params.id);
         }
-      } catch (e) { /* ignore transient polling errors */ }
+      } catch (/** @type {any} */ e) { /* ignore transient polling errors */ }
     }, 3000);
   }
 </script>

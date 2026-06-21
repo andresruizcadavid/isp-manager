@@ -14,7 +14,7 @@
     try {
       const { redirectUrl } = await paymentsApi.getWompiCheckout(invoice.id);
       window.location.href = redirectUrl;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       loading = false;
       toastError(e.message || 'Error al iniciar pago con Wompi');
     }

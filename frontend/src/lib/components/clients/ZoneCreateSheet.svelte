@@ -55,7 +55,7 @@
       });
       reset();
       open = false;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo crear la zona';
     } finally {
       saving = false;

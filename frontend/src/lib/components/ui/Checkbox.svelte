@@ -12,11 +12,13 @@
 
 	const dispatch = createEventDispatcher();
 
+	/** @param {Event} event */
 	function handleChange(event) {
-		checked = event.target.checked;
+		checked = /** @type {HTMLInputElement} */ (event.target).checked;
 		dispatch('change', { checked });
 	}
 
+	/** @param {Event} event */
 	function handleClick(event) {
 		dispatch('click', event);
 	}

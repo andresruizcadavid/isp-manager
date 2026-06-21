@@ -7,7 +7,7 @@
   let loading = true;
   let error = '';
 
-  onMount(async () => { try { payments = await portalApi.getPayments(); } catch (e) { error = e.message; } finally { loading = false; } });
+  onMount(async () => { try { payments = await portalApi.getPayments(); } catch (/** @type {any} */ e) { error = e.message; } finally { loading = false; } });
 
   function fmtCOP(c) { return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format((c||0)/100); }
   function fmtDate(d) { return d ? new Date(d).toLocaleDateString('es-CO', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' }) : ''; }

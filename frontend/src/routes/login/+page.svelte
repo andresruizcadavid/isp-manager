@@ -32,7 +32,7 @@
     try {
       await authStore.login({ email, password });
       goto('/dashboard');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Credenciales incorrectas';
     } finally {
       loading = false;

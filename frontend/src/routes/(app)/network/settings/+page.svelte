@@ -65,7 +65,7 @@
         lastTestedAt = cfg.lastTestedAt;
         lastTestResult = cfg.lastTestResult;
       }
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       toasts.error(e.message);
     } finally {
       loading = false;
@@ -82,7 +82,7 @@
         probeDownCount: Number(form.probeDownCount)
       });
       toasts.success('Configuración guardada');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       toasts.error(e.message);
     } finally {
       saving = false;
@@ -100,7 +100,7 @@
       toasts.success('Mensaje de prueba enviado ✓');
       lastTestedAt = new Date().toISOString();
       lastTestResult = 'success';
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       lastTestedAt = new Date().toISOString();
       lastTestResult = 'error: ' + e.message;
       toasts.error('No se pudo enviar: ' + e.message);

@@ -3,6 +3,7 @@
 	export let size = 'md';
 	export let className = '';
 
+	/** @type {Record<string, string>} */
 	const variantClasses = {
 		primary: 'badge-primary',
 		secondary: 'badge-secondary',
@@ -16,6 +17,7 @@
 		outline: 'badge-outline'
 	};
 
+	/** @type {Record<string, string>} */
 	const sizeClasses = {
 		xs: 'badge-xs',
 		sm: 'badge-sm',

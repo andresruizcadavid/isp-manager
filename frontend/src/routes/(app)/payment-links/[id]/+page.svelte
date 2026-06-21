@@ -87,7 +87,7 @@
         <div class="flex justify-between"><dt class="text-text-muted">Estado</dt>
           <dd>
             <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full {link.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : link.status === 'expired' ? 'bg-slate-100 text-slate-600' : link.status === 'cancelled' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}">
-              {{ paid:'Pagado', pending:'Pendiente', expired:'Expirado', cancelled:'Cancelado' }[link.status] || link.status}
+              {(/** @type {Record<string,string>} */ ({ paid:'Pagado', pending:'Pendiente', expired:'Expirado', cancelled:'Cancelado' }))[link.status] || link.status}
             </span>
           </dd>
         </div>
@@ -188,7 +188,7 @@
             <tr><td class="font-medium text-text-muted">Estado</td>
               <td>
                 <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full {link.paymentAttempt.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : link.paymentAttempt.status === 'FAILED' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}">
-                  {{ PENDING:'Pendiente', COMPLETED:'Completado', FAILED:'Fallido', EXPIRED:'Expirado' }[link.paymentAttempt.status] || link.paymentAttempt.status}
+                  {(/** @type {Record<string,string>} */ ({ PENDING:'Pendiente', COMPLETED:'Completado', FAILED:'Fallido', EXPIRED:'Expirado' }))[link.paymentAttempt.status] || link.paymentAttempt.status}
                 </span>
               </td>
             </tr>

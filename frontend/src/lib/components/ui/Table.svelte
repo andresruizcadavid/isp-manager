@@ -1,5 +1,7 @@
 <script>
+	/** @type {any[]} */
 	export let data = [];
+	/** @type {any[]} */
 	export let columns = [];
 	export let loading = false;
 	export let pagination = false;
@@ -10,6 +12,7 @@
 	$: totalPages = pagination ? Math.ceil(data.length / pageSize) : 1;
 	$: paginatedData = pagination ? data.slice((currentPage - 1) * pageSize, currentPage * pageSize) : data;
 
+	/** @param {number} page */
 	function changePage(page) {
 		if (page >= 1 && page <= totalPages) {
 			currentPage = page;

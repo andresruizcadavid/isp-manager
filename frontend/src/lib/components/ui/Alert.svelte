@@ -3,6 +3,7 @@
 	export let dismissible = false;
 	export let show = true;
 
+	/** @type {Record<string, string>} */
 	const variantClasses = {
 		info: 'bg-info text-info-content border-info',
 		success: 'bg-success text-success-content border-success',

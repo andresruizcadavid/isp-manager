@@ -23,20 +23,24 @@
 
 	$: textareaClasses = `${baseClasses} ${stateClasses} ${disabled ? 'bg-base-200 cursor-not-allowed' : 'bg-base-100'} ${className}`;
 
+	/** @param {Event} event */
 	function handleInput(event) {
-		value = event.target.value;
+		value = /** @type {HTMLTextAreaElement} */ (event.target).value;
 		dispatch('input', { value });
 	}
 
+	/** @param {Event} event */
 	function handleChange(event) {
-		value = event.target.value;
+		value = /** @type {HTMLTextAreaElement} */ (event.target).value;
 		dispatch('change', { value });
 	}
 
+	/** @param {Event} event */
 	function handleFocus(event) {
 		dispatch('focus', event);
 	}
 
+	/** @param {Event} event */
 	function handleBlur(event) {
 		dispatch('blur', event);
 	}

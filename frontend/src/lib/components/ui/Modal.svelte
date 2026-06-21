@@ -8,6 +8,7 @@
 
 	const dispatch = createEventDispatcher();
 
+	/** @type {Record<string, string>} */
 	const sizeClasses = {
 		sm: 'modal-box-sm',
 		md: 'modal-box-md',
@@ -28,6 +29,7 @@
 		dispatch('close');
 	}
 
+	/** @param {KeyboardEvent} event */
 	function handleKeydown(event) {
 		if (event.key === 'Escape') {
 			handleClose();

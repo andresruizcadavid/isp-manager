@@ -60,7 +60,7 @@
         <div class="flex justify-between"><dt class="text-text-muted">Estado</dt>
           <dd>
             <span class="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full {attempt.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : attempt.status === 'FAILED' ? 'bg-red-100 text-red-700' : attempt.status === 'EXPIRED' ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-700'}">
-              {{ PENDING:'Pendiente', COMPLETED:'Completado', FAILED:'Fallido', EXPIRED:'Expirado' }[attempt.status] || attempt.status}
+              {(/** @type {Record<string,string>} */ ({ PENDING:'Pendiente', COMPLETED:'Completado', FAILED:'Fallido', EXPIRED:'Expirado' }))[attempt.status] || attempt.status}
             </span>
           </dd>
         </div>

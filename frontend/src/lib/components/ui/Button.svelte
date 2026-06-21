@@ -13,6 +13,7 @@
 
 	const baseClasses = 'inline-flex items-center justify-center font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2';
 	
+	/** @type {Record<string, string>} */
 	const variantClasses = {
 		primary: 'bg-primary text-primary-content hover:bg-primary-focus focus:ring-primary',
 		secondary: 'bg-secondary text-secondary-content hover:bg-secondary-focus focus:ring-secondary',
@@ -26,6 +27,7 @@
 		info: 'bg-info text-info-content hover:bg-info-focus focus:ring-info'
 	};
 
+	/** @type {Record<string, string>} */
 	const sizeClasses = {
 		xs: 'px-2 py-1 text-xs',
 		sm: 'px-3 py-1.5 text-sm',
@@ -36,6 +38,7 @@
 
 	$: classes = `${baseClasses} ${variantClasses[variant]} ${sizeClasses[size]} ${fullWidth ? 'w-full' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`;
 
+	/** @param {Event} event */
 	function handleClick(event) {
 		if (!disabled && !loading) {
 			dispatch('click', event);

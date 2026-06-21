@@ -10,9 +10,12 @@
   } from 'lucide-svelte';
 
   let loading = true;
+  /** @type {any[]} */
   let rows    = [];
+  /** @type {any} */
   let meta    = { hasMore: false, nextCursor: null };
   let error   = '';
+  /** @type {string | null} */
   let expandedId = null;       // id of the row whose results table is open
 
   async function load(reset = true) {
@@ -25,7 +28,7 @@
       const incoming = env?.data ?? [];
       rows = reset ? incoming : [...rows, ...incoming];
       meta = env?.meta ?? { hasMore: false, nextCursor: null };
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo cargar el historial';
     } finally {
       loading = false;
@@ -34,6 +37,7 @@
 
   onMount(() => load(true));
 
+  /** @param {string|Date|null|undefined} s */
   function fmtDateTime(s) {
     if (!s) return '—';
     return new Date(s).toLocaleString('es-CO', {
@@ -41,12 +45,15 @@
       hour: '2-digit', minute: '2-digit'
     });
   }
+  /** @param {string} id */
   function toggle(id) {
     expandedId = expandedId === id ? null : id;
   }
 
   // Tiny per-row helpers to surface key payload fields without verbose code.
+  /** @param {any} row */
   function planIdOf(row) { return row?.payload?.planId || '—'; }
+  /** @param {any} row */
   function flags(row) {
     const p = row?.payload || {};
     const out = [];
@@ -55,6 +62,7 @@
     if (p.includeSuspended)       out.push('incl. suspendidos');
     return out;
   }
+  /** @param {string} status */
   function statusBadge(status) {
     switch (status) {
       case 'ok':      return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: 'OK' };

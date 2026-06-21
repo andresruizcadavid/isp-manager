@@ -14,9 +14,13 @@
   let dateTo = new Date().toISOString().split('T')[0];
   let groupBy = 'month';
 
+  /** @type {any} */
   let dashboard = null;
+  /** @type {any} */
   let revenue = null;
+  /** @type {any} */
   let clients = null;
+  /** @type {any} */
   let invoices = null;
 
   const tabs = [
@@ -27,32 +31,34 @@
   ];
 
   async function loadDashboard() {
-    try { dashboard = await reportsApi.dashboard(); } catch (e) { console.error(e); }
+    try { dashboard = await reportsApi.dashboard(); } catch (/** @type {any} */ e) { console.error(e); }
   }
   async function loadRevenue() {
-    try { revenue = await reportsApi.revenue({ dateFrom, dateTo, groupBy }); } catch (e) { console.error(e); }
+    try { revenue = await reportsApi.revenue({ dateFrom, dateTo, groupBy }); } catch (/** @type {any} */ e) { console.error(e); }
   }
   async function loadClients() {
-    try { clients = await reportsApi.clientsOverview({ dateFrom, dateTo, groupBy }); } catch (e) { console.error(e); }
+    try { clients = await reportsApi.clientsOverview({ dateFrom, dateTo, groupBy }); } catch (/** @type {any} */ e) { console.error(e); }
   }
   async function loadInvoices() {
-    try { invoices = await reportsApi.invoicesSummary({ dateFrom, dateTo, groupBy }); } catch (e) { console.error(e); }
+    try { invoices = await reportsApi.invoicesSummary({ dateFrom, dateTo, groupBy }); } catch (/** @type {any} */ e) { console.error(e); }
   }
 
   async function load() {
     loading = true; error = '';
     try {
       await Promise.all([loadDashboard(), loadRevenue(), loadClients(), loadInvoices()]);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al cargar reportes';
     } finally { loading = false; }
   }
   onMount(load);
 
+  /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
     if (cents == null || cents === undefined) return '—';
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(cents / 100);
   }
+  /** @param {number|null|undefined} n */
   function fmtNumber(n) {
     if (n == null || n === undefined) return '—';
     return new Intl.NumberFormat('es-CO').format(n);

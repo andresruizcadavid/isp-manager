@@ -19,7 +19,7 @@
       if (status) params.status = status;
       const res = await api.get('/mikrotik/accounts?' + new URLSearchParams(params));
       accounts = res?.data ?? [];
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al cargar cuentas';
     } finally { loading = false; }
   }

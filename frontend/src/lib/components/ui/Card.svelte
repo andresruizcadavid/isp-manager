@@ -4,6 +4,7 @@
 	export let shadow = 'normal';
 	export let border = true;
 
+	/** @type {Record<string, string>} */
 	const paddingClasses = {
 		none: '',
 		sm: 'p-4',
@@ -12,6 +13,7 @@
 		xl: 'p-10'
 	};
 
+	/** @type {Record<string, string>} */
 	const shadowClasses = {
 		none: '',
 		sm: 'shadow-sm',

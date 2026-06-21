@@ -17,6 +17,7 @@
     dispatch('close');
   }
 
+  /** @param {KeyboardEvent} e */
   function onKey(e) {
     if (e.key === 'Escape' && open) close();
   }

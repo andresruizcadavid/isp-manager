@@ -73,7 +73,7 @@
       success = 'Router creado correctamente';
       // Redirect to the edit page after a short pause so the user sees feedback.
       setTimeout(() => goto(`/mikrotik/routers/${created.id}`), 600);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'Error al crear el router';
     } finally { saving = false; }
   }

@@ -18,7 +18,7 @@
     try {
       const data = await api.get('/clients?limit=500&status=ACTIVE');
       clients = Array.isArray(data) ? data : data.clients || data.data || [];
-    } catch (e) { error = 'Error al cargar clientes'; }
+    } catch (/** @type {any} */ e) { error = 'Error al cargar clientes'; }
     finally { clientsLoading = false; }
   });
 
@@ -58,7 +58,7 @@
         description: form.description || `Cobro por $${Number(form.amount).toLocaleString('es-CO')}`
       });
       goto(`/invoices/${invoice.id}`);
-    } catch (e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; }
     finally { submitting = false; }
   }
 </script>
