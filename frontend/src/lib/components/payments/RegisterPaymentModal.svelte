@@ -32,6 +32,7 @@
 
   const PAYABLE = ['PENDING', 'OVERDUE', 'PARTIAL'];
 
+  /** @type {string[]} */
   let selected = [];        // ids de facturas marcadas
   let amountTouched = false; // si el operador editó el monto a mano
   let payAmount = '';
@@ -42,7 +43,9 @@
   let errorText = '';
 
   // Evidencia opcional (misma UX que el modal anterior)
+  /** @type {File | null} */
   let payFile = null;
+  /** @type {string | null} */
   let payFilePreview = null;
   let payFileError = '';
   const EVIDENCE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
@@ -51,14 +54,17 @@
   // Acción secundaria: generar factura de un mes suelto
   let genOpen = false;
   let genYear = new Date().getFullYear();
+  /** @type {any} */
   let monthsData = null;
   let monthsLoading = false;
+  /** @type {number | null} */
   let genBusyMonth = null;
 
   const MONTHS_ES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
   $: payable = (invoices || []).filter(i => PAYABLE.includes(i.status));
 
+  /** @param {any} inv */
   function balanceOf(inv) {
     return inv.balanceDue > 0 ? inv.balanceDue : (inv.amount ?? inv.total ?? 0);
   }
@@ -78,39 +84,46 @@
     }
   });
 
+  /** @param {string} id */
   function toggle(id) {
     selected = selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id];
   }
 
+  /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
     if (cents == null) return '$0';
     return `$${(cents / 100).toLocaleString('es-CO')}`;
   }
 
+  /** @param {any} inv */
   function periodLabel(inv) {
     if (inv.periodMonth) return `${MONTHS_ES[inv.periodMonth - 1]} ${inv.periodYear || ''}`.trim();
     if (inv.dueDate) return new Date(inv.dueDate).toLocaleDateString('es-CO', { month: 'short', year: 'numeric' });
     return '';
   }
 
+  /** @type {Record<string, string>} */
   const STATUS_BADGE = {
     OVERDUE: 'bg-red-50 text-red-700 ring-1 ring-red-100',
     PENDING: 'bg-amber-50 text-amber-700 ring-1 ring-amber-100',
     PARTIAL: 'bg-sky-50 text-sky-700 ring-1 ring-sky-100',
   };
+  /** @type {Record<string, string>} */
   const STATUS_LABEL = { OVERDUE: 'Vencida', PENDING: 'Pendiente', PARTIAL: 'Parcial' };
 
+  /** @param {Event} e */
   function onFile(e) {
     payFileError = '';
-    const file = e.target?.files?.[0] || null;
+    const input = /** @type {HTMLInputElement} */ (e.target);
+    const file = input.files?.[0] || null;
     if (!file) { clearFile(); return; }
     if (!EVIDENCE_MIME.includes(file.type)) {
       payFileError = 'Tipo no permitido. Usa JPG / PNG / WebP / HEIC / PDF.';
-      e.target.value = ''; return;
+      input.value = ''; return;
     }
     if (file.size > EVIDENCE_BYTES) {
       payFileError = `Archivo muy grande (${(file.size / 1024 / 1024).toFixed(1)} MB). Máximo 8 MB.`;
-      e.target.value = ''; return;
+      input.value = ''; return;
     }
     payFile = file;
     if (payFilePreview?.startsWith('blob:')) URL.revokeObjectURL(payFilePreview);
@@ -141,10 +154,10 @@
         try {
           const up = await billingApi.uploadEvidence(paymentId, payFile);
           if (!up.ok) console.warn('Evidence upload failed:', up.status);
-        } catch (e) { console.warn('Evidence upload failed:', e?.message); }
+        } catch (/** @type {any} */ e) { console.warn('Evidence upload failed:', e?.message); }
       }
       dispatch('done');
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       errorText = e.message || 'Error al registrar pago';
     } finally {
       saving = false;
@@ -157,22 +170,26 @@
     if (genOpen && !monthsData) await loadMonths();
   }
   async function loadMonths() {
+    const c = client;
+    if (!c) return;
     monthsLoading = true;
     errorText = '';
     try {
-      monthsData = await billingApi.getMonths(client.id, genYear);
-    } catch (e) {
+      monthsData = await billingApi.getMonths(c.id, genYear);
+    } catch (/** @type {any} */ e) {
       errorText = e.message || 'No se pudieron cargar los meses';
     } finally {
       monthsLoading = false;
     }
   }
+  /** @param {any} m */
   async function generateMonth(m) {
-    if (m.invoice) return; // ya tiene factura
+    const c = client;
+    if (!c || m.invoice) return; // ya tiene factura
     genBusyMonth = m.month;
     errorText = '';
     try {
-      const res = await billingApi.generateInvoices(client.id, [{ year: genYear, month: m.month }]);
+      const res = await billingApi.generateInvoices(c.id, [{ year: genYear, month: m.month }]);
       const created = res?.invoices?.[0]?.invoice;
       if (created) {
         // La inyectamos en la lista y la marcamos para cobrar de una vez.
@@ -180,7 +197,7 @@
         selected = [...selected, created.id];
       }
       await loadMonths();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       errorText = e.message || 'No se pudo generar la factura';
     } finally {
       genBusyMonth = null;
@@ -224,7 +241,7 @@
                        class="rounded border-slate-300 text-brand-600 focus:ring-brand-600/30" />
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
-                    <span class="font-mono text-xs text-slate-600">#{inv.invoiceNumber || inv.number || inv.id?.slice(-6)}</span>
+                    <span class="font-mono text-xs text-slate-600">#{inv.invoiceNumber || inv.id?.slice(-6)}</span>
                     <span class="badge {STATUS_BADGE[inv.status] || 'bg-slate-100 text-slate-600'}">
                       {STATUS_LABEL[inv.status] || inv.status}
                     </span>

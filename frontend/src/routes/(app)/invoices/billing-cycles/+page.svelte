@@ -12,14 +12,19 @@
   } from 'lucide-svelte';
 
   let loading = true;
+  /** @type {any[]} */
   let rows = [];
+  /** @type {string | null} */
   let activeCycleId = null;
   let error = '';
+  /** @type {string | null} */
   let expandedId = null;
+  /** @type {Record<string, any>} */
   let impactCache = {};   // cycleId → impact data
 
   // Modal create/edit
   let modalOpen = false;
+  /** @type {string | null} */
   let editingId = null;
   let saving = false;
   let form = emptyForm();
@@ -43,10 +48,12 @@
 
   const MONTH_NAMES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: 'long', year: 'numeric' });
   }
+  /** @param {string} s */
   function toLocalDate(s) {
     // datetime-local input value like "YYYY-MM-DD" — convert to ISO at 00:00 local.
     const [y, m, d] = s.split('-').map(Number);
@@ -61,7 +68,7 @@
       rows = Array.isArray(res) ? res : (res?.data || []);
       const active = rows.find(r => r.status === 'active');
       activeCycleId = active?.id || null;
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo cargar';
     } finally {
       loading = false;
@@ -69,18 +76,20 @@
   }
   onMount(load);
 
+  /** @param {string} id */
   async function toggleExpand(id) {
     expandedId = expandedId === id ? null : id;
     if (expandedId && !impactCache[id]) {
       try {
         impactCache[id] = await api.get(`/billing-cycles/${id}/impact`);
         impactCache = { ...impactCache };
-      } catch (e) {
+      } catch (/** @type {any} */ e) {
         impactCache[id] = { error: e.message };
         impactCache = { ...impactCache };
       }
     }
   }
+  /** @param {string} id */
   async function refreshImpact(id) {
     delete impactCache[id];
     impactCache = { ...impactCache };
@@ -93,6 +102,7 @@
     form = emptyForm();
     modalOpen = true;
   }
+  /** @param {any} row */
   function openEdit(row) {
     editingId = row.id;
     form = {
@@ -140,33 +150,38 @@
       }
       modalOpen = false;
       await load();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudo guardar';
     } finally { saving = false; }
   }
 
+  /** @param {any} row */
   async function activate(row) {
     if (!confirm(`Activar el ciclo de ${MONTH_NAMES[row.month-1]} ${row.year}? Cualquier otro ciclo activo se cerrará.`)) return;
     try { await api.post(`/billing-cycles/${row.id}/activate`, {}); await load(); }
-    catch (e) { error = e.message; }
+    catch (/** @type {any} */ e) { error = e.message; }
   }
+  /** @param {any} row */
   async function close(row) {
     if (!confirm(`Cerrar el ciclo de ${MONTH_NAMES[row.month-1]} ${row.year}? Quedará en modo solo-lectura.`)) return;
     try { await api.post(`/billing-cycles/${row.id}/close`, {}); await load(); }
-    catch (e) { error = e.message; }
+    catch (/** @type {any} */ e) { error = e.message; }
   }
+  /** @param {any} row */
   async function deleteRow(row) {
     if (row.status !== 'draft') { error = 'Solo se pueden eliminar borradores'; return; }
     if (!confirm(`Eliminar el borrador de ${MONTH_NAMES[row.month-1]} ${row.year}?`)) return;
     try { await api.delete(`/billing-cycles/${row.id}`); await load(); }
-    catch (e) { error = e.message; }
+    catch (/** @type {any} */ e) { error = e.message; }
   }
 
+  /** @param {string} s */
   function statusBadge(s) {
     if (s === 'active') return { cls: 'bg-emerald-50 text-emerald-700 border-emerald-200', label: '● Activo' };
     if (s === 'closed') return { cls: 'bg-slate-100 text-slate-500 border-slate-200',     label: 'Cerrado' };
     return                     { cls: 'bg-amber-50 text-amber-700 border-amber-200',     label: 'Borrador' };
   }
+  /** @param {string} p */
   function phaseBadge(p) {
     if (p === 'before')   return { cls: 'bg-slate-100 text-slate-600',  label: 'Antes de inicio' };
     if (p === 'window')   return { cls: 'bg-blue-50 text-blue-700',     label: 'En ventana' };

@@ -8,11 +8,13 @@
     ShieldCheck, Wrench, Loader2, AlertCircle, CheckCircle2
   } from 'lucide-svelte';
 
+  /** @type {import('$lib/types').User[]} */
   let users = [];
   let loading = true;
   let error = '';
 
   let modalOpen = false;
+  /** @type {any} */
   let editing = null;          // null = create; user object = edit
   let saving = false;
   let formError = '';
@@ -26,7 +28,7 @@
     loading = true; error = '';
     try {
       users = await usersApi.list();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       error = e.message || 'No se pudieron cargar los usuarios';
     } finally { loading = false; }
   }
@@ -38,6 +40,7 @@
     formError = '';
     modalOpen = true;
   }
+  /** @param {any} u */
   function openEdit(u) {
     editing = u;
     form = {
@@ -70,6 +73,7 @@
     saving = true;
     try {
       if (editing) {
+        /** @type {any} */
         const payload = {
           email: form.email,
           name: form.name,
@@ -90,11 +94,12 @@
         users = [created, ...users];
       }
       closeModal();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       formError = e.message || 'No se pudo guardar el usuario.';
     } finally { saving = false; }
   }
 
+  /** @param {any} u */
   async function toggleActive(u) {
     if (u.id === $currentUser?.id && u.isActive) {
       alert('No puedes desactivar tu propia cuenta.');
@@ -103,11 +108,12 @@
     try {
       const updated = await usersApi.update(u.id, { isActive: !u.isActive });
       users = users.map(x => x.id === u.id ? updated : x);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert(e.message || 'Error al cambiar estado');
     }
   }
 
+  /** @param {any} u */
   async function removeUser(u) {
     if (u.id === $currentUser?.id) {
       alert('No puedes eliminar tu propia cuenta.');
@@ -118,18 +124,21 @@
       await usersApi.remove(u.id);
       // Soft-delete on backend → user becomes isActive=false.
       users = users.map(x => x.id === u.id ? { ...x, isActive: false } : x);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert(e.message || 'No se pudo eliminar');
     }
   }
 
+  /** @type {Record<string, string>} */
   const ROLE_LABEL = {
     ADMIN:      'Administrador',
     OPERATOR:   'Administrador',
     TECHNICIAN: 'Técnico',
     VIEWER:     'Visualizador'
   };
+  /** @type {Record<string, any>} */
   const ROLE_ICON = { ADMIN: ShieldCheck, OPERATOR: ShieldCheck, TECHNICIAN: Wrench, VIEWER: Users };
+  /** @type {Record<string, string>} */
   const ROLE_BADGE = {
     ADMIN:      'bg-brand-50 text-brand-700 ring-brand-100',
     OPERATOR:   'bg-brand-50 text-brand-700 ring-brand-100',
@@ -137,6 +146,7 @@
     VIEWER:     'bg-slate-50 text-slate-600 ring-slate-200',
   };
 
+  /** @param {string|Date|null|undefined} s */
   function fmtDate(s) {
     if (!s) return '—';
     return new Date(s).toLocaleString('es-CO', {

@@ -8,13 +8,16 @@
     ChevronDown, ChevronRight
   } from 'lucide-svelte';
 
+  /** @type {import('$lib/types').Plan[]} */
   let plans = [];
   let loading = true;
   let error = '';
 
   // Router scoping — profiles are per-router, so the operator picks one.
+  /** @type {import('$lib/types').Router[]} */
   let routers = [];
   let routerId = '';
+  /** @type {any[]} */
   let profiles = [];
   let profilesLoading = false;
   let profilesError = '';
@@ -22,6 +25,7 @@
   // Edit / Create modal
   let showEdit = false;
   let createMode = false;
+  /** @type {any} */
   let editing = null;
   let editError = '';
   let saving = false;
@@ -30,7 +34,7 @@
   async function loadPlans() {
     loading = true; error = '';
     try { plans = (await plansApi.getAll()) || []; }
-    catch (e) { error = e.message || 'Error cargando planes'; }
+    catch (/** @type {any} */ e) { error = e.message || 'Error cargando planes'; }
     finally { loading = false; }
   }
 
@@ -48,7 +52,7 @@
     try {
       const res = await routersApi.pppProfiles(Number(routerId));
       profiles = (res && res.profiles) || [];
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       profilesError = e.message || 'No se pudo consultar el router';
       profiles = [];
     } finally { profilesLoading = false; }
@@ -61,7 +65,9 @@
   }
 
   // ── Orphan / Unlinked profiles (cleanup tool) ───────────────────
+  /** @type {any[]} */
   let orphans = [];
+  /** @type {any[]} */
   let inUseUnlinked = [];
   let orphansLoading = false;
   let orphansError = '';
@@ -74,23 +80,25 @@
       const data = await routersApi.orphanPppProfiles(Number(routerId));
       orphans = data?.orphans || [];
       inUseUnlinked = data?.inUseUnlinked || [];
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       orphansError = e.message || 'No se pudieron leer huérfanos';
       orphans = [];
       inUseUnlinked = [];
     } finally { orphansLoading = false; }
   }
 
+  /** @param {string} name */
   async function deleteOrphan(name) {
     if (!confirm(`¿Eliminar el perfil "${name}" del router? No está en uso ni referenciado.`)) return;
     try {
       await routersApi.deletePppProfile(Number(routerId), name);
       await Promise.all([loadProfiles(), loadOrphans()]);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert('No se pudo eliminar: ' + e.message);
     }
   }
 
+  /** @param {any} profile */
   async function importProfile(profile) {
     const name = prompt('Nombre del plan a crear desde "' + profile.name + '":', profile.name);
     if (!name) return;
@@ -107,7 +115,7 @@
         isActive: true,
       });
       await Promise.all([loadPlans(), loadProfiles(), loadOrphans()]);
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert('Error al importar: ' + e.message);
     }
   }
@@ -118,17 +126,21 @@
 
   // Sync status helper.
   $: profileNames = new Set(profiles.map(p => p.name).filter(Boolean));
+  /** @param {any} plan */
   function syncStatus(plan) {
     if (!routerId) return 'no_router';
     if (!plan.mikrotikProfile) return 'unset';
     return profileNames.has(plan.mikrotikProfile) ? 'synced' : 'missing';
   }
 
+  /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
     if (cents == null) return '—';
     return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(cents / 100);
   }
+  /** @param {number} [kbps] */
   const mbps = (kbps) => kbps ? (kbps / 1000).toFixed(kbps % 1000 ? 1 : 0) : 0;
+  /** @param {string} [rateLimit] */
   function fmtRate(rateLimit) {
     if (!rateLimit) return '—';
     const parts = rateLimit.split(' ');
@@ -143,6 +155,7 @@
   $: kpiNoPrice  = plans.filter(p => !p.isFree && !(p.monthlyPrice || p.price)).length;
   $: kpiSynced   = plans.filter(p => syncStatus(p) === 'synced').length;
 
+  /** @param {any} p */
   function openEdit(p) {
     editing = {
       id: p.id,
@@ -217,10 +230,11 @@
       }
       closeEdit();
       await Promise.all([loadPlans(), loadProfiles()]);
-    } catch (e) { editError = e.message || 'No se pudo guardar'; }
+    } catch (/** @type {any} */ e) { editError = e.message || 'No se pudo guardar'; }
     finally { saving = false; }
   }
 
+  /** @param {any} plan */
   async function deleteOnRouter(plan) {
     if (!routerId || !plan.mikrotikProfile) return;
     if (!confirm(
@@ -231,7 +245,7 @@
     try {
       await routersApi.deletePppProfile(Number(routerId), plan.mikrotikProfile);
       await loadProfiles();
-    } catch (e) {
+    } catch (/** @type {any} */ e) {
       alert('No se pudo eliminar en MikroTik: ' + e.message);
     }
   }

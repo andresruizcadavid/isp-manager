@@ -119,7 +119,12 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 - dashboard: `stats` any, casts `any[]` en derivaciones (`?? []` colapsaba a never[]),
   maps→Record, params de reduce/map/sort.
 - types.d.ts: `Invoice.wisphubId?`, `InvoiceItem.unitPrice?/amount?`, `Payment.createdBy?`. Build ✓.
-### Fase 6 — RegisterPaymentModal (44), users (43), billing-cycles (40), plans (39)  ⬜
+### Fase 6 — RegisterPaymentModal (39→0), users (33→0), billing-cycles (40→0), plans (39→0)  ✅
+- Mismo patrón: estado tipado (listas a tipos de dominio o any[], editing/form/
+  payload como any donde se mutan dinámicamente), catch, mapas→Record, params.
+- RegisterPaymentModal: `selected:string[]`, `payFile/payFilePreview`, captura
+  `const c = client` en loadMonths/generateMonth, `onFile` con currentTarget,
+  quitado `inv.number` (Invoice usa invoiceNumber). Build ✓.
 ### Fase 7 — payment-links* (37+28+16), invoices (32), system/backups (30), inventory (30)  ⬜
 ### Fase 8 — (app)/+layout (29), mikrotik/routers* (25+20+6), update/[token] (22), BulkPlanChangeModal (21), zones (19)  ⬜
 ### Fase 9 — componentes ui/ + network/ + layout/ (≤15 c/u) y resto de páginas portal/  ⬜
@@ -142,3 +147,4 @@ Se hizo primero porque **tipar los wrappers de API propaga tipos a las páginas*
 | 2026-06-21 | 3 | 994 | 878 | clients/+page 126→0. + tipo Router.ip. Build ✓. |
 | 2026-06-21 | 4 | 878 | 761 | network/+page 117→0. + Zone._count, ZoneTabs props, props SvelteFlow casteados. Build ✓. |
 | 2026-06-21 | 5 | 761 | 614 | clients/new + invoices/[id] + dashboard a 0. + Invoice.wisphubId, InvoiceItem.unitPrice/amount, Payment.createdBy. Build ✓. |
+| 2026-06-21 | 6 | 614 | 470 | RegisterPaymentModal + users + billing-cycles + plans a 0. Build ✓. |
