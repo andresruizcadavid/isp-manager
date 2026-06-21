@@ -11,6 +11,8 @@ export const invoicesApi = {
   },
   getOne:         (id)     => api.get(`/invoices/${id}`),
   create:         (data)   => api.post('/invoices', data),
+  update:         (id, data) => api.put(`/invoices/${id}`, data),
+  remove:         (id)     => api.delete(`/invoices/${id}`),
   generateMonthly: ()      => api.post('/invoices/generate-monthly'),
   send:           (id, opts) => api.post(`/invoices/${id}/send`, { channels: opts.channels, sendPdf: opts.sendPdf ?? true, sendPaymentLink: opts.sendPaymentLink ?? false }),
   markPaid:       (id)      => api.post(`/invoices/${id}/mark-paid`),

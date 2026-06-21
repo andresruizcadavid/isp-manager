@@ -210,14 +210,26 @@ class InvoicesController {
       throw new AppError('No se puede modificar una factura pagada', 400, 'INVOICE_ALREADY_PAID');
     }
 
+    // Editar el monto debe mantener total y balanceDue en sincronía. En este
+    // modelo simple total == amount (sin impuestos/descuento). El saldo
+    // pendiente se recalcula respetando lo ya pagado (pagos parciales):
+    //   pagado = total_anterior - saldo_anterior ; saldo_nuevo = total_nuevo - pagado.
+    const data = {};
+    if (updateData.amount != null) {
+      const newTotal = Math.round(updateData.amount * 100);
+      const paid = (existingInvoice.total || 0) - (existingInvoice.balanceDue || 0);
+      data.amount = newTotal;
+      data.total = newTotal;
+      data.balanceDue = Math.max(0, newTotal - paid);
+    }
+    if (updateData.dueDate)     data.dueDate     = new Date(updateData.dueDate);
+    if (updateData.description !== undefined) data.description = updateData.description;
+    if (updateData.periodStart) data.periodStart = new Date(updateData.periodStart);
+    if (updateData.periodEnd)   data.periodEnd   = new Date(updateData.periodEnd);
+
     const invoice = await prisma.invoice.update({
       where: { id },
-      data: {
-        ...(updateData.amount && { amount: updateData.amount * 100 }),
-        ...(updateData.dueDate && { dueDate: new Date(updateData.dueDate) }),
-        ...(updateData.periodStart && { periodStart: new Date(updateData.periodStart) }),
-        ...(updateData.periodEnd && { periodEnd: new Date(updateData.periodEnd) })
-      },
+      data,
       include: {
         client: true,
         plan: true

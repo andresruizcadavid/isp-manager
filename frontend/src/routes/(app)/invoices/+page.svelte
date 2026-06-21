@@ -4,7 +4,8 @@
   import { api } from '$lib/api/client.js';
   import {
     Search, FileText, Eye, AlertCircle,
-    Wallet, Clock, CheckCircle2, AlertTriangle
+    Wallet, Clock, CheckCircle2, AlertTriangle,
+    Pencil, Trash2, X, Loader2, Save
   } from 'lucide-svelte';
 
   let invoices = [];
@@ -97,6 +98,46 @@
   }
   const STATUS_PT = { DRAFT:'Borrador', PENDING:'Pendiente', PAID:'Pagada', OVERDUE:'Vencida', CANCELLED:'Cancelada', REFUNDED:'Reembolsada' };
   const STATUS_CLS = { PAID:'badge-green', PENDING:'badge-yellow', OVERDUE:'badge-red', CANCELLED:'badge-gray', DRAFT:'badge-gray', REFUNDED:'badge-blue' };
+
+  // ── Editar / Eliminar factura ──────────────────────────────
+  let editOpen = false;
+  let editInv = null;
+  let editForm = { amount: '', dueDate: '' };
+  let editSaving = false;
+  let editError = '';
+
+  function openEdit(inv) {
+    editInv = inv;
+    editForm = {
+      amount: Math.round((inv.total ?? inv.amount ?? 0) / 100),
+      dueDate: inv.dueDate ? new Date(inv.dueDate).toISOString().slice(0, 10) : ''
+    };
+    editError = '';
+    editOpen = true;
+  }
+  async function saveEdit() {
+    if (!editInv) return;
+    const amount = Number(editForm.amount);
+    if (!(amount > 0))       { editError = 'El monto debe ser mayor a 0.'; return; }
+    if (!editForm.dueDate)   { editError = 'La fecha de vencimiento es requerida.'; return; }
+    editSaving = true; editError = '';
+    try {
+      await invoicesApi.update(editInv.id, { amount, dueDate: editForm.dueDate });
+      editOpen = false;
+      reloadAll();
+    } catch (e) { editError = e.message || 'No se pudo actualizar la factura.'; }
+    finally { editSaving = false; }
+  }
+
+  async function deleteInvoice(inv) {
+    if (!confirm(`¿Eliminar la factura ${inv.invoiceNumber || ''}?\n\nEsta acción no se puede deshacer.`)) return;
+    try {
+      await invoicesApi.remove(inv.id);
+      reloadAll();
+    } catch (e) {
+      alert(e.message || 'No se pudo eliminar la factura.');
+    }
+  }
 </script>
 
 <svelte:head><title>Facturas — ISP Manager</title></svelte:head>
@@ -244,6 +285,14 @@
                   <a href="/invoices/{inv.id}" class="btn-icon" title="Ver">
                     <Eye size={14} />
                   </a>
+                  {#if inv.status !== 'PAID'}
+                    <button class="btn-icon" title="Editar" on:click={() => openEdit(inv)}>
+                      <Pencil size={14} />
+                    </button>
+                  {/if}
+                  <button class="btn-icon hover:!text-red-600" title="Eliminar" on:click={() => deleteInvoice(inv)}>
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </td>
             </tr>
@@ -264,3 +313,49 @@
     </div>
   </div>
 </div>
+
+<!-- ─── Modal Editar factura ───────────────────────────── -->
+{#if editOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
+       on:click|self={() => (editOpen = false)}>
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+      <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+        <h3 class="font-semibold text-slate-900 flex items-center gap-2">
+          <Pencil size={16} class="text-brand-600" /> Editar factura {editInv?.invoiceNumber || ''}
+        </h3>
+        <button class="btn-icon" on:click={() => (editOpen = false)} title="Cerrar"><X size={16} /></button>
+      </div>
+      <form on:submit|preventDefault={saveEdit} class="px-5 py-4 space-y-4">
+        {#if editError}
+          <div class="flex items-start gap-2 bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2.5 text-sm">
+            <AlertCircle size={14} class="mt-0.5" /> <span>{editError}</span>
+          </div>
+        {/if}
+        <div class="text-xs text-slate-500">
+          Cliente: <span class="font-medium text-slate-700">{editInv?.client?.name ?? '—'}</span>
+        </div>
+        <div>
+          <label for="edit-amount" class="label">Monto (COP)</label>
+          <div class="flex">
+            <span class="inline-flex items-center px-3 rounded-l-lg border border-r-0 border-slate-200 bg-slate-50 text-slate-700 text-sm font-mono">COP</span>
+            <input id="edit-amount" type="number" min="0" step="500" bind:value={editForm.amount}
+                   class="input flex-1 rounded-l-none font-mono" />
+          </div>
+          {#if editInv && (editInv.total ?? 0) !== (editInv.balanceDue ?? 0)}
+            <p class="text-[11px] text-slate-500 mt-1">Esta factura tiene pagos parciales; el saldo pendiente se recalculará.</p>
+          {/if}
+        </div>
+        <div>
+          <label for="edit-due" class="label">Fecha de vencimiento</label>
+          <input id="edit-due" type="date" bind:value={editForm.dueDate} class="input" />
+        </div>
+      </form>
+      <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-100">
+        <button class="btn-secondary" on:click={() => (editOpen = false)} disabled={editSaving}>Cancelar</button>
+        <button class="btn-primary" on:click={saveEdit} disabled={editSaving}>
+          {#if editSaving}<Loader2 size={15} class="animate-spin" /> Guardando…{:else}<Save size={15} /> Guardar cambios{/if}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
