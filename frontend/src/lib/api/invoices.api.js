@@ -28,6 +28,8 @@ export const invoicesApi = {
   generateMonthly: ()      => api.post('/invoices/generate-monthly'),
   /** @param {string} id @param {{ channels?: string[], sendPdf?: boolean, sendPaymentLink?: boolean }} opts */
   send:           (id, opts) => api.post(`/invoices/${id}/send`, { channels: opts.channels, sendPdf: opts.sendPdf ?? true, sendPaymentLink: opts.sendPaymentLink ?? false }),
+  /** Generate a Wompi payment link only (no send). Returns { checkoutUrl, id }. @param {string} id */
+  paymentLink:    (id)      => api.post(`/invoices/${id}/payment-link`, {}),
   /** @param {string} id */
   markPaid:       (id)      => api.post(`/invoices/${id}/mark-paid`),
 };

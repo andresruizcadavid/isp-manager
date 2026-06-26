@@ -706,6 +706,23 @@ class InvoicesController {
     res.send(pdfBuffer);
   });
 
+  // Generate (or refresh) a tracked Wompi payment link for an invoice and
+  // return just the URL — so the operator can copy it and send it themselves
+  // (e.g. from their personal WhatsApp). Unlike /send, this does NOT email or
+  // message anyone; it only creates the link (reconciled normally on payment).
+  generatePaymentLink = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const invoice = await prisma.invoice.findUnique({ where: { id }, select: { id: true, status: true } });
+    if (!invoice) throw new AppError('Factura no encontrada', 404, 'INVOICE_NOT_FOUND');
+    if (invoice.status === 'PAID') throw new AppError('La factura ya está pagada', 400, 'INVOICE_ALREADY_PAID');
+
+    const link = await paymentLinkService.createForInvoice(id, {
+      expiresInDays: 30,
+      redirectUrl: `${env.FRONTEND_URL}/invoices/${id}?wompi=return`
+    });
+    res.json({ success: true, data: { checkoutUrl: link.checkoutUrl, id: link.id } });
+  });
+
   sendPaymentReminders = asyncHandler(async (req, res) => {
     const overdueInvoices = await prisma.invoice.findMany({
       where: {

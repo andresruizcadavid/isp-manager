@@ -83,6 +83,8 @@ const sendInvoiceSchema = z.object({
   sendPaymentLink: z.boolean().optional().default(false)
 });
 router.post('/:id/send', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(sendInvoiceSchema), invoiceController.sendInvoice);
+// Generate a Wompi payment link only (no send) — operator copies & shares it.
+router.post('/:id/payment-link', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), invoiceController.generatePaymentLink);
 
 // Reminders
 router.post('/send-reminders', requireOperatorOrAdmin, invoiceController.sendPaymentReminders);

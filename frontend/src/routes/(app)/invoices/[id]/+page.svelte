@@ -35,6 +35,9 @@
   let sendRunning    = false;
   let sendError      = '';
   let copied         = false;    // payment link copy feedback
+  let manualLink        = '';    // "obtener link (manual)" — link to copy & share yourself
+  let manualLinkLoading = false;
+  let manualLinkError   = '';
 
   // ── Constants ────────────────────────────────────────────────────────
   /** @type {Record<string, string>} */
@@ -181,7 +184,25 @@
     sendResults = null;
     sendError = '';
     copied = false;
+    manualLink = '';
+    manualLinkError = '';
     showSendModal = true;
+  }
+
+  // Generate a Wompi payment link WITHOUT sending — operator copies & shares it.
+  async function getManualLink() {
+    if (!invoice) return;
+    manualLinkLoading = true;
+    manualLinkError = '';
+    try {
+      const res = await invoicesApi.paymentLink(invoice.id);
+      manualLink = res?.checkoutUrl || '';
+      if (!manualLink) manualLinkError = 'No se recibió el link';
+    } catch (/** @type {any} */ e) {
+      manualLinkError = e.message || 'No se pudo generar el link';
+    } finally {
+      manualLinkLoading = false;
+    }
   }
   function closeSendModal() {
     if (sendRunning) return;
@@ -805,6 +826,34 @@
                   <div class="text-xs text-text-secondary">Crea un enlace de pago para que el cliente pague en línea</div>
                 </div>
               </label>
+
+              <!-- Manual: solo obtener el link para enviarlo uno mismo -->
+              <div class="px-3 py-2.5 rounded-lg border border-slate-200">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-sm font-medium text-slate-900">Obtener link de pago (manual)</div>
+                    <div class="text-xs text-text-secondary">Genera el enlace y cópialo para enviarlo tú mismo (ej. tu WhatsApp)</div>
+                  </div>
+                  <button type="button" class="btn-secondary text-xs whitespace-nowrap" on:click={getManualLink} disabled={manualLinkLoading}>
+                    {#if manualLinkLoading}<Loader2 size={13} class="animate-spin" />{:else}<CreditCard size={13} />{/if}
+                    {manualLinkLoading ? 'Generando…' : 'Generar link'}
+                  </button>
+                </div>
+                {#if manualLink}
+                  <div class="flex items-center gap-2 mt-2">
+                    <input type="text" readonly value={manualLink}
+                           class="input text-xs flex-1 font-mono bg-white"
+                           on:focus={e => /** @type {HTMLInputElement} */ (e.currentTarget).select()} />
+                    <button class="btn-secondary text-xs whitespace-nowrap" on:click={() => copyLink(manualLink)}>
+                      {#if copied}<Check size={13} class="text-emerald-600" />{:else}<Copy size={13} />{/if}
+                      {copied ? 'Copiado' : 'Copiar'}
+                    </button>
+                  </div>
+                {/if}
+                {#if manualLinkError}
+                  <p class="text-[11px] text-red-600 mt-1.5">{manualLinkError}</p>
+                {/if}
+              </div>
             </div>
           </div>
 
