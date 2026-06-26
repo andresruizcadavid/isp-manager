@@ -393,12 +393,13 @@
   /** @type {any} */
   let updateResult     = null;     // { publicUrl, expiresAt, dispatch }
   let updateCopied     = false;
-  // Canales por defecto: si el cliente tiene WhatsApp/phone lo precargamos,
-  // si tiene email lo precargamos. Telegram queda off por defecto (raro).
+  // Canales para actualización de datos: solo Email y WhatsApp (Telegram no
+  // está habilitado para este flujo). Si no se elige canal, el operador copia
+  // el enlace y lo envía manualmente (ej. desde su propio WhatsApp).
   /** @type {string[]} */
   let updateSendChannels   = [];
   /** @type {string[]} */
-  let updateNotifyChannels = ['TELEGRAM'];
+  let updateNotifyChannels = [];
 
   function openUpdateSheet() {
     updateError  = '';
@@ -409,7 +410,7 @@
       ...(client?.email ? ['EMAIL']    : []),
       ...(client?.phone ? ['WHATSAPP'] : [])
     ];
-    updateNotifyChannels = ['TELEGRAM'];
+    updateNotifyChannels = [];
     showUpdateSheet = true;
   }
 
@@ -2000,7 +2001,7 @@
       <div>
         <div class="label !mb-2">Enviar enlace al cliente vía</div>
         <div class="space-y-2">
-          {#each ['EMAIL', 'WHATSAPP', 'TELEGRAM'] as ch}
+          {#each ['EMAIL', 'WHATSAPP'] as ch}
             {@const disabled = (ch === 'EMAIL' && !client?.email) || (ch === 'WHATSAPP' && !client?.phone)}
             <label class="flex items-center gap-2 p-2.5 rounded-lg border
                           {updateSendChannels.includes(ch)
@@ -2014,7 +2015,6 @@
                      class="rounded border-slate-300 text-brand-600 focus:ring-brand-600/30" />
               {#if ch === 'EMAIL'}<Mail size={14} class="text-slate-500" />{/if}
               {#if ch === 'WHATSAPP'}<MessageSquare size={14} class="text-emerald-600" />{/if}
-              {#if ch === 'TELEGRAM'}<Send size={14} class="text-sky-600" />{/if}
               <span class="text-sm font-medium text-text-primary">{fmtChannel(ch)}</span>
               {#if ch === 'EMAIL' && !client?.email}
                 <span class="text-xs text-text-muted ml-auto">cliente sin email</span>
@@ -2024,16 +2024,20 @@
             </label>
           {/each}
         </div>
-        <p class="text-xs text-text-muted mt-2">
-          Si no seleccionas ningún canal, podrás copiar el enlace al final y enviarlo manualmente.
-        </p>
+        <div class="mt-2 flex items-start gap-2 p-2.5 rounded-lg border border-dashed border-slate-300 bg-slate-50">
+          <Link2 size={14} class="text-slate-500 flex-shrink-0 mt-0.5" />
+          <p class="text-xs text-text-secondary">
+            <strong class="text-text-primary">Manual:</strong> no selecciones ningún canal y, al generar,
+            copia el enlace para enviarlo tú mismo (ej. desde tu propio WhatsApp).
+          </p>
+        </div>
       </div>
 
       <!-- Notify channels -->
       <div>
         <div class="label !mb-2">Notificarme cuando el cliente lo complete vía</div>
         <div class="flex flex-wrap gap-2">
-          {#each ['EMAIL', 'WHATSAPP', 'TELEGRAM'] as ch}
+          {#each ['EMAIL', 'WHATSAPP'] as ch}
             <button type="button"
                     on:click={() => toggleNotifyChannel(ch)}
                     class="px-4 min-h-[44px] text-sm rounded-lg border font-medium
