@@ -20,6 +20,7 @@ if (!path) { console.error('Falta la ruta del JSON de updates'); process.exit(1)
 
 const rows = JSON.parse(readFileSync(path, 'utf8'));
 let mail = 0, bal = 0, missing = 0, noop = 0;
+const emailConflicts = [];
 
 for (const r of rows) {
   const c = await prisma.client.findUnique({
@@ -33,11 +34,32 @@ for (const r of rows) {
   if (r.balance_new != null && r.balance_new !== c.balance) data.balance = r.balance_new;
   if (Object.keys(data).length === 0) { noop++; continue; }
 
-  if ('email' in data)   mail++;
-  if ('balance' in data) bal++;
   console.log(`  ${apply ? 'APPLY' : 'DRY '} ${c.name.slice(0,24).padEnd(24)} ${JSON.stringify(data)}`);
-  if (apply) await prisma.client.update({ where: { id: c.id }, data });
+  if (apply) {
+    try {
+      await prisma.client.update({ where: { id: c.id }, data });
+      if ('email' in data)   mail++;
+      if ('balance' in data) bal++;
+    } catch (e) {
+      // Client.email is @unique. A duplicate email in the source (same owner,
+      // several services) collides. Skip just the email, still apply balance,
+      // and report it — never abort the whole run.
+      if (e.code === 'P2002' && 'email' in data) {
+        emailConflicts.push({ name: c.name, email: data.email });
+        delete data.email;
+        if (Object.keys(data).length > 0) { await prisma.client.update({ where: { id: c.id }, data }); bal++; }
+        console.log(`  ⚠️  EMAIL en conflicto (único), omitido: ${c.name} → ${r.email_new}${'balance' in data ? ' (balance sí aplicado)' : ''}`);
+      } else { throw e; }
+    }
+  } else {
+    if ('email' in data)   mail++;
+    if ('balance' in data) bal++;
+  }
 }
 
 console.log(`\n${apply ? '✅ APLICADO' : '🔎 DRY-RUN'}: correos=${mail} balances=${bal} sin-cambio=${noop} faltantes=${missing} (de ${rows.length})`);
+if (emailConflicts.length) {
+  console.log(`\n⚠️  ${emailConflicts.length} correo(s) NO asignados por choque de unicidad (revisar — mismo correo en varios clientes):`);
+  for (const x of emailConflicts) console.log(`     ${x.email}  (${x.name})`);
+}
 await prisma.$disconnect();
