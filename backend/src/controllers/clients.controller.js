@@ -406,7 +406,8 @@ class ClientsController {
   // clears the record.
   setCollectionReminder = asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const CHANNELS = ['WHATSAPP', 'EMAIL', 'SMS', 'LLAMADA', 'MANUAL'];
+    // Canales habilitados hoy: WhatsApp y Email. SMS queda permitido para cuando se active.
+    const CHANNELS = ['WHATSAPP', 'EMAIL', 'SMS'];
     const channel = CHANNELS.includes(req.body?.channel) ? req.body.channel : null;
 
     let data;

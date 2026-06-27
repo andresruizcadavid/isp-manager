@@ -319,14 +319,14 @@
   }
 
   // ── Collection reminder (registrar mensaje de cobro) ────────────────
+  // Canales de cobro habilitados actualmente. SMS se sumará más adelante.
   const REM_CHANNELS = [
     { value: 'WHATSAPP', label: 'WhatsApp' },
-    { value: 'EMAIL', label: 'Email' },
-    { value: 'SMS', label: 'SMS' },
-    { value: 'LLAMADA', label: 'Llamada' },
-    { value: 'MANUAL', label: 'Manual' }
+    { value: 'EMAIL', label: 'Email' }
   ];
-  const remLabel = (ch) => (REM_CHANNELS.find(c => c.value === ch)?.label || ch || '');
+  // Labels para mostrar (incluye canales no seleccionables aún, p.ej. registros previos).
+  const REM_LABELS = { WHATSAPP: 'WhatsApp', EMAIL: 'Email', SMS: 'SMS', LLAMADA: 'Llamada', MANUAL: 'Manual' };
+  const remLabel = (ch) => (REM_LABELS[ch] || ch || '');
   const fdateShort = (d) => d ? new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '';
   /** @type {{r:any, channel:string, dateStr:string}|null} */
   let remModal = null;
@@ -335,7 +335,7 @@
     const today = new Date().toISOString().slice(0, 10);
     remModal = {
       r,
-      channel: r.reminderChannel || 'WHATSAPP',
+      channel: REM_CHANNELS.some(c => c.value === r.reminderChannel) ? r.reminderChannel : 'WHATSAPP',
       dateStr: r.reminderSentAt ? new Date(r.reminderSentAt).toISOString().slice(0, 10) : today
     };
   }
