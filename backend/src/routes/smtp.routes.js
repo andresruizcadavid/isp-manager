@@ -4,6 +4,8 @@ import { prisma } from '../config/database.js';
 import nodemailer from 'nodemailer';
 import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
 import { validateBody } from '../middleware/validate.middleware.js';
+import { notificationService } from '../services/notification.service.js';
+import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
 
 const router = Router();
 
