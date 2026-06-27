@@ -462,6 +462,16 @@
     } catch (_) { /* clipboard unavailable */ }
   }
 
+  let updateMsgCopied = false;
+  async function copyUpdateMsg() {
+    if (!updateResult?.whatsappMessage) return;
+    try {
+      await navigator.clipboard.writeText(updateResult.whatsappMessage);
+      updateMsgCopied = true;
+      setTimeout(() => updateMsgCopied = false, 2000);
+    } catch (_) { /* clipboard unavailable */ }
+  }
+
   /** @param {string} ch */
   function fmtChannel(ch) {
     return /** @type {Record<string,string>} */ ({ EMAIL: 'Email', WHATSAPP: 'WhatsApp', TELEGRAM: 'Telegram' })[ch] || ch;
@@ -2121,6 +2131,26 @@
           </button>
         </div>
       </div>
+
+      <!-- WhatsApp message (manual copy / WhatsApp Web) -->
+      {#if updateResult.whatsappMessage}
+        <div>
+          <div class="label !mb-1 flex items-center gap-1.5"><MessageSquare size={13} class="text-emerald-600" /> Mensaje de WhatsApp</div>
+          <textarea readonly rows="8" class="input w-full text-xs font-mono leading-relaxed resize-none">{updateResult.whatsappMessage}</textarea>
+          <div class="flex items-center gap-2 mt-2">
+            <button type="button" class="btn-secondary" on:click={copyUpdateMsg}>
+              {#if updateMsgCopied}<Check size={14} class="text-emerald-600" /> Copiado{:else}<Copy size={14} /> Copiar mensaje{/if}
+            </button>
+            {#if updateResult.whatsappWebUrl}
+              <a href={updateResult.whatsappWebUrl} target="_blank" rel="noopener"
+                 class="btn-primary !bg-emerald-600 hover:!bg-emerald-700 inline-flex items-center gap-1.5">
+                <ExternalLink size={14} /> Abrir WhatsApp Web
+              </a>
+            {/if}
+          </div>
+          <p class="text-xs text-text-muted mt-1.5">Cópialo y pégalo en WhatsApp, o ábrelo con el mensaje ya listo para enviar.</p>
+        </div>
+      {/if}
 
       <!-- Dispatch results -->
       {#if updateResult.sendChannels?.length > 0}

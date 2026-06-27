@@ -1923,9 +1923,13 @@ class ClientsController {
     // Best-effort dispatch — a channel failing must NOT 500 the request.
     // The operator gets the URL back regardless so they can copy-paste.
     let dispatchResults = {};
+    let whatsappMessage = null;
+    let whatsappWebUrl  = null;
     try {
       const d = await dispatchLinkToClient(tokenRow, client);
       dispatchResults = d.results;
+      whatsappMessage = d.whatsappMessage;
+      whatsappWebUrl  = d.whatsappWebUrl;
     } catch (e) {
       console.error('[clients.createUpdateToken] dispatch failed:', e.message);
     }
@@ -1938,7 +1942,9 @@ class ClientsController {
         expiresAt: tokenRow.expiresAt,
         sendChannels:   tokenRow.sendChannels,
         notifyChannels: tokenRow.notifyChannels,
-        dispatch:  dispatchResults
+        dispatch:  dispatchResults,
+        whatsappMessage,
+        whatsappWebUrl
       }
     });
   });

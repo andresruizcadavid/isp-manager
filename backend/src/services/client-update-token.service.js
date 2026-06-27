@@ -24,6 +24,7 @@ import { notificationService } from './notification.service.js';
 import * as whatsapp from './whatsapp.service.js';
 import * as telegram from './telegram.service.js';
 import { renderContract, hashContent, CONTRACT_VERSION } from '../config/contract.js';
+import { BRAND } from '../config/brand.js';
 
 // ── Constants ─────────────────────────────────────────────────────────
 const TOKEN_BYTES   = 32;                  // 256-bit, base64url → 43 chars
@@ -403,6 +404,25 @@ export async function dispatchLinkToClient(tokenRow, client) {
   const greeting  = client.name?.split(/\s+/)[0] || 'Hola';
   const expires   = tokenRow.expiresAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'long' });
 
+  // Compose the WhatsApp message when WhatsApp is a channel OR when no channel
+  // was picked (manual mode) — so the operator can always copy/paste it. If the
+  // client owes money, include the Wompi pay link (NO_DEBT → no debt block).
+  const wantWa = channels.includes('WHATSAPP') || channels.length === 0;
+  let payInfo = null;
+  let whatsappMessage = null;
+  let whatsappWebUrl  = null;
+  if (wantWa && client.phone) {
+    try {
+      payInfo = await getDebtPayLink(tokenRow.token);
+    } catch (e) {
+      if (e?.code !== 'NO_DEBT') console.warn('[update-link] pay link skip:', e?.message);
+    }
+    whatsappMessage = buildUpdateWhatsappMessage({ greeting, expires, url, payInfo });
+    const digits = client.phone.replace(/\D/g, '');
+    const waNum  = digits.length === 10 ? '57' + digits : digits; // CO default
+    whatsappWebUrl = `https://wa.me/${waNum}?text=${encodeURIComponent(whatsappMessage)}`;
+  }
+
   for (const ch of channels) {
     try {
       if (ch === 'EMAIL') {
@@ -426,10 +446,7 @@ Si no esperabas este mensaje, ignóralo.`
       }
       else if (ch === 'WHATSAPP') {
         if (!client.phone) throw new Error('Cliente sin teléfono');
-        const r = await whatsapp.sendText(
-          client.phone,
-          `Hola ${greeting} 👋\n\nPor favor actualiza tus datos en este enlace seguro (vence el ${expires}):\n${url}`
-        );
+        const r = await whatsapp.sendText(client.phone, whatsappMessage);
         results.WHATSAPP = r?.ok ? { ok: true, id: r.id } : { ok: false, error: r?.error || 'unknown' };
       }
       else if (ch === 'TELEGRAM') {
@@ -447,7 +464,32 @@ Si no esperabas este mensaje, ignóralo.`
     }
   }
 
-  return { url, results };
+  return { url, results, whatsappMessage, whatsappWebUrl };
+}
+
+// Builds the customer WhatsApp text for the data-update invitation. Used both to
+// send via the API and to return to the operator for manual copy/paste.
+function buildUpdateWhatsappMessage({ greeting, expires, url, payInfo }) {
+  const lines = [
+    `Hola ${greeting} 👋`,
+    ``,
+    `Te invitamos a actualizar tus datos desde aquí (enlace seguro, vence el ${expires}):`,
+    url
+  ];
+  if (payInfo) {
+    lines.push(
+      ``,
+      `💳 Tienes una factura pendiente por $${payInfo.amountCop.toLocaleString('es-CO')}. Págala fácil y seguro aquí:`,
+      payInfo.checkoutUrl
+    );
+  }
+  lines.push(
+    ``,
+    `¡Gracias por preferirnos! 🙌`,
+    `Soporte Online: ${BRAND.phone}`,
+    `Online, ${BRAND.tagline.toLowerCase()}.`
+  );
+  return lines.join('\n');
 }
 
 // ── 5. Notify technician ──────────────────────────────────────────────
