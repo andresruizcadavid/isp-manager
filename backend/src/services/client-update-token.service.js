@@ -25,6 +25,7 @@ import * as whatsapp from './whatsapp.service.js';
 import * as telegram from './telegram.service.js';
 import { renderContract, hashContent, CONTRACT_VERSION } from '../config/contract.js';
 import { BRAND } from '../config/brand.js';
+import { renderEmailTemplate, EMAIL_PRESETS } from './email-base.template.js';
 
 // ── Constants ─────────────────────────────────────────────────────────
 const TOKEN_BYTES   = 32;                  // 256-bit, base64url → 43 chars
@@ -404,23 +405,43 @@ export async function dispatchLinkToClient(tokenRow, client) {
   const greeting  = client.name?.split(/\s+/)[0] || 'Hola';
   const expires   = tokenRow.expiresAt.toLocaleDateString('es-CO', { day: '2-digit', month: 'long' });
 
-  // Compose the WhatsApp message when WhatsApp is a channel OR when no channel
-  // was picked (manual mode) — so the operator can always copy/paste it. If the
-  // client owes money, include the Wompi pay link (NO_DEBT → no debt block).
-  const wantWa = channels.includes('WHATSAPP') || channels.length === 0;
+  // Resolve the client's debt + Wompi pay link once (shared by WhatsApp & Email).
+  // No debt → getDebtPayLink throws NO_DEBT and payInfo stays null.
   let payInfo = null;
+  try {
+    payInfo = await getDebtPayLink(tokenRow.token);
+  } catch (e) {
+    if (e?.code !== 'NO_DEBT') console.warn('[update-link] pay link skip:', e?.message);
+  }
+
+  // WhatsApp message — composed whenever the client has a phone (for sending and
+  // for manual copy/paste / preview).
   let whatsappMessage = null;
   let whatsappWebUrl  = null;
-  if (wantWa && client.phone) {
-    try {
-      payInfo = await getDebtPayLink(tokenRow.token);
-    } catch (e) {
-      if (e?.code !== 'NO_DEBT') console.warn('[update-link] pay link skip:', e?.message);
-    }
+  if (client.phone) {
     whatsappMessage = buildUpdateWhatsappMessage({ greeting, expires, url, payInfo });
     const digits = client.phone.replace(/\D/g, '');
     const waNum  = digits.length === 10 ? '57' + digits : digits; // CO default
     whatsappWebUrl = `https://wa.me/${waNum}?text=${encodeURIComponent(whatsappMessage)}`;
+  }
+
+  // Email — MISMO contenido/contexto que WhatsApp, con la plantilla branded.
+  // Se arma cuando el cliente tiene email (para enviar y para previsualizar).
+  let emailParts   = null;
+  let emailSubject = null;
+  let emailHtml    = null;
+  if (client.email) {
+    emailParts   = buildUpdateEmailParts({ greeting, expires, url, payInfo });
+    emailSubject = emailParts.subject;
+    emailHtml    = renderEmailTemplate({
+      icon:          EMAIL_PRESETS.general_announcement.icon,
+      title:         emailParts.title,
+      body:          emailParts.body,
+      fields:        emailParts.fields,
+      cta:           emailParts.cta,
+      companyName:   BRAND.name,
+      companyDomain: 'internetonline.co'
+    });
   }
 
   for (const ch of channels) {
@@ -428,19 +449,14 @@ export async function dispatchLinkToClient(tokenRow, client) {
       if (ch === 'EMAIL') {
         if (!client.email) throw new Error('Cliente sin email');
         await notificationService.sendEmailRaw({
-          to:      client.email,
+          to:         client.email,
           notifyType: 'SELF_SERVICE_LINK',
-          subject: 'Actualiza tus datos — ISP Manager',
-          preset:  'general_announcement',
-          title:   'Actualiza tus datos',
-          body:
-`Hola ${greeting},
-
-Tu proveedor de internet necesita verificar y actualizar tus datos de contacto. Usa el siguiente enlace seguro para hacerlo desde tu celular o computador. El enlace es de un solo uso y vence el ${expires}.
-
-${url}
-
-Si no esperabas este mensaje, ignóralo.`
+          subject:    emailParts.subject,
+          preset:     'general_announcement',
+          title:      emailParts.title,
+          body:       emailParts.body,
+          fields:     emailParts.fields,
+          cta:        emailParts.cta
         });
         results.EMAIL = { ok: true };
       }
@@ -464,7 +480,27 @@ Si no esperabas este mensaje, ignóralo.`
     }
   }
 
-  return { url, results, whatsappMessage, whatsappWebUrl };
+  return { url, results, whatsappMessage, whatsappWebUrl, emailSubject, emailHtml };
+}
+
+// Builds the branded email parts for the data-update invitation — MISMO contexto
+// que el mensaje de WhatsApp (enlace + factura pendiente + link de pago).
+function buildUpdateEmailParts({ greeting, expires, url, payInfo }) {
+  let body = `Hola ${greeting},\n\nTe invitamos a actualizar tus datos de contacto desde el botón de abajo. El enlace es seguro, de un solo uso y vence el ${expires}. No necesitas iniciar sesión.`;
+  const fields = [];
+  if (payInfo) {
+    body += `\n\nAdemás, tienes una factura pendiente por $${payInfo.amountCop.toLocaleString('es-CO')}. Puedes pagarla fácil y seguro en línea.`;
+    fields.push({ label: 'Factura pendiente', value: `$${payInfo.amountCop.toLocaleString('es-CO')}` });
+    fields.push({ label: 'Pagar en línea', value: 'Abrir pago seguro', link: payInfo.checkoutUrl });
+  }
+  body += `\n\n¡Gracias por preferirnos!\nSoporte Online: ${BRAND.phone}`;
+  return {
+    subject: 'Actualiza tus datos — Internet Online',
+    title:   'Actualiza tus datos',
+    body,
+    cta:     { text: 'Actualizar mis datos', url },
+    fields
+  };
 }
 
 // Builds the customer WhatsApp text for the data-update invitation. Used both to

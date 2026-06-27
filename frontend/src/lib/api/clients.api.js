@@ -46,6 +46,8 @@ export const clientsApi = {
   sheetCell: (id, body) => api.post(`/clients/${id}/sheet-cell`, body),
   /** Registrar/limpiar el envío del mensaje de cobro. @param {string} id @param {{channel:string|null, sentAt?:string}} body */
   setReminder: (id, body) => api.post(`/clients/${id}/collection-reminder`, body),
+  /** Generar enlace de actualización de datos (envía por los canales elegidos). @param {string} id @param {{sendChannels:string[], notifyChannels?:string[]}} body */
+  requestUpdate: (id, body) => api.post(`/clients/${id}/update-tokens`, body),
   /** @param {string} id */
   notifications: (id)  => api.get(`/clients/${id}/notifications`),
   /** @param {string} id @param {any} data */

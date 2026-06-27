@@ -2152,6 +2152,17 @@
         </div>
       {/if}
 
+      <!-- Email preview (mismo contenido que WhatsApp, plantilla branded) -->
+      {#if updateResult.emailHtml}
+        <div>
+          <div class="label !mb-1 flex items-center gap-1.5"><Mail size={13} class="text-slate-500" /> Correo (previsualización)</div>
+          <div class="rounded-lg border border-slate-200 overflow-hidden bg-white">
+            <iframe title="Previsualización del correo" srcdoc={updateResult.emailHtml} class="w-full" style="height:300px;border:0;" sandbox=""></iframe>
+          </div>
+          <p class="text-xs text-text-muted mt-1.5">Mismo contenido que WhatsApp. Asunto: {updateResult.emailSubject}</p>
+        </div>
+      {/if}
+
       <!-- Dispatch results -->
       {#if updateResult.sendChannels?.length > 0}
         <div>

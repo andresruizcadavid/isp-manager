@@ -1959,11 +1959,15 @@ class ClientsController {
     let dispatchResults = {};
     let whatsappMessage = null;
     let whatsappWebUrl  = null;
+    let emailSubject    = null;
+    let emailHtml       = null;
     try {
       const d = await dispatchLinkToClient(tokenRow, client);
       dispatchResults = d.results;
       whatsappMessage = d.whatsappMessage;
       whatsappWebUrl  = d.whatsappWebUrl;
+      emailSubject    = d.emailSubject;
+      emailHtml       = d.emailHtml;
     } catch (e) {
       console.error('[clients.createUpdateToken] dispatch failed:', e.message);
     }
@@ -1978,7 +1982,9 @@ class ClientsController {
         notifyChannels: tokenRow.notifyChannels,
         dispatch:  dispatchResults,
         whatsappMessage,
-        whatsappWebUrl
+        whatsappWebUrl,
+        emailSubject,
+        emailHtml
       }
     });
   });

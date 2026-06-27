@@ -5,7 +5,8 @@
   import {
     Search, Loader2, AlertCircle, Table2, RefreshCw, Wallet,
     Undo2, Redo2, CheckCircle2, XCircle, X, Banknote, Landmark, Ban, RotateCcw, Plus,
-    Download, Upload, AlertTriangle, Pencil, Trash2, Send, Check
+    Download, Upload, AlertTriangle, Pencil, Trash2, Send, Check,
+    Mail, MessageSquare, Link2, Copy, ExternalLink
   } from 'lucide-svelte';
 
   // ── State ───────────────────────────────────────────
@@ -375,6 +376,44 @@
     finally { remBusy = false; }
   }
 
+  // ── Solicitar actualización de datos (mismo flujo que la ficha) ─────
+  /** @type {{r:any, channels:string[], result:any}|null} */
+  let updModal = null;
+  let updBusy = false;
+  let updUrlCopied = false;
+  let updMsgCopied = false;
+  function openUpdate(r) {
+    updModal = {
+      r,
+      channels: [...(r.email ? ['EMAIL'] : []), ...(r.phone ? ['WHATSAPP'] : [])],
+      result: null
+    };
+  }
+  function toggleUpd(ch) {
+    if (!updModal) return;
+    const s = new Set(updModal.channels);
+    s.has(ch) ? s.delete(ch) : s.add(ch);
+    updModal = { ...updModal, channels: ['EMAIL', 'WHATSAPP'].filter(c => s.has(c)) };
+  }
+  async function genUpdate() {
+    if (!updModal) return;
+    updBusy = true;
+    setStatus('saving', `Generando enlace para ${updModal.r.name}…`);
+    try {
+      const res = await clientsApi.requestUpdate(updModal.r.id, { sendChannels: updModal.channels, notifyChannels: [] });
+      updModal = { ...updModal, result: res };
+      setStatus('ok', `Enlace generado para ${updModal.r.name}`);
+    } catch (e) { setStatus('err', e?.message || 'No se pudo generar el enlace'); }
+    finally { updBusy = false; }
+  }
+  async function copyUpd(text, which) {
+    try {
+      await navigator.clipboard.writeText(text);
+      if (which === 'url') { updUrlCopied = true; setTimeout(() => updUrlCopied = false, 1500); }
+      else { updMsgCopied = true; setTimeout(() => updMsgCopied = false, 1500); }
+    } catch (_) { /* clipboard unavailable */ }
+  }
+
   function onKey(e) {
     const tag = (e.target?.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;   // don't hijack native field editing
@@ -495,6 +534,8 @@
                          on:focus={(e)=>e.target.select()}
                          on:keydown={(e)=>{ if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){ e.target.value=r.name; e.target.blur(); } }}
                          on:blur={(e)=>commit(r,'name',e.target.value)} />
+                  <button class="shrink-0 text-gray-300 hover:text-[#16357E]" title="Solicitar actualización de datos / enviar enlace"
+                          on:click={() => openUpdate(r)}><Link2 class="w-3.5 h-3.5" /></button>
                   <button class="shrink-0 text-gray-300 hover:text-[#16357E]" title="Editar ficha completa"
                           on:click={() => goto(`/clients/${r.id}`)}><Pencil class="w-3.5 h-3.5" /></button>
                   <button class="shrink-0 text-gray-300 hover:text-red-600" title="Eliminar cliente"
@@ -830,6 +871,95 @@
             {#if remBusy}<Loader2 class="w-4 h-4 animate-spin" />{:else}Guardar{/if}
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Solicitar actualización de datos modal -->
+{#if updModal}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" on:click={() => !updBusy && (updModal = null)} on:keydown={(e)=>e.key==='Escape'&&!updBusy&&(updModal=null)} role="presentation">
+    <div class="w-full max-w-lg max-h-[88vh] flex flex-col rounded-xl bg-white shadow-xl" on:click|stopPropagation role="dialog" aria-modal="true">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-100">
+        <div>
+          <h3 class="font-semibold text-gray-900">Solicitar actualización de datos</h3>
+          <p class="text-xs text-gray-500">{updModal.r.name}</p>
+        </div>
+        <button class="text-gray-400 hover:text-gray-700" on:click={() => updModal = null} disabled={updBusy}><X class="w-5 h-5" /></button>
+      </div>
+
+      <div class="flex-1 overflow-auto px-5 py-4 space-y-4">
+        {#if !updModal.result}
+          <!-- Paso 1: canales -->
+          <p class="text-sm text-gray-600">Genera un enlace de un solo uso (vence en 7 días) para que el cliente actualice sus datos y, si debe, pueda pagar.</p>
+          <div>
+            <div class="text-xs font-medium text-gray-600 mb-2">Enviar al cliente vía</div>
+            <div class="space-y-2">
+              {#each [['EMAIL','Email'],['WHATSAPP','WhatsApp']] as [ch,label]}
+                {@const disabled = (ch==='EMAIL' && !updModal.r.email) || (ch==='WHATSAPP' && !updModal.r.phone)}
+                <button type="button" disabled={disabled} on:click={() => toggleUpd(ch)}
+                        class="w-full flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm transition
+                               {updModal.channels.includes(ch) ? 'border-[#16357E] bg-[#eef2ff]' : 'border-gray-300 hover:bg-gray-50'}
+                               {disabled ? 'opacity-50 cursor-not-allowed' : ''}">
+                  {#if updModal.channels.includes(ch)}<Check class="w-4 h-4 text-[#16357E]" />{:else}<span class="w-4 h-4"></span>{/if}
+                  {#if ch==='EMAIL'}<Mail class="w-4 h-4 text-gray-500" />{:else}<MessageSquare class="w-4 h-4 text-emerald-600" />{/if}
+                  <span class="font-medium text-gray-800">{label}</span>
+                  {#if disabled}<span class="ml-auto text-xs text-gray-400">{ch==='EMAIL' ? 'sin email' : 'sin teléfono'}</span>{/if}
+                </button>
+              {/each}
+            </div>
+            <p class="mt-2 text-xs text-gray-500 border border-dashed border-gray-300 rounded-lg px-3 py-2">
+              <b>Manual:</b> no marques ningún canal y, al generar, copia el enlace/mensaje para enviarlo tú mismo.
+            </p>
+          </div>
+        {:else}
+          <!-- Paso 2: resultado -->
+          <div class="flex items-center gap-2 rounded-lg bg-green-50 text-green-800 px-3 py-2 text-sm">
+            <Check class="w-4 h-4" /> Enlace generado — vence el {new Date(updModal.result.expiresAt).toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})}
+          </div>
+          <!-- URL -->
+          <div>
+            <div class="text-xs font-medium text-gray-600 mb-1">URL pública (un solo uso)</div>
+            <div class="flex gap-2">
+              <input readonly value={updModal.result.publicUrl} class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono" />
+              <button class="btn-ghost" on:click={() => copyUpd(updModal.result.publicUrl,'url')}>{#if updUrlCopied}<Check class="w-4 h-4 text-green-600" />{:else}<Copy class="w-4 h-4" />{/if}</button>
+            </div>
+          </div>
+          <!-- WhatsApp -->
+          {#if updModal.result.whatsappMessage}
+            <div>
+              <div class="text-xs font-medium text-gray-600 mb-1 flex items-center gap-1.5"><MessageSquare class="w-3.5 h-3.5 text-emerald-600" /> Mensaje de WhatsApp</div>
+              <textarea readonly rows="7" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono leading-relaxed resize-none">{updModal.result.whatsappMessage}</textarea>
+              <div class="flex gap-2 mt-2">
+                <button class="btn-ghost" on:click={() => copyUpd(updModal.result.whatsappMessage,'msg')}>{#if updMsgCopied}<Check class="w-4 h-4 text-green-600" /> Copiado{:else}<Copy class="w-4 h-4" /> Copiar mensaje{/if}</button>
+                {#if updModal.result.whatsappWebUrl}
+                  <a href={updModal.result.whatsappWebUrl} target="_blank" rel="noopener" class="btn-primary !bg-emerald-600 hover:!bg-emerald-700"><ExternalLink class="w-4 h-4" /> Abrir WhatsApp Web</a>
+                {/if}
+              </div>
+            </div>
+          {/if}
+          <!-- Email preview -->
+          {#if updModal.result.emailHtml}
+            <div>
+              <div class="text-xs font-medium text-gray-600 mb-1 flex items-center gap-1.5"><Mail class="w-3.5 h-3.5 text-gray-500" /> Correo (previsualización) — mismo contenido</div>
+              <div class="rounded-lg border border-gray-200 overflow-hidden bg-white">
+                <iframe title="Previsualización del correo" srcdoc={updModal.result.emailHtml} class="w-full" style="height:300px;border:0;" sandbox=""></iframe>
+              </div>
+              <p class="text-xs text-gray-400 mt-1">Asunto: {updModal.result.emailSubject}</p>
+            </div>
+          {/if}
+        {/if}
+      </div>
+
+      <div class="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-100">
+        {#if !updModal.result}
+          <button class="btn-ghost" on:click={() => updModal = null} disabled={updBusy}>Cancelar</button>
+          <button class="btn-primary" on:click={genUpdate} disabled={updBusy}>
+            {#if updBusy}<Loader2 class="w-4 h-4 animate-spin" /> Generando…{:else}<Link2 class="w-4 h-4" /> Generar enlace{/if}
+          </button>
+        {:else}
+          <button class="btn-primary" on:click={() => updModal = null}>Listo</button>
+        {/if}
       </div>
     </div>
   </div>
