@@ -122,7 +122,21 @@ router.get('/next-pppoe-number', clientController.getNextPppoeNumber);
 // literal path MUST precede `/:id` or Express greedily matches it.
 router.get('/bulk-history', requireOperatorOrAdmin, clientController.getBulkHistory);
 
+// Spreadsheet ("planilla") view: all clients with per-month invoice status for
+// a year. Literal path MUST precede `/:id` so Express does not match "sheet"
+// as a client id.
+router.get('/sheet', clientController.getSheet);
+
+// Deleted-client archive. Literal paths MUST precede `/:id`.
+router.get('/archive', requireOperatorOrAdmin, clientController.getArchive);
+router.get('/archive/:id', requireOperatorOrAdmin, clientController.getArchiveEntry);
+
 router.get('/:id', validateParams(commonSchemas.idParam), clientController.getClient);
+
+// Planilla: act on a single month cell (pay / bill / unbill / unpay). Money op,
+// so requireOperational (technicians register field payments). Validated in the
+// controller (period + action + amount).
+router.post('/:id/sheet-cell', requireOperational, validateParams(commonSchemas.idParam), clientController.sheetCell);
 // Create/update are `requireOperational`: field TECHNICIANs provision new
 // clients and fix their data/IPs on site. Destructive ops (delete, suspend,
 // bulk) remain operator/admin below.

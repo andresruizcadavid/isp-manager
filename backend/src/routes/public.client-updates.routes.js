@@ -27,6 +27,7 @@ import {
   applyUpdate,
   attachClientPhoto,
   notifyTechnician,
+  getDebtPayLink,
   UPDATABLE_FIELDS
 } from '../services/client-update-token.service.js';
 
@@ -86,7 +87,11 @@ const updatePayloadSchema = z.object({
   city:           z.string().max(80).optional().or(z.literal('')),
   documentType:   z.enum(['CC', 'NIT', 'CE', 'TI', 'PAS']).optional(),
   documentNumber: z.string().max(40).optional().or(z.literal('')),
-  coordinates:    z.string().max(80).optional().or(z.literal(''))
+  coordinates:    z.string().max(80).optional().or(z.literal('')),
+  // Aceptación del acta de servicios (obligatoria) + tratamiento de datos.
+  acceptContract: z.boolean().optional(),
+  acceptData:     z.boolean().optional(),
+  contractVersion: z.string().max(40).optional()
 }).strip(); // drop anything outside this shape
 
 // ── Multer (reuse the same dir/limits as evidence routes) ─────────────
@@ -168,7 +173,10 @@ router.put('/:token', validateTokenParam, rateLimit, async (req, res) => {
     });
   }
   try {
-    const { tokenRow, changes, previous } = await applyUpdate(req.params.token, parsed.data);
+    const { tokenRow, changes, previous } = await applyUpdate(req.params.token, parsed.data, {
+      ip:        clientIp(req),
+      userAgent: req.headers['user-agent']
+    });
 
     // Reload the client so the notification has the post-update state and
     // any relations the technician notification might want.
@@ -192,6 +200,18 @@ router.put('/:token', validateTokenParam, rateLimit, async (req, res) => {
         updated: Object.keys(changes)
       }
     });
+  } catch (e) {
+    sendServiceError(res, e);
+  }
+});
+
+// POST /:token/pay — generate (idempotently) a Wompi payment link for the
+// client's current debt so the customer can pay online. Creates an invoice
+// from client.balance if none is open. No body needed.
+router.post('/:token/pay', validateTokenParam, rateLimit, async (req, res) => {
+  try {
+    const data = await getDebtPayLink(req.params.token);
+    res.json({ success: true, data });
   } catch (e) {
     sendServiceError(res, e);
   }

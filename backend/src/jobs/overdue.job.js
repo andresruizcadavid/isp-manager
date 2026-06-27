@@ -33,6 +33,12 @@ class OverdueJob {
 
     // Send final warnings - Run daily at 6:00 PM
     cron.schedule('0 18 * * *', async () => {
+      // Kill-switch: "última advertencia" deshabilitada por defecto (mismo flag
+      // que los recordatorios de deudores). Re-activar con REMINDERS_ENABLED=true.
+      if (process.env.REMINDERS_ENABLED !== 'true') {
+        console.log('⏸️ Final warnings disabled (REMINDERS_ENABLED!=true), skipping');
+        return;
+      }
       console.log('🔄 Starting final warnings job...');
       await this.sendFinalWarnings();
     });

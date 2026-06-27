@@ -7,23 +7,31 @@ import { prisma } from '../config/database.js';
 class InvoiceService {
   async generateInvoiceNumber() {
     try {
-      // Field is `invoiceNumber` after the rename; `@map("number")` keeps
-      // the DB column the same so this is purely a Prisma-side change.
-      const lastInvoice = await prisma.invoice.findFirst({
-        orderBy: { invoiceNumber: 'desc' },
+      // Only canonical INV-#### numbers drive the sequence. Ad-hoc numbers
+      // (e.g. TEST-WOMPI-001, manual entries) can sort higher lexicographically
+      // and used to be picked as "last", producing a colliding next number.
+      // Take the max numeric across INV- numbers instead.
+      const invoices = await prisma.invoice.findMany({
+        where: { invoiceNumber: { startsWith: 'INV-' } },
         select: { invoiceNumber: true }
       });
 
-      let nextNumber = 1;
-
-      if (lastInvoice?.invoiceNumber) {
-        const numericPart = lastInvoice.invoiceNumber.match(/\d+/);
-        if (numericPart) {
-          nextNumber = parseInt(numericPart[0], 10) + 1;
-        }
+      let maxN = 0;
+      for (const { invoiceNumber } of invoices) {
+        const m = invoiceNumber.match(/^INV-(\d+)$/);
+        if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
       }
 
-      return `INV-${String(nextNumber).padStart(4, '0')}`;
+      // Advance past any already-taken number (manual inserts / gaps). Bounded
+      // so we never spin forever.
+      let next = maxN + 1;
+      for (let i = 0; i < 1000; i++) {
+        const candidate = `INV-${String(next).padStart(4, '0')}`;
+        const exists = await prisma.invoice.findUnique({ where: { invoiceNumber: candidate }, select: { id: true } });
+        if (!exists) return candidate;
+        next++;
+      }
+      return `INV-${Date.now()}`;
     } catch (error) {
       console.error('Error generating invoice number:', error);
       return `INV-${Date.now()}`;

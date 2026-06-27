@@ -3,7 +3,8 @@
   import { page } from '$app/stores';
   import {
     User, Mail, Phone, MapPin, IdCard, Camera,
-    Loader2, AlertCircle, CheckCircle2, Save, Upload, X
+    Loader2, AlertCircle, CheckCircle2, Save, Upload, X,
+    CreditCard, FileText, Download, ExternalLink
   } from 'lucide-svelte';
 
   // ── Local API helpers — we DON'T use $lib/api/client.js because that
@@ -40,6 +41,17 @@
     if (!res.ok) throw new Error(json?.error?.message || `HTTP ${res.status}`);
     return json.data;
   }
+  /** @param {string} path @param {any} [body] */
+  async function publicPost(path, body) {
+    const res = await fetch(`${apiBase}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body || {})
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json?.error?.message || `HTTP ${res.status}`);
+    return json.data;
+  }
 
   // ── State ────────────────────────────────────────────────────────────
   let token       = '';
@@ -66,12 +78,26 @@
   /** @type {any[]} */
   let photoUploaded   = [];     // list of successfully uploaded photos this session
 
+  // Deuda + pago (sección superior, solo si hay deuda)
+  /** @type {any} */
+  let debt        = null;
+  let payLoading  = false;
+  let payError    = '';
+  let payUrl      = '';
+
+  // Contrato / acta de servicios (sección final, aceptación obligatoria)
+  /** @type {any} */
+  let contract         = null;
+  let acceptedContract = false;
+
   onMount(async () => {
     token = $page.params.token;
     try {
       const data = await publicGet(`/public/client-updates/${token}`);
       snapshot = data.client;
       expiresAt = data.expiresAt;
+      debt = data.debt || null;
+      contract = data.contract || null;
       // Seed the form with what's already on file so the customer only
       // edits what's wrong.
       form = {
@@ -92,6 +118,10 @@
   });
 
   async function handleSubmit() {
+    if (!acceptedContract) {
+      saveError = 'Debes aceptar el acta de servicios para continuar.';
+      return;
+    }
     saving = true;
     saveError = '';
     try {
@@ -103,11 +133,11 @@
       for (const k of Object.keys(form)) {
         if ((f[k] ?? '') !== (snapshot?.[k] ?? '')) payload[k] = f[k];
       }
-      if (Object.keys(payload).length === 0 && photoUploaded.length === 0) {
-        saveError = 'No has hecho ningún cambio.';
-        saving = false;
-        return;
-      }
+      // La aceptación del acta es la acción principal: siempre se envía, aunque
+      // el cliente no haya cambiado ningún dato.
+      payload.acceptContract  = true;
+      payload.acceptData      = true;
+      payload.contractVersion = contract?.version;
       await publicPut(`/public/client-updates/${token}`, payload);
       success = true;
     } catch (/** @type {any} */ e) {
@@ -115,6 +145,35 @@
     } finally {
       saving = false;
     }
+  }
+
+  // Genera (idempotente) el link de pago de la deuda y lo abre.
+  async function payNow() {
+    payLoading = true;
+    payError = '';
+    try {
+      const data = await publicPost(`/public/client-updates/${token}/pay`, {});
+      payUrl = data?.checkoutUrl || '';
+      if (payUrl) window.open(payUrl, '_blank', 'noopener');
+      else payError = 'No se pudo generar el link de pago.';
+    } catch (/** @type {any} */ e) {
+      payError = e.message || 'No se pudo generar el link de pago.';
+    } finally {
+      payLoading = false;
+    }
+  }
+
+  // Descarga el acta (texto exacto que se acepta) como archivo, para que el
+  // cliente pueda leerlo/guardarlo (requisito CRC).
+  function downloadContract() {
+    if (!contract?.text) return;
+    const blob = new Blob([contract.text], { type: 'text/plain;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = `acta-servicios-${String(contract.version || 'ON-F-01').replace(/\s+/g, '-')}.txt`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
   }
 
   async function handlePhotoUpload() {
@@ -205,6 +264,41 @@
       </p>
     </div>
   </div>
+
+  <!-- Pago pendiente (solo deudores) -->
+  {#if debt?.hasDebt}
+    <div class="card mb-4 overflow-hidden border-2 border-[#FDB913]">
+      <div class="p-5 sm:p-6">
+        <div class="flex items-center gap-2 mb-1">
+          <CreditCard size={18} class="text-[#16357E]" />
+          <h2 class="font-bold text-[#16357E]">Tienes un pago pendiente</h2>
+        </div>
+        <p class="text-sm text-text-secondary">
+          Tu saldo pendiente es <strong class="text-[#16357E]">${debt.amountCop.toLocaleString('es-CO')}</strong>.
+          Puedes pagarlo en línea de forma rápida y segura con tarjeta, PSE, Nequi o corresponsal.
+        </p>
+        <div class="mt-3 flex flex-wrap items-center gap-2">
+          <button type="button" on:click={payNow} disabled={payLoading}
+                  class="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-white
+                         bg-[#16357E] hover:bg-[#0E255C] transition-colors disabled:opacity-60">
+            {#if payLoading}<Loader2 size={15} class="animate-spin" />{:else}<CreditCard size={15} />{/if}
+            {payLoading ? 'Generando…' : 'Pagar ahora'}
+          </button>
+          {#if payUrl}
+            <a href={payUrl} target="_blank" rel="noopener"
+               class="inline-flex items-center gap-1.5 text-sm font-semibold text-[#16357E] underline">
+              <ExternalLink size={14} /> Abrir link de pago
+            </a>
+          {/if}
+        </div>
+        {#if payError}
+          <div class="mt-2 text-sm text-red-600 flex items-center gap-1.5">
+            <AlertCircle size={14} /> {payError}
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
 
   <!-- Datos form -->
   <form on:submit|preventDefault={handleSubmit} class="space-y-4">
@@ -324,6 +418,39 @@
       </div>
     </div>
 
+    <!-- Acta de servicios — aceptación obligatoria -->
+    {#if contract}
+      <div class="card">
+        <div class="card-header">
+          <div class="flex items-center gap-2">
+            <FileText size={16} class="text-slate-600" />
+            <h2 class="font-semibold text-text-primary">Acta de servicios</h2>
+          </div>
+        </div>
+        <div class="card-body space-y-3">
+          <p class="text-xs text-text-muted">
+            Lee el acta de prestación de servicios. Al aceptarla quedará registrada tu
+            aceptación con valor legal (Ley 527 de 1999), incluyendo fecha, hora y dispositivo.
+          </p>
+          <div class="max-h-72 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-3
+                      whitespace-pre-wrap text-[11px] leading-relaxed text-slate-700 font-mono">{contract.text}</div>
+          <button type="button" on:click={downloadContract}
+                  class="inline-flex items-center gap-1.5 text-sm font-semibold text-[#16357E] underline">
+            <Download size={14} /> Descargar acta
+          </button>
+          <label class="flex items-start gap-2 p-3 rounded-lg border-2 cursor-pointer transition
+                        {acceptedContract ? 'border-[#16357E] bg-[#16357E]/5' : 'border-slate-300'}">
+            <input type="checkbox" bind:checked={acceptedContract}
+                   class="mt-0.5 w-4 h-4 rounded border-slate-300" />
+            <span class="text-sm text-text-primary">
+              <strong>Acepto</strong> los términos y condiciones, el acta de servicios y el
+              tratamiento de mis datos personales conforme a la Ley 1581 de 2008.
+            </span>
+          </label>
+        </div>
+      </div>
+    {/if}
+
     {#if saveError}
       <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 text-sm flex items-center gap-2">
         <AlertCircle size={16} /> {saveError}
@@ -332,12 +459,12 @@
 
     <div class="flex items-center justify-end gap-2 pb-6">
       <!-- CTA dorado de marca (igual al botón de los correos) -->
-      <button type="submit" disabled={saving}
+      <button type="submit" disabled={saving || !acceptedContract}
               class="inline-flex items-center gap-2 px-8 py-3 rounded-xl font-extrabold text-[15px]
                      text-[#0E255C] bg-[#FDB913] hover:bg-[#ECA600] transition-colors
                      shadow-[0_4px_12px_rgba(253,185,19,0.35)] disabled:opacity-60">
         {#if saving}<Loader2 size={15} class="animate-spin" />{:else}<Save size={15} />{/if}
-        Guardar mis datos
+        Aceptar y guardar
       </button>
     </div>
   </form>

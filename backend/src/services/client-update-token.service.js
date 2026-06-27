@@ -23,6 +23,7 @@ import { env } from '../config/env.js';
 import { notificationService } from './notification.service.js';
 import * as whatsapp from './whatsapp.service.js';
 import * as telegram from './telegram.service.js';
+import { renderContract, hashContent, CONTRACT_VERSION } from '../config/contract.js';
 
 // ── Constants ─────────────────────────────────────────────────────────
 const TOKEN_BYTES   = 32;                  // 256-bit, base64url → 43 chars
@@ -87,6 +88,26 @@ function buildPublicUrl(token) {
   return `${base}/update/${token}`;
 }
 
+// Monthly fee in COP (not cents): per-client override wins, else plan price.
+function monthlyCop(client) {
+  const cents = (client.monthlyFee && client.monthlyFee > 0)
+    ? client.monthlyFee
+    : (client.plan?.price ?? 0);
+  return Math.round((cents || 0) / 100);
+}
+
+// Render the ON-F-01 acta for a (possibly merged with pending changes) client.
+function renderClientContract(client) {
+  return renderContract({
+    clientName:     client.name,
+    documentType:   client.documentType,
+    documentNumber: client.documentNumber,
+    planName:       client.plan?.name,
+    planPriceCop:   monthlyCop(client),
+    city:           client.city
+  });
+}
+
 // ── 1. Generate ───────────────────────────────────────────────────────
 /**
  * Create a fresh token for a client. Caller must validate that the
@@ -127,7 +148,7 @@ export async function generateToken({
 export async function lookupToken(rawToken, { ip, userAgent } = {}) {
   const row = await prisma.clientUpdateToken.findUnique({
     where: { token: rawToken },
-    include: { client: true }
+    include: { client: { include: { plan: true } } }
   });
   if (!row) {
     const e = new Error('Token no encontrado');
@@ -161,10 +182,98 @@ export async function lookupToken(rawToken, { ip, userAgent } = {}) {
     }).catch(() => {});
   }
 
+  const contractText = renderClientContract(row.client);
+  const balanceCents = row.client.balance || 0;
+
   return {
     client:    publicSnapshot(row.client),
+    // Deuda actual (basada en client.balance del import). Solo el monto — el
+    // link de pago se genera bajo demanda en POST /:token/pay para no crear
+    // facturas en cada carga.
+    debt: {
+      hasDebt:   balanceCents > 0,
+      amountCop: Math.round(balanceCents / 100)
+    },
+    // Acta ON-F-01 renderizada con los datos del cliente + su hash, para que
+    // lo que ve y acepta coincida byte a byte con lo que se guardará.
+    contract: {
+      version: CONTRACT_VERSION,
+      text:    contractText,
+      hash:    hashContent(contractText)
+    },
     expiresAt: row.expiresAt,
     tokenId:   row.id          // returned so the photo-upload route can attach
+  };
+}
+
+// ── 2b. Generate a payment link for the client's current debt ─────────
+// Idempotent: reuse an open invoice, else CONVERT client.balance into a real
+// invoice ("Saldo pendiente") — moving the balance onto the invoice (balance→0)
+// so the debt is tracked the same way as the rest of the system (which derives
+// "saldo pendiente" from invoices, not client.balance). Then reuse/create the
+// Wompi link. Throws NO_DEBT if there's nothing to pay.
+export async function getDebtPayLink(rawToken) {
+  const row = await prisma.clientUpdateToken.findUnique({
+    where:  { token: rawToken },
+    select: { clientId: true, status: true, expiresAt: true }
+  });
+  if (!row || row.status !== 'pending' || row.expiresAt.getTime() < Date.now()) {
+    const e = new Error('Enlace inválido o expirado'); e.code = 'TOKEN_NOT_FOUND'; e.status = 404; throw e;
+  }
+
+  let invoice = await prisma.invoice.findFirst({
+    where:   { clientId: row.clientId, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] }, balanceDue: { gt: 0 } },
+    orderBy: { dueDate: 'asc' }
+  });
+
+  if (!invoice) {
+    const client = await prisma.client.findUnique({
+      where: { id: row.clientId }, select: { balance: true }
+    });
+    if (!client || !(client.balance > 0)) {
+      const e = new Error('No hay deuda pendiente'); e.code = 'NO_DEBT'; e.status = 400; throw e;
+    }
+    const { invoiceService } = await import('./invoice.service.js');
+    const number = await invoiceService.generateInvoiceNumber();
+    invoice = await prisma.$transaction(async (tx) => {
+      const inv = await tx.invoice.create({
+        data: {
+          invoiceNumber: number,
+          clientId:      row.clientId,
+          amount:        client.balance,
+          total:         client.balance,
+          balanceDue:    client.balance,
+          status:        'PENDING',
+          issueDate:     new Date(),
+          dueDate:       new Date(Date.now() + 5 * 86400000),
+          items: { create: { description: 'Saldo pendiente', quantity: 1, price: client.balance, total: client.balance } }
+        }
+      });
+      // Move the debt off client.balance and onto the invoice (avoid double count).
+      await tx.client.update({ where: { id: row.clientId }, data: { balance: 0 } });
+      return inv;
+    });
+  }
+
+  const existing = await prisma.paymentLink.findFirst({
+    where:   { invoiceId: invoice.id, status: 'pending', expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: 'desc' },
+    select:  { checkoutUrl: true }
+  });
+  let checkoutUrl = existing?.checkoutUrl;
+  if (!checkoutUrl) {
+    const { paymentLinkService } = await import('./payment-link.service.js');
+    const link = await paymentLinkService.createForInvoice(invoice.id, {
+      expiresInDays: 30,
+      redirectUrl:   `${(env.FRONTEND_URL || '').replace(/\/+$/, '')}/update/pago-ok`
+    });
+    checkoutUrl = link.checkoutUrl;
+  }
+
+  return {
+    checkoutUrl,
+    amountCop:     Math.round((invoice.balanceDue > 0 ? invoice.balanceDue : invoice.total) / 100),
+    invoiceNumber: invoice.invoiceNumber
   };
 }
 
@@ -178,10 +287,10 @@ export async function lookupToken(rawToken, { ip, userAgent } = {}) {
  *   TOKEN_*            — same set as lookupToken
  *   DOCUMENT_CONFLICT  — documentNumber already in use by another client
  */
-export async function applyUpdate(rawToken, payload) {
+export async function applyUpdate(rawToken, payload, opts = {}) {
   const row = await prisma.clientUpdateToken.findUnique({
     where: { token: rawToken },
-    include: { client: true, createdBy: { select: { email: true, name: true } } }
+    include: { client: { include: { plan: true } }, createdBy: { select: { email: true, name: true } } }
   });
   if (!row) {
     const e = new Error('Token no encontrado'); e.code = 'TOKEN_NOT_FOUND'; e.status = 404; throw e;
@@ -194,6 +303,14 @@ export async function applyUpdate(rawToken, payload) {
       where: { id: row.id }, data: { status: 'expired' }
     }).catch(() => {});
     const e = new Error('Este enlace ha expirado'); e.code = 'TOKEN_EXPIRED'; e.status = 410; throw e;
+  }
+
+  // Contract acceptance is MANDATORY to submit. Reject early if not accepted.
+  const accepted = payload.acceptContract === true || payload.acceptContract === 'true';
+  if (!accepted) {
+    const e = new Error('Debes aceptar el acta de servicios para continuar.');
+    e.code = 'CONTRACT_REQUIRED'; e.status = 400;
+    throw e;
   }
 
   const changes = pickUpdatable(payload);
@@ -212,10 +329,16 @@ export async function applyUpdate(rawToken, payload) {
     }
   }
 
-  // Atomic: write the changes AND flip the token to "used" in the same
-  // transaction. Use a conditional update on the token (where status is
-  // still pending) so a concurrent submitter gets a 0-row update and we
-  // can detect the race and abort.
+  // Render the acta with the data AS SUBMITTED (current client + this submit's
+  // changes) so the stored snapshot reflects exactly what the customer saw and
+  // accepted. The backend renders authoritatively — we never trust client text.
+  const merged = { ...row.client, ...changes };
+  const contractText = renderClientContract(merged);
+  const contractHash = hashContent(contractText);
+
+  // Atomic: write the changes, RECORD the contract acceptance, AND flip the
+  // token to "used" in the same transaction. Conditional update on the token
+  // (where status is still pending) detects a concurrent submitter (0 rows).
   const [, claimed] = await prisma.$transaction([
     prisma.client.update({
       where: { id: row.clientId },
@@ -224,6 +347,24 @@ export async function applyUpdate(rawToken, payload) {
     prisma.clientUpdateToken.updateMany({
       where: { id: row.id, status: 'pending' },
       data:  { status: 'used', usedAt: new Date() }
+    }),
+    prisma.contractAcceptance.create({
+      data: {
+        clientId:       row.clientId,
+        clientName:     merged.name || row.client.name || 'EL SUSCRIPTOR',
+        documentType:   merged.documentType || null,
+        documentNumber: merged.documentNumber || null,
+        version:        CONTRACT_VERSION,
+        contentHash:    contractHash,
+        contentText:    contractText,
+        planName:       row.client.plan?.name || null,
+        equipmentMode:  null, // se acuerda por separado (decisión del operador)
+        acceptedTerms:  true,
+        acceptedData:   payload.acceptData === false ? false : true,
+        ipAddress:      opts.ip || null,
+        userAgent:      (opts.userAgent || '').slice(0, 500) || null,
+        tokenId:        row.id
+      }
     })
   ]);
 

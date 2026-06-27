@@ -79,8 +79,8 @@ export const api = {
   post:   (path, body)   => request('POST',   path, body),
   /** @template [T=any] @param {string} path @param {any} [body] @returns {Promise<T>} */
   put:    (path, body)   => request('PUT',    path, body),
-  /** @template [T=any] @param {string} path @returns {Promise<T>} */
-  delete: (path)         => request('DELETE', path),
+  /** @template [T=any] @param {string} path @param {any} [body] @returns {Promise<T>} */
+  delete: (path, body)   => request('DELETE', path, body),
   /** @template [T=any] @param {string} path @param {any} [body] @returns {Promise<T>} */
   patch:  (path, body)   => request('PATCH',  path, body),
 };

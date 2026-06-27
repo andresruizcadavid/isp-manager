@@ -6,7 +6,7 @@
   import { plansApi } from '$lib/api/plans.api.js';
   import { routersApi } from '$lib/api/routers.api.js';
   import {
-    Search, Plus, Eye, EyeOff, Pencil, Trash2, Users, X,
+    Search, Plus, Eye, EyeOff, Pencil, Trash2, Users, X, AlertTriangle,
     Power, PowerOff, ArrowUpDown, ArrowUp, ArrowDown,
     CheckCircle2, PauseCircle, Wallet, AlertCircle,
     User, Router as RouterIcon, Wifi, Save,
@@ -473,13 +473,26 @@
     } catch (/** @type {any} */ e) { error = e.message; }
   }
   /** @param {any} c */
-  async function deleteClient(c) {
-    openMenuId = null;
-    if (!confirm(`¿Eliminar al cliente "${c.name}"? Esta acción no se puede deshacer.`)) return;
+  /** @type {any|null} */
+  let delTarget = null;
+  let delReason = '';
+  let delNote = '';
+  let delBusy = false;
+  const DEL_REASONS = [
+    { value: 'NO_PAGO', label: 'No pagó' },
+    { value: 'SE_RETIRO', label: 'Se retiró / mudó' },
+    { value: 'CANCELACION_VOLUNTARIA', label: 'Cancelación voluntaria' },
+    { value: 'OTRO', label: 'Otro' }
+  ];
+  function deleteClient(c) { openMenuId = null; delTarget = c; delReason = ''; delNote = ''; }
+  async function confirmDelete() {
+    if (!delTarget) return;
+    delBusy = true;
     try {
-      await clientsApi.remove(c.id);
+      await clientsApi.remove(delTarget.id, { reasonCategory: delReason || undefined, reasonNote: delNote || undefined });
+      delTarget = null;
       await load();
-    } catch (/** @type {any} */ e) { error = e.message; }
+    } catch (/** @type {any} */ e) { error = e.message; } finally { delBusy = false; }
   }
 
   // ── Modal ───────────────────────────────────────────
@@ -1792,5 +1805,44 @@
     plans={plans}
     on:close={() => showBulkPlanModal = false}
     on:done={onBulkPlanDone} />
+{/if}
+
+<!-- Eliminar cliente (con motivo) -->
+{#if delTarget}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" on:click={() => !delBusy && (delTarget = null)} on:keydown={(e)=>e.key==='Escape'&&!delBusy&&(delTarget=null)} role="presentation">
+    <div class="w-full max-w-sm rounded-xl bg-white shadow-xl" on:click|stopPropagation role="dialog" aria-modal="true">
+      <div class="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
+        <div class="w-9 h-9 rounded-full bg-red-100 flex items-center justify-center"><Trash2 size={16} class="text-red-600" /></div>
+        <div>
+          <h3 class="font-semibold text-gray-900">Eliminar cliente</h3>
+          <p class="text-xs text-gray-500">No se puede deshacer</p>
+        </div>
+      </div>
+      <div class="px-4 py-3 space-y-3">
+        <p class="text-sm text-gray-700">Vas a eliminar a <b>{delTarget.name}</b>.</p>
+        <div class="flex items-start gap-2 rounded-lg bg-red-50 border border-red-100 px-3 py-2 text-xs text-red-700">
+          <AlertTriangle size={16} class="shrink-0 mt-0.5" />
+          <span>Se eliminarán también <b>todas sus facturas y pagos</b>. Quedará registrado en <b>Clientes eliminados</b>.</span>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Motivo</label>
+          <select bind:value={delReason} class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+            <option value="">— Sin especificar —</option>
+            {#each DEL_REASONS as opt}<option value={opt.value}>{opt.label}</option>{/each}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Nota (opcional)</label>
+          <input bind:value={delNote} maxlength="500" placeholder="Detalle del motivo…" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+        </div>
+        <div class="flex gap-2 pt-1">
+          <button class="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50" on:click={() => delTarget = null} disabled={delBusy}>Cancelar</button>
+          <button class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-red-600 text-white px-3 py-2 text-sm hover:bg-red-700 disabled:opacity-50" on:click={confirmDelete} disabled={delBusy}>
+            {#if delBusy}<Loader2 size={14} class="animate-spin" /> Eliminando…{:else}Sí, eliminar{/if}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 {/if}
 

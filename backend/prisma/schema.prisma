@@ -90,6 +90,7 @@ model User {
   clientUpdateTokens ClientUpdateToken[]
   payments          Payment[]
   bulkOperations    BulkOperationLog[]
+  deletedClients    DeletedClientArchive[]
   routerBackups     RouterBackup[]
   billingCycles     BillingCycle[]
   paymentLinkCampaigns PaymentLinkCampaign[]
@@ -177,6 +178,7 @@ model Client {
   paymentLinks        PaymentLink[]
   clientNotifications ClientNotification[]
   inventoryItems      InventoryItem[]
+  contractAcceptances ContractAcceptance[]
 
   @@map("clients")
 }
@@ -258,6 +260,41 @@ model ClientUpdateToken {
   @@index([clientId])
   @@index([status, expiresAt])
   @@map("client_update_tokens")
+}
+
+// Aceptación digital del "ACTA ÚNICA DE ACTIVACIÓN, COMODATO Y PRESTACIÓN DE
+// SERVICIOS DIGITALES" (ON-F-01). Valor probatorio bajo Ley 527/1999 + Decreto
+// 2364/2012: guardamos un SNAPSHOT INMUTABLE del texto aceptado + su hash
+// SHA-256, junto con la evidencia de quién/cuándo/desde dónde aceptó. Esto
+// preserva el mérito ejecutivo (art. 422 CGP): aunque luego se edite el acta,
+// lo que el cliente aceptó queda congelado aquí.
+model ContractAcceptance {
+  id             String   @id @default(cuid())
+  clientId       String
+  // Identidad congelada al momento de aceptar (no cambia si el cliente se edita después).
+  clientName     String
+  documentType   String?
+  documentNumber String?
+  // Integridad del documento aceptado.
+  version        String   // p.ej. "ON-F-01 v1"
+  contentHash    String   // SHA-256 hex del texto exacto aceptado
+  contentText    String   @db.Text // snapshot inmutable del acta aceptada
+  planName       String?  // plan reflejado al aceptar
+  equipmentMode  String?  // "A" | "B" | null (null = se acuerda por separado)
+  // Consentimiento expreso.
+  acceptedTerms  Boolean  @default(true) // términos + acta de servicios
+  acceptedData   Boolean  @default(true) // tratamiento de datos (Ley 1581/2008)
+  // Evidencia / trazabilidad.
+  acceptedAt     DateTime @default(now())
+  ipAddress      String?
+  userAgent      String?
+  tokenId        String?  // ClientUpdateToken usado para aceptar
+  pdfUrl         String?  // PDF del acta firmada (respaldo)
+
+  client Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@map("contract_acceptances")
 }
 
 model ClientEvidencePhoto {
@@ -950,6 +987,57 @@ model BulkOperationLog {
   @@index([type, createdAt])
   @@index([operatorId])
   @@map("bulk_operation_logs")
+}
+
+// Archive of deleted clients. Deleting a client cascade-removes their invoices
+// and payments, so BEFORE that we snapshot who they were and their financial
+// situation (especially outstanding debt) here. One row per deleted client.
+// `detail` holds the full forensic breakdown (invoices + payments) as JSON so
+// nothing is truly lost and the client could be reconstructed if needed.
+model DeletedClientArchive {
+  id               String   @id @default(cuid())
+  originalClientId String
+
+  // Identity snapshot
+  name             String
+  documentType     String?
+  documentNumber   String?
+  email            String?
+  phone            String?
+  address          String?
+  neighborhood     String?
+  city             String?
+  ip               String?   // PPPoE remote/local address at deletion
+  planName         String?
+  previousStatus   String?   // ACTIVE | SUSPENDED | INACTIVE | PENDING
+  monthlyFee       Int       @default(0) // cents
+  balance          Int       @default(0) // legacy client.balance at deletion, cents
+
+  // Financial summary at deletion (cents)
+  outstandingDebt  Int       @default(0) // sum balanceDue of open invoices — "¿quedó debiendo?"
+  totalInvoiced    Int       @default(0) // sum of invoice totals
+  totalPaid        Int       @default(0) // sum of COMPLETED payment amounts
+  invoiceCount     Int       @default(0)
+  paymentCount     Int       @default(0)
+
+  // Full breakdown of invoices + payments at deletion time.
+  detail           Json?
+
+  // Deletion reason
+  reasonCategory   String?   // NO_PAGO | SE_RETIRO | CANCELACION_VOLUNTARIA | OTRO
+  reasonNote       String?
+
+  // Who / when
+  deletedAt         DateTime @default(now())
+  deletedByUserId   String?
+  deletedByUserName String?
+
+  deletedBy User? @relation(fields: [deletedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([deletedAt])
+  @@index([reasonCategory])
+  @@index([outstandingDebt])
+  @@map("deleted_client_archives")
 }
 
 // Collection windows — operator-defined date ranges during which an

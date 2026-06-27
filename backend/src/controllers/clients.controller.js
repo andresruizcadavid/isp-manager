@@ -7,8 +7,10 @@ import { generateToken as generateUpdateToken, dispatchLinkToClient } from '../s
 import { bulkChangePlan } from '../services/bulk-plan-change.service.js';
 import { paymentLinkService } from '../services/payment-link.service.js';
 import { sendToClient, loadClientForSend } from '../services/notification.campaign.service.js';
+import { invoiceService } from '../services/invoice.service.js';
 
 const MOROSO_LIST = 'Moroso';
+const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
 class ClientsController {
   getClients = asyncHandler(async (req, res) => {
@@ -161,6 +163,240 @@ class ClientsController {
         pages: Math.ceil(total / limitNum)
       }
     });
+  });
+
+  // GET /clients/sheet?year=YYYY — spreadsheet view ("planilla"). Returns ALL
+  // clients with the columns the sheet needs: contact fields, service IP (from
+  // the PPPoE secret, read-only in the UI), per-month invoice status for the
+  // requested year, and total open debt across all time. One pass over clients
+  // + one groupBy for the debt total. Months are keyed 1..12; the
+  // @@unique([clientId, periodYear, periodMonth]) guarantees ≤1 invoice/month.
+  getSheet = asyncHandler(async (req, res) => {
+    const year = Number(req.query.year) || new Date().getFullYear();
+
+    const [clients, debtAgg] = await Promise.all([
+      prisma.client.findMany({
+        orderBy: { name: 'asc' },
+        select: {
+          id: true, name: true, email: true, phone: true, address: true,
+          neighborhood: true, city: true, documentNumber: true, status: true,
+          monthlyFee: true, balance: true,
+          plan: { select: { id: true, name: true, price: true } },
+          mikrotikAccount: { select: { remoteAddress: true, localAddress: true } },
+          invoices: {
+            where: { periodYear: year, periodMonth: { not: null } },
+            select: {
+              id: true, invoiceNumber: true, periodMonth: true,
+              status: true, total: true, amount: true, balanceDue: true
+            }
+          }
+        }
+      }),
+      prisma.invoice.groupBy({
+        by: ['clientId'],
+        where: { status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] }, balanceDue: { gt: 0 } },
+        _sum: { balanceDue: true }
+      })
+    ]);
+
+    const debtMap = new Map(debtAgg.map(d => [d.clientId, d._sum.balanceDue || 0]));
+
+    const rows = clients.map(c => {
+      const months = {};
+      for (const inv of c.invoices) {
+        months[inv.periodMonth] = {
+          invoiceId:     inv.id,
+          invoiceNumber: inv.invoiceNumber,
+          status:        inv.status,
+          amount:        inv.total ?? inv.amount ?? 0,
+          balanceDue:    inv.balanceDue ?? 0
+        };
+      }
+      return {
+        id:             c.id,
+        name:           c.name,
+        ip:             c.mikrotikAccount?.remoteAddress || c.mikrotikAccount?.localAddress || null,
+        phone:          c.phone,
+        email:          c.email,
+        documentNumber: c.documentNumber,
+        address:        c.address,
+        neighborhood:   c.neighborhood,
+        city:           c.city,
+        status:         c.status,
+        planId:         c.plan?.id || null,
+        planName:       c.plan?.name || null,
+        // Effective monthly fee shown in the sheet: per-client override or plan price.
+        monthlyFee:     c.monthlyFee || c.plan?.price || 0,
+        balance:        c.balance,
+        totalDebt:      debtMap.get(c.id) || 0,
+        months
+      };
+    });
+
+    res.json({ success: true, data: rows, meta: { year, count: rows.length } });
+  });
+
+  // POST /clients/:id/sheet-cell — act on a single month cell from the planilla.
+  // body: { year, month(1-12), action, method?, amount? }
+  //   action 'pay'    → record a payment (creates/reactivates the month invoice
+  //                     if missing) and mark PAID. method = CASH|BANK_TRANSFER|...
+  //   action 'bill'   → create/reactivate an OPEN invoice for the month.
+  //   action 'unbill' → cancel the month invoice (only if it has no payments).
+  //   action 'unpay'  → reverse payments and set the invoice back to open.
+  // `amount` is in CENTS; when omitted, the client's monthlyFee (or plan price)
+  // is used. Returns the new cell + recomputed total debt so the sheet updates.
+  sheetCell = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const y = Number(req.body.year);
+    const m = Number(req.body.month);
+    const action = req.body.action;
+    if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) {
+      throw new AppError('Periodo inválido', 400, 'BAD_PERIOD');
+    }
+
+    const client = await prisma.client.findUnique({ where: { id }, include: { plan: { select: { price: true } } } });
+    if (!client) throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
+
+    const fee = client.monthlyFee || client.plan?.price || 0;
+    const reqAmount = Number(req.body.amount);
+    const wantCents = Number.isFinite(reqAmount) && reqAmount > 0 ? Math.round(reqAmount) : fee;
+
+    let invoice = await prisma.invoice.findFirst({
+      where: { clientId: id, periodYear: y, periodMonth: m },
+      include: { payments: true, items: true }
+    });
+
+    const dueDate   = new Date(Date.UTC(y, m - 1, 10));
+    const issueDate = new Date(Date.UTC(y, m - 1, 1));
+    const openStatus = () => (dueDate < new Date() ? 'OVERDUE' : 'PENDING');
+    const itemDesc  = `Mensualidad ${MONTHS_ES[m - 1]} ${y}`;
+
+    // Create or reactivate an invoice slot for the month at `cents`.
+    const ensureInvoice = async (cents) => {
+      if (cents <= 0) throw new AppError('Define la mensualidad del cliente antes de facturar', 400, 'NO_FEE');
+      if (invoice && invoice.status === 'CANCELLED') {
+        await prisma.invoice.update({
+          where: { id: invoice.id },
+          data: { amount: cents, total: cents, balanceDue: cents, status: openStatus(), paidDate: null, issueDate, dueDate }
+        });
+        if (invoice.items[0]) await prisma.invoiceItem.update({ where: { id: invoice.items[0].id }, data: { price: cents, total: cents, description: itemDesc } });
+        else await prisma.invoiceItem.create({ data: { invoiceId: invoice.id, description: itemDesc, quantity: 1, price: cents, total: cents } });
+      } else if (!invoice) {
+        const number = await invoiceService.generateInvoiceNumber();
+        invoice = await prisma.invoice.create({
+          data: {
+            invoiceNumber: number, clientId: id, amount: cents, total: cents, balanceDue: cents,
+            tax: 0, discount: 0, status: openStatus(), issueDate, dueDate, periodYear: y, periodMonth: m,
+            notes: 'Creada desde la planilla',
+            items: { create: { description: itemDesc, quantity: 1, price: cents, total: cents } }
+          },
+          include: { payments: true, items: true }
+        });
+      }
+    };
+
+    if (action === 'bill') {
+      if (invoice && invoice.status !== 'CANCELLED') {
+        if (invoice.status === 'PAID') throw new AppError('Ese mes ya está pagado', 409, 'ALREADY_PAID');
+        throw new AppError('Ese mes ya tiene factura', 409, 'INVOICE_EXISTS');
+      }
+      await ensureInvoice(wantCents);
+
+    } else if (action === 'pay') {
+      const method = ['CASH', 'BANK_TRANSFER', 'CREDIT_CARD', 'WOMPI', 'OTHER'].includes(req.body.method) ? req.body.method : 'CASH';
+      await ensureInvoice(wantCents);
+      const inv = await prisma.invoice.findUnique({ where: { id: invoice.id }, include: { payments: true } });
+      if (inv.status === 'PAID') throw new AppError('Ese mes ya está pagado', 409, 'ALREADY_PAID');
+      const total = inv.total ?? inv.amount;
+      const prevPaid = inv.payments.reduce((s, p) => s + (p.status === 'COMPLETED' ? p.amount : 0), 0);
+      const payCents = Number.isFinite(reqAmount) && reqAmount > 0 ? Math.round(reqAmount) : Math.max(0, total - prevPaid);
+      if (prevPaid + payCents > total) throw new AppError('El pago excede el saldo de la factura', 400, 'PAYMENT_EXCEEDS');
+      const remaining = Math.max(0, total - (prevPaid + payCents));
+      const newStatus = remaining === 0 ? 'PAID' : 'PARTIAL';
+      await prisma.$transaction([
+        prisma.payment.create({ data: { invoiceId: inv.id, clientId: id, amount: payCents, method, status: 'COMPLETED', notes: 'Pago registrado desde la planilla', createdByUserId: req.user?.id, createdByUserName: req.user?.name } }),
+        prisma.invoice.update({ where: { id: inv.id }, data: { status: newStatus, balanceDue: remaining, ...(newStatus === 'PAID' && { paidDate: new Date() }) } })
+      ]);
+
+    } else if (action === 'unpay') {
+      if (!invoice) throw new AppError('No hay factura en ese mes', 404, 'NO_INVOICE');
+      const total = invoice.total ?? invoice.amount;
+      await prisma.$transaction([
+        prisma.payment.deleteMany({ where: { invoiceId: invoice.id } }),
+        prisma.invoice.update({ where: { id: invoice.id }, data: { status: openStatus(), balanceDue: total, paidDate: null } })
+      ]);
+
+    } else if (action === 'unbill') {
+      if (!invoice || invoice.status === 'CANCELLED') throw new AppError('No hay factura activa en ese mes', 404, 'NO_INVOICE');
+      if (invoice.payments.some(p => p.status === 'COMPLETED')) throw new AppError('Ese mes tiene un pago; revierte el pago primero', 400, 'HAS_PAYMENTS');
+      await prisma.invoice.update({ where: { id: invoice.id }, data: { status: 'CANCELLED', balanceDue: 0 } });
+
+    } else {
+      throw new AppError('Acción inválida', 400, 'BAD_ACTION');
+    }
+
+    // Reload the affected invoice + recompute total open debt for the client.
+    const finalInv = await prisma.invoice.findFirst({ where: { clientId: id, periodYear: y, periodMonth: m } });
+    const debtAgg = await prisma.invoice.aggregate({
+      where: { clientId: id, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] }, balanceDue: { gt: 0 } },
+      _sum: { balanceDue: true }
+    });
+
+    const cell = (finalInv && finalInv.status !== 'CANCELLED')
+      ? { invoiceId: finalInv.id, invoiceNumber: finalInv.invoiceNumber, status: finalInv.status, amount: finalInv.total ?? finalInv.amount, balanceDue: finalInv.balanceDue }
+      : null;
+
+    res.json({ success: true, data: { month: m, cell, totalDebt: debtAgg._sum.balanceDue || 0 } });
+  });
+
+  // GET /clients/archive — list deleted-client archive rows (snapshot + financial
+  // summary). Supports ?search, ?withDebt=true, pagination. Heavy `detail` JSON
+  // is omitted from the list; fetch it via /clients/archive/:id.
+  getArchive = asyncHandler(async (req, res) => {
+    const pageNum  = Math.max(1, Number(req.query.page) || 1);
+    const limitNum = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const search   = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+    const withDebt = req.query.withDebt === 'true' || req.query.withDebt === true;
+
+    const where = {
+      ...(search && {
+        OR: [
+          { name:           { contains: search, mode: 'insensitive' } },
+          { documentNumber: { contains: search, mode: 'insensitive' } },
+          { email:          { contains: search, mode: 'insensitive' } },
+          { phone:          { contains: search, mode: 'insensitive' } },
+          { ip:             { contains: search, mode: 'insensitive' } }
+        ]
+      }),
+      ...(withDebt && { outstandingDebt: { gt: 0 } })
+    };
+
+    const [rows, total, agg] = await Promise.all([
+      prisma.deletedClientArchive.findMany({
+        where, orderBy: { deletedAt: 'desc' }, skip: (pageNum - 1) * limitNum, take: limitNum,
+        select: {
+          id: true, originalClientId: true, name: true, documentType: true, documentNumber: true,
+          email: true, phone: true, address: true, neighborhood: true, city: true, ip: true,
+          planName: true, previousStatus: true, monthlyFee: true, balance: true,
+          outstandingDebt: true, totalInvoiced: true, totalPaid: true, invoiceCount: true, paymentCount: true,
+          reasonCategory: true, reasonNote: true, deletedAt: true, deletedByUserId: true, deletedByUserName: true
+        }
+      }),
+      prisma.deletedClientArchive.count({ where }),
+      prisma.deletedClientArchive.aggregate({ where, _sum: { outstandingDebt: true } })
+    ]);
+
+    res.json({
+      success: true, data: rows,
+      meta: { page: pageNum, limit: limitNum, total, pages: Math.ceil(total / limitNum), totalDebt: agg._sum.outstandingDebt || 0 }
+    });
+  });
+
+  // GET /clients/archive/:id — one archive row including the full `detail` JSON.
+  getArchiveEntry = asyncHandler(async (req, res) => {
+    const row = await prisma.deletedClientArchive.findUnique({ where: { id: req.params.id } });
+    if (!row) throw new AppError('Registro de archivo no encontrado', 404, 'ARCHIVE_NOT_FOUND');
+    res.json({ success: true, data: row });
   });
 
   getClient = asyncHandler(async (req, res) => {
@@ -944,16 +1180,26 @@ class ClientsController {
   deleteClient = asyncHandler(async (req, res) => {
     const { id } = req.params;
 
-    // Check if client exists
+    // Optional deletion reason (category + free note) for the archive.
+    const REASONS = ['NO_PAGO', 'SE_RETIRO', 'CANCELACION_VOLUNTARIA', 'OTRO'];
+    const reasonCategory = REASONS.includes(req.body?.reasonCategory) ? req.body.reasonCategory : null;
+    const reasonNote     = typeof req.body?.reasonNote === 'string' ? req.body.reasonNote.trim().slice(0, 500) || null : null;
+
+    // Load the client with everything we need to snapshot before deleting.
     const client = await prisma.client.findUnique({
       where: { id },
       include: {
-        mikrotikAccount: true,
-        _count: {
+        plan: { select: { name: true } },
+        mikrotikAccount: { select: { id: true, remoteAddress: true, localAddress: true } },
+        invoices: {
           select: {
-            invoices: true,
-            payments: true
+            invoiceNumber: true, periodYear: true, periodMonth: true,
+            amount: true, total: true, balanceDue: true, status: true,
+            issueDate: true, dueDate: true, paidDate: true
           }
+        },
+        payments: {
+          select: { amount: true, method: true, status: true, notes: true, createdAt: true, invoiceId: true }
         }
       }
     });
@@ -962,25 +1208,62 @@ class ClientsController {
       throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
     }
 
-    // Check if client has invoices or payments
-    if (client._count.invoices > 0 || client._count.payments > 0) {
-      throw new AppError('No se puede eliminar un cliente con facturas o pagos asociados', 400, 'CLIENT_HAS_TRANSACTIONS');
-    }
+    // Financial summary at deletion time.
+    const OPEN = ['PENDING', 'OVERDUE', 'PARTIAL'];
+    const outstandingDebt = client.invoices.filter(i => OPEN.includes(i.status)).reduce((s, i) => s + (i.balanceDue || 0), 0);
+    const totalInvoiced   = client.invoices.reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0);
+    const totalPaid       = client.payments.filter(p => p.status === 'COMPLETED').reduce((s, p) => s + (p.amount || 0), 0);
+    const invoicesDeleted = client.invoices.length;
+    const paymentsDeleted = client.payments.length;
+    const ip = client.mikrotikAccount?.remoteAddress || client.mikrotikAccount?.localAddress || null;
 
-    // Remove Mikrotik account if exists
-    if (client.mikrotikAccount) {
-      await prisma.mikrotikAccount.delete({
-        where: { id: client.mikrotikAccount.id }
+    // Full forensic detail kept as JSON so nothing is truly lost.
+    const detail = {
+      invoices: client.invoices.map(i => ({
+        number: i.invoiceNumber, year: i.periodYear, month: i.periodMonth,
+        amount: i.total ?? i.amount, balanceDue: i.balanceDue, status: i.status,
+        issueDate: i.issueDate, dueDate: i.dueDate, paidDate: i.paidDate
+      })),
+      payments: client.payments.map(p => ({
+        amount: p.amount, method: p.method, status: p.status, notes: p.notes, date: p.createdAt, invoiceId: p.invoiceId
+      }))
+    };
+
+    // Archive THEN cascade-delete, atomically: if the snapshot fails, nothing
+    // is deleted. FK-safe order because Client/Invoice FKs are RESTRICT.
+    await prisma.$transaction(async (tx) => {
+      await tx.deletedClientArchive.create({
+        data: {
+          originalClientId: id,
+          name: client.name, documentType: client.documentType ?? null, documentNumber: client.documentNumber ?? null,
+          email: client.email, phone: client.phone, address: client.address,
+          neighborhood: client.neighborhood, city: client.city, ip,
+          planName: client.plan?.name ?? null, previousStatus: client.status,
+          monthlyFee: client.monthlyFee ?? 0, balance: client.balance ?? 0,
+          outstandingDebt, totalInvoiced, totalPaid, invoiceCount: invoicesDeleted, paymentCount: paymentsDeleted,
+          detail, reasonCategory, reasonNote,
+          deletedByUserId: req.user?.id ?? null, deletedByUserName: req.user?.name ?? null
+        }
       });
-    }
-
-    await prisma.client.delete({
-      where: { id }
+      // Evidence photos can reference a payment (restrict FK) → remove first.
+      await tx.clientEvidencePhoto.deleteMany({ where: { clientId: id } });
+      await tx.payment.deleteMany({ where: { clientId: id } });
+      await tx.paymentAttempt.deleteMany({ where: { clientId: id } });
+      await tx.paymentLink.deleteMany({ where: { clientId: id } });
+      // Invoices — invoice_items removed automatically (onDelete: Cascade).
+      await tx.invoice.deleteMany({ where: { clientId: id } });
+      if (client.mikrotikAccount) {
+        await tx.mikrotikAccount.delete({ where: { id: client.mikrotikAccount.id } });
+      }
+      // Client — cascades update tokens, contract acceptances, devices, portal
+      // users and client notifications.
+      await tx.client.delete({ where: { id } });
     });
 
     res.json({
       success: true,
-      message: 'Cliente eliminado exitosamente'
+      message: `Cliente archivado y eliminado (${invoicesDeleted} factura(s), ${paymentsDeleted} pago(s)${outstandingDebt > 0 ? `, deuda $${Math.round(outstandingDebt / 100).toLocaleString('es-CO')}` : ''})`,
+      data: { invoicesDeleted, paymentsDeleted, outstandingDebt }
     });
   });
 

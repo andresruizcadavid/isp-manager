@@ -40,7 +40,8 @@
     "lucide-svelte": "^1.0.1",
     "socket.io-client": "^4.8.3",
     "svelte-chartjs": "^3.1.5",
-    "svelte-sonner": "^0.3.24"
+    "svelte-sonner": "^0.3.24",
+    "xlsx": "^0.18.5"
   },
   "keywords": [
     "isp",

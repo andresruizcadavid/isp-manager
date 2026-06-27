@@ -11,7 +11,7 @@
     Eye, EyeOff, PauseCircle, PlayCircle, Loader2, Trash2, Edit3, X,
     Calendar, FileCheck, Phone, Mail, MessageSquare, Copy, Check,
     MapPin, Receipt, ExternalLink, Camera, ImageUp, Image as ImageIcon,
-    Send, Link2, Share2, Bell, Boxes, Package, Plus
+    Send, Link2, Share2, Bell, Boxes, Package, Plus, AlertTriangle
   } from 'lucide-svelte';
   import Sheet from '$lib/components/ui/Sheet.svelte';
   import RegisterPaymentModal from '$lib/components/payments/RegisterPaymentModal.svelte';
@@ -52,6 +52,14 @@
   let showPaymentModal = false;
   let deleting = false;
   let deleteConfirmName = '';
+  let delReason = '';
+  let delNote = '';
+  const DELETE_REASONS = [
+    { value: 'NO_PAGO', label: 'No pagó' },
+    { value: 'SE_RETIRO', label: 'Se retiró / mudó' },
+    { value: 'CANCELACION_VOLUNTARIA', label: 'Cancelación voluntaria' },
+    { value: 'OTRO', label: 'Otro' }
+  ];
 
   let editPersonal = false;
   /** @type {Record<string, any>} */
@@ -473,7 +481,7 @@
     if (!c || deleteConfirmName !== c.name) return;
     deleting = true;
     try {
-      await api.delete(`/clients/${c.id}`);
+      await api.delete(`/clients/${c.id}`, { reasonCategory: delReason || undefined, reasonNote: delNote || undefined });
       showDeleteModal = false;
       goto('/clients');
     } catch (/** @type {any} */ e) {
@@ -918,7 +926,7 @@
         <span class="hidden xs:inline">{client?.status === 'ACTIVE' ? 'Suspender' : 'Activar'}</span>
       </button>
       <button class="btn-icon hover:!text-red-600 hover:!bg-red-50 shrink-0"
-              on:click={() => { deleteConfirmName = ''; showDeleteModal = true; }}
+              on:click={() => { deleteConfirmName = ''; delReason = ''; delNote = ''; showDeleteModal = true; }}
               title="Eliminar cliente">
         <Trash2 size={18} class="sm:w-[15px] sm:h-[15px]" />
       </button>
@@ -1843,6 +1851,21 @@
         </div>
       </div>
       <div class="p-6 space-y-3">
+        <div class="flex items-start gap-2 rounded-lg bg-red-50 border border-red-100 px-3 py-2 text-xs text-red-700">
+          <AlertTriangle size={16} class="shrink-0 mt-0.5" />
+          <span>Se eliminarán también <b>todas las facturas y pagos</b> de este cliente. No se puede deshacer.</span>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Motivo de la baja</label>
+          <select class="input" bind:value={delReason}>
+            <option value="">— Sin especificar —</option>
+            {#each DELETE_REASONS as opt}<option value={opt.value}>{opt.label}</option>{/each}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-600 mb-1">Nota (opcional)</label>
+          <input class="input" bind:value={delNote} maxlength="500" placeholder="Detalle del motivo…" />
+        </div>
         <p class="text-sm text-slate-600">
           Para confirmar, escribe el nombre exacto del cliente:
           <span class="font-semibold text-slate-900">{client?.name}</span>

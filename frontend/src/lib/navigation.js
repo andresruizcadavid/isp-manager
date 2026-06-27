@@ -90,6 +90,16 @@ export const NAV_ITEMS = [
     href: '/clients/new', roles: OPERATIONAL_TIER,
     match: ['/clients/new'] },
 
+  { id: 'clients-planilla', type: 'item', parentId: 'group-clients',
+    label: 'Planilla', title: 'Planilla de clientes',
+    href: '/clients/planilla', roles: OPERATIONAL_TIER,
+    match: ['/clients/planilla'] },
+
+  { id: 'clients-eliminados', type: 'item', parentId: 'group-clients',
+    label: 'Eliminados', title: 'Clientes eliminados',
+    href: '/clients/eliminados', roles: ADMIN_TIER,
+    match: ['/clients/eliminados'] },
+
   { id: 'zones', type: 'item', parentId: 'group-clients',
     label: 'Zonas / Sectores', title: 'Zonas / Sectores',
     href: '/zones', roles: OPERATIONAL_TIER,
