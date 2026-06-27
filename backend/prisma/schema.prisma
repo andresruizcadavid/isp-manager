@@ -146,6 +146,9 @@ model Client {
   zoneId           Int?
   balance          Int          @default(0) // in cents
   monthlyFee       Int          @default(0) // in cents — per-client price (WispHub-style)
+  // Control de cobranza (planilla): último recordatorio de cobro enviado.
+  reminderSentAt   DateTime?    // fecha/hora del último mensaje de cobro enviado
+  reminderChannel  String?      // medio: WHATSAPP | EMAIL | SMS | LLAMADA | MANUAL
   // Tecnología de conexión del cliente. FIBER = fibra óptica (default, todos
   // los existentes), WIRELESS = inalámbrico (clientes de antenas).
   connectionType   String       @default("FIBER")

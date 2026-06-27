@@ -44,6 +44,8 @@ export const clientsApi = {
   getSheet: (year)     => api.get(`/clients/sheet${year ? '?year=' + year : ''}`),
   /** Act on one month cell of the planilla. @param {string} id @param {{year:number,month:number,action:'pay'|'bill'|'unbill'|'unpay',method?:string,amount?:number}} body */
   sheetCell: (id, body) => api.post(`/clients/${id}/sheet-cell`, body),
+  /** Registrar/limpiar el envío del mensaje de cobro. @param {string} id @param {{channel:string|null, sentAt?:string}} body */
+  setReminder: (id, body) => api.post(`/clients/${id}/collection-reminder`, body),
   /** @param {string} id */
   notifications: (id)  => api.get(`/clients/${id}/notifications`),
   /** @param {string} id @param {any} data */

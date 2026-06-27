@@ -180,7 +180,7 @@ class ClientsController {
         select: {
           id: true, name: true, email: true, phone: true, address: true,
           neighborhood: true, city: true, documentNumber: true, status: true,
-          monthlyFee: true, balance: true,
+          monthlyFee: true, balance: true, reminderSentAt: true, reminderChannel: true,
           plan: { select: { id: true, name: true, price: true } },
           mikrotikAccount: { select: { remoteAddress: true, localAddress: true } },
           invoices: {
@@ -229,6 +229,8 @@ class ClientsController {
         monthlyFee:     c.monthlyFee || c.plan?.price || 0,
         balance:        c.balance,
         totalDebt:      debtMap.get(c.id) || 0,
+        reminderSentAt:  c.reminderSentAt,
+        reminderChannel: c.reminderChannel,
         months
       };
     });
@@ -397,6 +399,33 @@ class ClientsController {
     const row = await prisma.deletedClientArchive.findUnique({ where: { id: req.params.id } });
     if (!row) throw new AppError('Registro de archivo no encontrado', 404, 'ARCHIVE_NOT_FOUND');
     res.json({ success: true, data: row });
+  });
+
+  // POST /clients/:id/collection-reminder — record (or clear) that the dunning
+  // message was sent: medium + date. body { channel, sentAt? }. Empty channel
+  // clears the record.
+  setCollectionReminder = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const CHANNELS = ['WHATSAPP', 'EMAIL', 'SMS', 'LLAMADA', 'MANUAL'];
+    const channel = CHANNELS.includes(req.body?.channel) ? req.body.channel : null;
+
+    let data;
+    if (!channel) {
+      data = { reminderSentAt: null, reminderChannel: null };
+    } else {
+      let sentAt = new Date();
+      if (req.body?.sentAt) {
+        const d = new Date(req.body.sentAt);
+        if (!Number.isNaN(d.getTime())) sentAt = d;
+      }
+      data = { reminderSentAt: sentAt, reminderChannel: channel };
+    }
+
+    const updated = await prisma.client
+      .update({ where: { id }, data, select: { id: true, reminderSentAt: true, reminderChannel: true } })
+      .catch(() => null);
+    if (!updated) throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
+    res.json({ success: true, data: updated });
   });
 
   getClient = asyncHandler(async (req, res) => {

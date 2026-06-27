@@ -137,6 +137,9 @@ router.get('/:id', validateParams(commonSchemas.idParam), clientController.getCl
 // so requireOperational (technicians register field payments). Validated in the
 // controller (period + action + amount).
 router.post('/:id/sheet-cell', requireOperational, validateParams(commonSchemas.idParam), clientController.sheetCell);
+
+// Planilla: registrar/limpiar el envío del mensaje de cobro (medio + fecha).
+router.post('/:id/collection-reminder', requireOperational, validateParams(commonSchemas.idParam), clientController.setCollectionReminder);
 // Create/update are `requireOperational`: field TECHNICIANs provision new
 // clients and fix their data/IPs on site. Destructive ops (delete, suspend,
 // bulk) remain operator/admin below.

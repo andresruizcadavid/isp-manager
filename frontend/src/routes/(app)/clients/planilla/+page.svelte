@@ -5,7 +5,7 @@
   import {
     Search, Loader2, AlertCircle, Table2, RefreshCw, Wallet,
     Undo2, Redo2, CheckCircle2, XCircle, X, Banknote, Landmark, Ban, RotateCcw, Plus,
-    Download, Upload, AlertTriangle, Pencil, Trash2
+    Download, Upload, AlertTriangle, Pencil, Trash2, Send, Check
   } from 'lucide-svelte';
 
   // ── State ───────────────────────────────────────────
@@ -153,14 +153,15 @@
     setStatus('saving', 'Generando Excel…');
     try {
       const XLSX = await import('xlsx');
-      const header = ['ID', 'Nombre', 'IP', 'Teléfono', 'Correo', 'Documento', 'Mensual', ...MONTHS, 'Deuda total'];
+      const header = ['ID', 'Nombre', 'IP', 'Teléfono', 'Correo', 'Documento', 'Mensual', 'Cobro enviado', 'Medio cobro', ...MONTHS, 'Deuda total'];
       const data = filtered.map(r => [
         r.id, r.name, r.ip || '', r.phone || '', r.email || '', r.documentNumber || '', cop(r.monthlyFee),
+        r.reminderSentAt ? new Date(r.reminderSentAt).toLocaleDateString('es-CO') : '', remLabel(r.reminderChannel),
         ...MONTHS.map((_, i) => monthToken(r.months[i + 1])),
         cop(r.totalDebt)
       ]);
       const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
-      ws['!cols'] = [{ wch: 26 }, { wch: 24 }, { wch: 14 }, { wch: 13 }, { wch: 26 }, { wch: 14 }, { wch: 10 },
+      ws['!cols'] = [{ wch: 26 }, { wch: 24 }, { wch: 14 }, { wch: 13 }, { wch: 26 }, { wch: 14 }, { wch: 10 }, { wch: 14 }, { wch: 12 },
                      ...MONTHS.map(() => ({ wch: 5 })), { wch: 12 }];
       const help = XLSX.utils.aoa_to_sheet([
         ['Instrucciones para editar y reimportar'],
@@ -317,6 +318,54 @@
     } finally { delBusy = false; }
   }
 
+  // ── Collection reminder (registrar mensaje de cobro) ────────────────
+  const REM_CHANNELS = [
+    { value: 'WHATSAPP', label: 'WhatsApp' },
+    { value: 'EMAIL', label: 'Email' },
+    { value: 'SMS', label: 'SMS' },
+    { value: 'LLAMADA', label: 'Llamada' },
+    { value: 'MANUAL', label: 'Manual' }
+  ];
+  const remLabel = (ch) => (REM_CHANNELS.find(c => c.value === ch)?.label || ch || '');
+  const fdateShort = (d) => d ? new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '';
+  /** @type {{r:any, channel:string, dateStr:string}|null} */
+  let remModal = null;
+  let remBusy = false;
+  function openReminder(r) {
+    const today = new Date().toISOString().slice(0, 10);
+    remModal = {
+      r,
+      channel: r.reminderChannel || 'WHATSAPP',
+      dateStr: r.reminderSentAt ? new Date(r.reminderSentAt).toISOString().slice(0, 10) : today
+    };
+  }
+  async function saveReminder() {
+    if (!remModal) return;
+    const { r, channel, dateStr } = remModal;
+    remBusy = true;
+    setStatus('saving', `Registrando cobro de ${r.name}…`);
+    try {
+      const sentAt = dateStr ? new Date(dateStr + 'T12:00:00').toISOString() : undefined;
+      const res = await clientsApi.setReminder(r.id, { channel, sentAt });
+      r.reminderSentAt = res.reminderSentAt; r.reminderChannel = res.reminderChannel; rows = rows;
+      setStatus('ok', `Cobro registrado para ${r.name}`);
+      remModal = null;
+    } catch (e) { setStatus('err', e?.message || 'No se pudo registrar el cobro'); }
+    finally { remBusy = false; }
+  }
+  async function clearReminder() {
+    if (!remModal) return;
+    const { r } = remModal;
+    remBusy = true;
+    try {
+      const res = await clientsApi.setReminder(r.id, { channel: null });
+      r.reminderSentAt = res.reminderSentAt; r.reminderChannel = res.reminderChannel; rows = rows;
+      setStatus('ok', `Cobro borrado de ${r.name}`);
+      remModal = null;
+    } catch (e) { setStatus('err', e?.message || 'No se pudo borrar'); }
+    finally { remBusy = false; }
+  }
+
   function onKey(e) {
     const tag = (e.target?.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;   // don't hijack native field editing
@@ -420,6 +469,7 @@
             <th class="text-left px-3 py-2 border-b border-gray-200 min-w-[130px]">Teléfono</th>
             <th class="text-left px-3 py-2 border-b border-gray-200 min-w-[210px]">Correo</th>
             <th class="text-right px-3 py-2 border-b border-gray-200 min-w-[110px]">Mensual</th>
+            <th class="text-left px-3 py-2 border-b border-l border-gray-200 min-w-[150px]">Cobro enviado</th>
             {#each MONTHS as m}
               <th class="text-center px-2 py-2 border-b border-l border-gray-200 w-12">{m}</th>
             {/each}
@@ -465,6 +515,20 @@
                        on:keydown={(e)=>{ if(e.key==='Enter') e.target.blur(); if(e.key==='Escape'){ e.target.value=cop(r.monthlyFee); e.target.blur(); } }}
                        on:blur={(e)=>commit(r,'monthlyFee',e.target.value)} />
               </td>
+              <!-- Collection reminder (clic → registrar) -->
+              <td class="px-2 py-1 border-l border-gray-100">
+                {#if r.reminderSentAt}
+                  <button class="w-full inline-flex items-center gap-1.5 rounded bg-green-50 text-green-700 hover:bg-green-100 px-2 py-1 text-[11px] font-medium"
+                          title="Editar registro de cobro" on:click={() => openReminder(r)}>
+                    <Check class="w-3 h-3" /> {fdateShort(r.reminderSentAt)} · {remLabel(r.reminderChannel)}
+                  </button>
+                {:else}
+                  <button class="w-full inline-flex items-center gap-1.5 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 px-2 py-1 text-[11px]"
+                          title="Registrar envío de cobro" on:click={() => openReminder(r)}>
+                    <Send class="w-3 h-3" /> Registrar
+                  </button>
+                {/if}
+              </td>
               <!-- Months (clickable → action modal) -->
               {#each MONTHS as _m, i}
                 {@const cell = r.months[i + 1]}
@@ -487,7 +551,7 @@
             </tr>
           {/each}
           {#if filtered.length === 0}
-            <tr><td colspan={18} class="text-center py-10 text-gray-400">Sin resultados</td></tr>
+            <tr><td colspan={19} class="text-center py-10 text-gray-400">Sin resultados</td></tr>
           {/if}
         </tbody>
       </table>
@@ -713,6 +777,42 @@
           <button class="btn-ghost flex-1" on:click={() => delRow = null} disabled={delBusy}>Cancelar</button>
           <button class="btn-danger flex-1" on:click={doDelete} disabled={delBusy}>
             {#if delBusy}<Loader2 class="w-4 h-4 animate-spin" /> Eliminando…{:else}Sí, eliminar{/if}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Collection reminder modal -->
+{#if remModal}
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" on:click={() => !remBusy && (remModal = null)} on:keydown={(e)=>e.key==='Escape'&&!remBusy&&(remModal=null)} role="presentation">
+    <div class="w-full max-w-sm rounded-xl bg-white shadow-xl" on:click|stopPropagation role="dialog" aria-modal="true">
+      <div class="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+        <div>
+          <h3 class="font-semibold text-gray-900">Registrar cobro</h3>
+          <p class="text-xs text-gray-500">{remModal.r.name}</p>
+        </div>
+        <button class="text-gray-400 hover:text-gray-700" on:click={() => remModal = null} disabled={remBusy}><X class="w-5 h-5" /></button>
+      </div>
+      <div class="px-4 py-3 space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">¿Por qué medio se envió?</label>
+          <select bind:value={remModal.channel} class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-[#16357E]/30">
+            {#each REM_CHANNELS as opt}<option value={opt.value}>{opt.label}</option>{/each}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Fecha de envío</label>
+          <input type="date" bind:value={remModal.dateStr} class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-[#16357E]/30" />
+        </div>
+        <div class="flex gap-2 pt-1">
+          {#if remModal.r.reminderSentAt}
+            <button class="btn-ghost" on:click={clearReminder} disabled={remBusy} title="Borrar registro">Quitar</button>
+          {/if}
+          <button class="btn-ghost flex-1" on:click={() => remModal = null} disabled={remBusy}>Cancelar</button>
+          <button class="btn-primary flex-1" on:click={saveReminder} disabled={remBusy || !remModal.channel || !remModal.dateStr}>
+            {#if remBusy}<Loader2 class="w-4 h-4 animate-spin" />{:else}Guardar{/if}
           </button>
         </div>
       </div>
