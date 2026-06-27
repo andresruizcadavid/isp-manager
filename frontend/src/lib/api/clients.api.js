@@ -26,7 +26,11 @@ export const clientsApi = {
   remove:   (id, reason) => api.delete(`/clients/${id}`, reason || undefined),
   /** Archive of deleted clients (returns { data, meta }). @param {Record<string,any>} [params] */
   archive:  (params = {}) => {
-    const q = new URLSearchParams(params).toString();
+    // Drop empty/undefined so they don't serialize as the literal "undefined".
+    const clean = Object.fromEntries(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '' && v !== false)
+    );
+    const q = new URLSearchParams(clean).toString();
     return getRaw(`/clients/archive${q ? '?' + q : ''}`);
   },
   /** @param {string} id */
