@@ -913,10 +913,30 @@
             </p>
           </div>
         {:else}
+          {@const disp = updModal.result.dispatch || {}}
           <!-- Paso 2: resultado -->
           <div class="flex items-center gap-2 rounded-lg bg-green-50 text-green-800 px-3 py-2 text-sm">
             <Check class="w-4 h-4" /> Enlace generado — vence el {new Date(updModal.result.expiresAt).toLocaleDateString('es-CO',{day:'2-digit',month:'long',year:'numeric'})}
           </div>
+          <!-- Estado de envío -->
+          {#if disp.EMAIL || disp.WHATSAPP}
+            <div class="space-y-1.5">
+              {#if disp.EMAIL?.ok}
+                <div class="flex items-center gap-1.5 text-sm text-green-700"><Check class="w-4 h-4" /> Correo <b>enviado</b> a {updModal.r.email}</div>
+              {:else if disp.EMAIL}
+                <div class="flex items-center gap-1.5 text-sm text-amber-700"><AlertTriangle class="w-4 h-4" /> Email no enviado: {disp.EMAIL.error}</div>
+              {/if}
+              {#if disp.WHATSAPP?.ok}
+                <div class="flex items-center gap-1.5 text-sm text-green-700"><Check class="w-4 h-4" /> WhatsApp <b>enviado</b> por la API</div>
+              {:else if disp.WHATSAPP}
+                <div class="flex items-center gap-1.5 text-sm text-amber-700"><AlertTriangle class="w-4 h-4" /> WhatsApp no enviado: {disp.WHATSAPP.error} — usa "Abrir WhatsApp Web" abajo</div>
+              {/if}
+            </div>
+          {:else}
+            <div class="flex items-start gap-2 rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-sm text-gray-600">
+              <Send class="w-4 h-4 shrink-0 mt-0.5" /> <span><b>Modo manual:</b> no se envió nada automáticamente. Copia el enlace/mensaje y envíalo tú.</span>
+            </div>
+          {/if}
           <!-- URL -->
           <div>
             <div class="text-xs font-medium text-gray-600 mb-1">URL pública (un solo uso)</div>
@@ -928,7 +948,7 @@
           <!-- WhatsApp -->
           {#if updModal.result.whatsappMessage}
             <div>
-              <div class="text-xs font-medium text-gray-600 mb-1 flex items-center gap-1.5"><MessageSquare class="w-3.5 h-3.5 text-emerald-600" /> Mensaje de WhatsApp</div>
+              <div class="text-xs font-medium text-gray-600 mb-1 flex items-center gap-1.5"><MessageSquare class="w-3.5 h-3.5 text-emerald-600" /> Mensaje de WhatsApp {disp.WHATSAPP?.ok ? '(enviado)' : '(para enviar manual)'}</div>
               <textarea readonly rows="7" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-xs font-mono leading-relaxed resize-none">{updModal.result.whatsappMessage}</textarea>
               <div class="flex gap-2 mt-2">
                 <button class="btn-ghost" on:click={() => copyUpd(updModal.result.whatsappMessage,'msg')}>{#if updMsgCopied}<Check class="w-4 h-4 text-green-600" /> Copiado{:else}<Copy class="w-4 h-4" /> Copiar mensaje{/if}</button>
@@ -941,7 +961,7 @@
           <!-- Email preview -->
           {#if updModal.result.emailHtml}
             <div>
-              <div class="text-xs font-medium text-gray-600 mb-1 flex items-center gap-1.5"><Mail class="w-3.5 h-3.5 text-gray-500" /> Correo (previsualización) — mismo contenido</div>
+              <div class="text-xs font-medium text-gray-600 mb-1 flex items-center gap-1.5"><Mail class="w-3.5 h-3.5 text-gray-500" /> {disp.EMAIL?.ok ? 'Correo enviado (vista del mensaje)' : 'Correo — previsualización (no enviado)'}</div>
               <div class="rounded-lg border border-gray-200 overflow-hidden bg-white">
                 <iframe title="Previsualización del correo" srcdoc={updModal.result.emailHtml} class="w-full" style="height:300px;border:0;" sandbox=""></iframe>
               </div>
