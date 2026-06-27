@@ -1,12 +1,12 @@
 {
-  "name": "ISP Manager",
-  "short_name": "ISP Manager",
-  "description": "Sistema de gestión de clientes, facturación y monitoreo de red para proveedores de internet",
+  "name": "Internet Online",
+  "short_name": "Internet Online",
+  "description": "Internet Online — El internet de nuestra gente. Actualiza tus datos y paga tu servicio.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#16357E",
+  "theme_color": "#16357E",
   "orientation": "portrait",
   "prefer_related_applications": false,
   "icons": [
