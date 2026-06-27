@@ -326,27 +326,36 @@
   ];
   // Labels para mostrar (incluye canales no seleccionables aún, p.ej. registros previos).
   const REM_LABELS = { WHATSAPP: 'WhatsApp', EMAIL: 'Email', SMS: 'SMS', LLAMADA: 'Llamada', MANUAL: 'Manual' };
-  const remLabel = (ch) => (REM_LABELS[ch] || ch || '');
+  // reminderChannel puede traer varios canales separados por coma (ej. "WHATSAPP,EMAIL").
+  const remLabel = (ch) => (ch || '').split(',').filter(Boolean).map(x => REM_LABELS[x] || x).join(' · ');
   const fdateShort = (d) => d ? new Date(d).toLocaleDateString('es-CO', { day: '2-digit', month: 'short' }) : '';
-  /** @type {{r:any, channel:string, dateStr:string}|null} */
+  /** @type {{r:any, channels:string[], dateStr:string}|null} */
   let remModal = null;
   let remBusy = false;
+  const VALID_CH = REM_CHANNELS.map(c => c.value);
   function openReminder(r) {
     const today = new Date().toISOString().slice(0, 10);
+    const existing = (r.reminderChannel || '').split(',').filter(c => VALID_CH.includes(c));
     remModal = {
       r,
-      channel: REM_CHANNELS.some(c => c.value === r.reminderChannel) ? r.reminderChannel : 'WHATSAPP',
+      channels: existing.length ? existing : ['WHATSAPP'],
       dateStr: r.reminderSentAt ? new Date(r.reminderSentAt).toISOString().slice(0, 10) : today
     };
   }
+  function toggleChannel(value) {
+    if (!remModal) return;
+    const set = new Set(remModal.channels);
+    set.has(value) ? set.delete(value) : set.add(value);
+    remModal = { ...remModal, channels: VALID_CH.filter(v => set.has(v)) };
+  }
   async function saveReminder() {
     if (!remModal) return;
-    const { r, channel, dateStr } = remModal;
+    const { r, channels, dateStr } = remModal;
     remBusy = true;
     setStatus('saving', `Registrando cobro de ${r.name}…`);
     try {
       const sentAt = dateStr ? new Date(dateStr + 'T12:00:00').toISOString() : undefined;
-      const res = await clientsApi.setReminder(r.id, { channel, sentAt });
+      const res = await clientsApi.setReminder(r.id, { channels, sentAt });
       r.reminderSentAt = res.reminderSentAt; r.reminderChannel = res.reminderChannel; rows = rows;
       setStatus('ok', `Cobro registrado para ${r.name}`);
       remModal = null;
@@ -358,7 +367,7 @@
     const { r } = remModal;
     remBusy = true;
     try {
-      const res = await clientsApi.setReminder(r.id, { channel: null });
+      const res = await clientsApi.setReminder(r.id, { channels: [] });
       r.reminderSentAt = res.reminderSentAt; r.reminderChannel = res.reminderChannel; rows = rows;
       setStatus('ok', `Cobro borrado de ${r.name}`);
       remModal = null;
@@ -797,10 +806,16 @@
       </div>
       <div class="px-4 py-3 space-y-3">
         <div>
-          <label class="block text-xs font-medium text-gray-600 mb-1">¿Por qué medio se envió?</label>
-          <select bind:value={remModal.channel} class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-[#16357E]/30">
-            {#each REM_CHANNELS as opt}<option value={opt.value}>{opt.label}</option>{/each}
-          </select>
+          <label class="block text-xs font-medium text-gray-600 mb-1.5">¿Por qué medio(s) se envió?</label>
+          <div class="grid grid-cols-2 gap-2">
+            {#each REM_CHANNELS as opt}
+              <button type="button" on:click={() => toggleChannel(opt.value)}
+                      class="inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition
+                             {remModal.channels.includes(opt.value) ? 'border-[#16357E] bg-[#eef2ff] text-[#16357E] font-medium' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}">
+                {#if remModal.channels.includes(opt.value)}<Check class="w-4 h-4" />{/if} {opt.label}
+              </button>
+            {/each}
+          </div>
         </div>
         <div>
           <label class="block text-xs font-medium text-gray-600 mb-1">Fecha de envío</label>
@@ -811,7 +826,7 @@
             <button class="btn-ghost" on:click={clearReminder} disabled={remBusy} title="Borrar registro">Quitar</button>
           {/if}
           <button class="btn-ghost flex-1" on:click={() => remModal = null} disabled={remBusy}>Cancelar</button>
-          <button class="btn-primary flex-1" on:click={saveReminder} disabled={remBusy || !remModal.channel || !remModal.dateStr}>
+          <button class="btn-primary flex-1" on:click={saveReminder} disabled={remBusy || !remModal.channels.length || !remModal.dateStr}>
             {#if remBusy}<Loader2 class="w-4 h-4 animate-spin" />{:else}Guardar{/if}
           </button>
         </div>

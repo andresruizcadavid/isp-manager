@@ -407,11 +407,15 @@ class ClientsController {
   setCollectionReminder = asyncHandler(async (req, res) => {
     const { id } = req.params;
     // Canales habilitados hoy: WhatsApp y Email. SMS queda permitido para cuando se active.
+    // Acepta `channels` (array, varios a la vez) o `channel` (uno solo, compat).
     const CHANNELS = ['WHATSAPP', 'EMAIL', 'SMS'];
-    const channel = CHANNELS.includes(req.body?.channel) ? req.body.channel : null;
+    const requested = Array.isArray(req.body?.channels)
+      ? req.body.channels
+      : (req.body?.channel ? [req.body.channel] : []);
+    const channels = [...new Set(requested.filter(c => CHANNELS.includes(c)))];
 
     let data;
-    if (!channel) {
+    if (!channels.length) {
       data = { reminderSentAt: null, reminderChannel: null };
     } else {
       let sentAt = new Date();
@@ -419,7 +423,7 @@ class ClientsController {
         const d = new Date(req.body.sentAt);
         if (!Number.isNaN(d.getTime())) sentAt = d;
       }
-      data = { reminderSentAt: sentAt, reminderChannel: channel };
+      data = { reminderSentAt: sentAt, reminderChannel: channels.join(',') };
     }
 
     const updated = await prisma.client
