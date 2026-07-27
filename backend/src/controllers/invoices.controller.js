@@ -6,20 +6,81 @@ import { paymentLinkService } from '../services/payment-link.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
 
+// ── Shared invoice filter builder ────────────────────────────────────
+// Single source of truth for the `where` used by BOTH getInvoices and
+// getInvoiceStats, so the list and its KPI aggregates can never drift.
+// Every param is optional and INDEPENDENT: a single date bound (only "from"
+// or only "to") works on its own — you don't need both ends of a range.
+const INVOICE_PAYMENT_METHODS = new Set(['CASH', 'BANK_TRANSFER', 'CREDIT_CARD', 'WOMPI', 'OTHER']);
+
+/** Parse a "YYYY-MM-DD" (or full ISO) string into a UTC day boundary.
+ *  Invoices are stored at UTC midnight, so a date-only value maps to the
+ *  start (00:00) or end (23:59:59.999) of that UTC day — keeping a
+ *  single-day filter inclusive. Returns null for empty/invalid input.
+ *  @param {string|undefined|null} s @param {boolean} endOfDay */
+function parseBoundaryDate(s, endOfDay) {
+  if (!s) return null;
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(s)
+    ? `${s}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
+    : s;
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/** @param {Record<string, any>} query */
+function buildInvoiceWhere(query) {
+  const {
+    search, status, clientId,
+    dateField, dateFrom, dateTo,
+    dueDateFrom, dueDateTo,          // back-compat aliases → dueDate field
+    amountMin, amountMax,
+    paymentMethod
+  } = query;
+
+  /** @type {Record<string, any>} */
+  const where = {};
+  if (status)   where.status = status;
+  if (clientId) where.clientId = clientId;
+
+  // Date range on the chosen column (issueDate | dueDate; default dueDate).
+  const dateCol = dateField === 'issueDate' ? 'issueDate' : 'dueDate';
+  const gte = parseBoundaryDate(dateFrom ?? dueDateFrom, false);
+  const lte = parseBoundaryDate(dateTo   ?? dueDateTo,   true);
+  if (gte || lte) where[dateCol] = { ...(gte && { gte }), ...(lte && { lte }) };
+
+  // Amount range (COP → cents). Each bound independent.
+  const aMin = amountMin === '' || amountMin == null ? null : Number(amountMin);
+  const aMax = amountMax === '' || amountMax == null ? null : Number(amountMax);
+  const hasMin = aMin != null && !isNaN(aMin);
+  const hasMax = aMax != null && !isNaN(aMax);
+  if (hasMin || hasMax) {
+    where.amount = { ...(hasMin && { gte: aMin * 100 }), ...(hasMax && { lte: aMax * 100 }) };
+  }
+
+  // Payment method: invoices with at least one COMPLETED payment of that
+  // method (efectivo=CASH, consignación=BANK_TRANSFER, wompi=WOMPI, …).
+  if (paymentMethod && INVOICE_PAYMENT_METHODS.has(paymentMethod)) {
+    where.payments = { some: { method: paymentMethod, status: 'COMPLETED' } };
+  }
+
+  if (search) {
+    where.OR = [
+      { invoiceNumber:              { contains: search, mode: 'insensitive' } },
+      { client: { name:            { contains: search, mode: 'insensitive' } } },
+      { client: { documentNumber:  { contains: search, mode: 'insensitive' } } }
+    ];
+  }
+
+  return where;
+}
+
 class InvoicesController {
   getInvoices = asyncHandler(async (req, res) => {
     const {
       page = 1,
       limit = 10,
-      search,
       sortBy: rawSortBy = 'createdAt',
-      sortOrder: rawSortOrder = 'desc',
-      status,
-      clientId,
-      dueDateFrom,
-      dueDateTo,
-      amountMin,
-      amountMax
+      sortOrder: rawSortOrder = 'desc'
     } = req.query;
     const skip = (page - 1) * limit;
 
@@ -29,29 +90,7 @@ class InvoicesController {
     const sortBy    = ALLOWED_SORT.has(rawSortBy) ? rawSortBy : 'createdAt';
     const sortOrder = rawSortOrder === 'asc' ? 'asc' : 'desc';
 
-    const where = {
-      ...(status && { status }),
-      ...(clientId && { clientId }),
-      ...(dueDateFrom && dueDateTo && {
-        dueDate: {
-          gte: new Date(dueDateFrom),
-          lte: new Date(dueDateTo)
-        }
-      }),
-      ...(amountMin && amountMax && {
-        amount: {
-          gte: Number(amountMin) * 100,
-          lte: Number(amountMax) * 100
-        }
-      }),
-      ...(search && {
-        OR: [
-          { invoiceNumber: { contains: search, mode: 'insensitive' } },
-          { client: { name: { contains: search, mode: 'insensitive' } } },
-          { client: { documentNumber: { contains: search, mode: 'insensitive' } } }
-        ]
-      })
-    };
+    const where = buildInvoiceWhere(req.query);
 
     const [invoices, total] = await Promise.all([
       prisma.invoice.findMany({
@@ -486,25 +525,7 @@ class InvoicesController {
   //
   // Calls reduce to ~5 prisma queries that run in parallel.
   getInvoiceStats = asyncHandler(async (req, res) => {
-    const { search, status, clientId, dueDateFrom, dueDateTo, amountMin, amountMax } = req.query;
-
-    const where = {
-      ...(status   && { status }),
-      ...(clientId && { clientId }),
-      ...(dueDateFrom && dueDateTo && {
-        dueDate: { gte: new Date(dueDateFrom), lte: new Date(dueDateTo) }
-      }),
-      ...(amountMin && amountMax && {
-        amount: { gte: Number(amountMin) * 100, lte: Number(amountMax) * 100 }
-      }),
-      ...(search && {
-        OR: [
-          { invoiceNumber:   { contains: search, mode: 'insensitive' } },
-          { client: { name:           { contains: search, mode: 'insensitive' } } },
-          { client: { documentNumber: { contains: search, mode: 'insensitive' } } }
-        ]
-      })
-    };
+    const where = buildInvoiceWhere(req.query);
 
     const now = new Date();
 

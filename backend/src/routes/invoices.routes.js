@@ -26,13 +26,20 @@ const createInvoiceSchema = z.object({
 const updateInvoiceSchema = createInvoiceSchema.partial();
 
 const invoiceQuerySchema = commonSchemas.pagination.extend({
-  status: z.enum(['PENDING', 'PAID', 'OVERDUE', 'CANCELLED']).optional(),
+  status: z.enum(['PENDING', 'PAID', 'OVERDUE', 'CANCELLED', 'PARTIAL', 'DRAFT', 'REFUNDED']).optional(),
   clientId: z.string().optional(),
   planId: z.string().optional(),
-  dueDateFrom: z.string().datetime().optional(),
-  dueDateTo: z.string().datetime().optional(),
-  amountMin: z.string().transform(Number).optional(),
-  amountMax: z.string().transform(Number).optional()
+  // Date range on a chosen column; each bound optional/independent.
+  // Accepts "YYYY-MM-DD" or full ISO (no longer forced to .datetime()).
+  dateField: z.enum(['issueDate', 'dueDate']).optional(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  dueDateFrom: z.string().optional(),   // back-compat aliases → dueDate
+  dueDateTo: z.string().optional(),
+  amountMin: z.coerce.number().optional(),
+  amountMax: z.coerce.number().optional(),
+  // efectivo=CASH, consignación=BANK_TRANSFER, wompi=WOMPI
+  paymentMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CREDIT_CARD', 'WOMPI', 'OTHER']).optional()
 });
 
 const bulkGenerateSchema = z.object({

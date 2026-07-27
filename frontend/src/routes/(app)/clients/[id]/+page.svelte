@@ -22,6 +22,25 @@
   let client = null;
   let pageError = '';
 
+  // Navegación contextual: la página que enlaza aquí puede pasar ?from=<ruta>
+  // para que "volver" regrese a donde venías (Facturas, Planilla, Pagos…) y no
+  // siempre a la lista de Clientes. Fallback: /clients.
+  /** @type {Record<string, string>} */
+  const BACK_LABELS = {
+    '/invoices': 'Facturas',
+    '/clients': 'Clientes',
+    '/clients/planilla': 'Planilla',
+    '/clients/eliminados': 'Eliminados',
+    '/payments': 'Pagos',
+    '/dashboard': 'Inicio',
+    '/reports': 'Reportes'
+  };
+  // Solo rutas internas ("/algo", no "//host" ni URLs externas) para evitar
+  // open-redirect a través del parámetro from.
+  $: rawFrom   = $page.url.searchParams.get('from') || '';
+  $: backHref  = (rawFrom.startsWith('/') && !rawFrom.startsWith('//')) ? rawFrom : '/clients';
+  $: backLabel = BACK_LABELS[backHref] || 'Clientes';
+
   onMount(async () => {
     const id = $page.params.id;
     try {
@@ -832,7 +851,7 @@
     <AlertCircle size={40} class="text-red-400" />
     <p class="text-slate-700 font-medium">No se pudo cargar el cliente</p>
     <p class="text-sm text-slate-500">{pageError}</p>
-    <a href="/clients" class="btn-secondary"><ArrowLeft size={14} /> Volver a Clientes</a>
+    <a href={backHref} class="btn-secondary"><ArrowLeft size={14} /> Volver a {backLabel}</a>
   </div>
 {:else}
 
@@ -856,7 +875,7 @@
 <div class="text-xs sm:text-[13px] text-slate-500 mb-2 sm:mb-3 truncate">
   <a href="/" class="hover:text-slate-700">ISP Manager</a>
   <span class="mx-1">/</span>
-  <a href="/clients" class="hover:text-slate-700">Clientes</a>
+  <a href={backHref} class="hover:text-slate-700">{backLabel}</a>
   <span class="mx-1">/</span>
   <span class="text-slate-700 font-medium">{client?.name || '...'}</span>
 </div>
@@ -864,7 +883,7 @@
 <!-- Page header: mobile stacked, desktop side-by-side -->
 <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 mb-4 sm:mb-6">
   <div class="flex items-center gap-2.5 sm:gap-3 min-w-0 overflow-hidden">
-    <a href="/clients" class="btn-icon flex-shrink-0" title="Volver a clientes">
+    <a href={backHref} class="btn-icon flex-shrink-0" title="Volver a {backLabel}">
       <ArrowLeft size={20} class="sm:w-[18px] sm:h-[18px]" />
     </a>
     {#if client}

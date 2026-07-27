@@ -610,7 +610,7 @@
                   <button class="shrink-0 text-gray-300 hover:text-[#16357E]" title="Solicitar actualización de datos / enviar enlace"
                           on:click={() => openUpdate(r)}><Link2 class="w-3.5 h-3.5" /></button>
                   <button class="shrink-0 text-gray-300 hover:text-[#16357E]" title="Editar ficha completa"
-                          on:click={() => goto(`/clients/${r.id}`)}><Pencil class="w-3.5 h-3.5" /></button>
+                          on:click={() => goto(`/clients/${r.id}?from=/clients/planilla`)}><Pencil class="w-3.5 h-3.5" /></button>
                   <button class="shrink-0 text-gray-300 hover:text-red-600" title="Eliminar cliente"
                           on:click={() => askDelete(r)}><Trash2 class="w-3.5 h-3.5" /></button>
                 </div>

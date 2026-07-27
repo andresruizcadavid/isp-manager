@@ -5,7 +5,8 @@
   import {
     Search, FileText, Eye, AlertCircle,
     Wallet, Clock, CheckCircle2, AlertTriangle,
-    Pencil, Trash2, X, Loader2, Save
+    Pencil, Trash2, X, Loader2, Save,
+    ArrowUp, ArrowDown, ArrowUpDown, Download
   } from 'lucide-svelte';
 
   /** @type {import('$lib/types').Invoice[]} */
@@ -23,31 +24,97 @@
 
   let q = '';
   let status = '';
+  let paymentMethod = '';           // '' | CASH | BANK_TRANSFER | WOMPI
+  let dateField = 'dueDate';        // 'dueDate' (vencimiento) | 'issueDate' (emisión)
+  let dateFrom = '';                // 'YYYY-MM-DD'
+  let dateTo = '';                  // 'YYYY-MM-DD'
   let page = 1;
   const pageSize = 20;
+  // Ordenamiento (el backend valida contra una whitelist).
+  let sortBy = 'createdAt';         // createdAt | invoiceNumber | issueDate | dueDate | amount | total | status
+  let sortOrder = 'desc';           // 'asc' | 'desc'
+  let exporting = false;
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let searchTimer;
 
   /** Build the shared filter object used by BOTH the list query and the
-   *  stats query. Single source of truth so they can't drift. */
+   *  stats query. Single source of truth so they can't drift. All filters
+   *  combine (server ANDs them); date bounds are independent (solo "desde",
+   *  solo "hasta", o rango). */
   function buildFilterParams() {
     /** @type {Record<string, any>} */
     const p = {};
-    if (q.trim()) p.search = q.trim();
-    if (status)   p.status = status;
+    if (q.trim())      p.search = q.trim();
+    if (status)        p.status = status;
+    if (paymentMethod) p.paymentMethod = paymentMethod;
+    if (dateFrom || dateTo) {
+      p.dateField = dateField;
+      if (dateFrom) p.dateFrom = dateFrom;
+      if (dateTo)   p.dateTo   = dateTo;
+    }
     return p;
+  }
+
+  function clearFilters() {
+    q = ''; status = ''; paymentMethod = '';
+    dateField = 'dueDate'; dateFrom = ''; dateTo = '';
+    reloadAll();
   }
 
   async function load() {
     loading = true; error = '';
     try {
-      const params = { page, limit: pageSize, ...buildFilterParams() };
+      const params = { page, limit: pageSize, sortBy, sortOrder, ...buildFilterParams() };
       const res = await invoicesApi.getPage(params);
       invoices = res?.data ?? [];
       total    = res?.meta?.total ?? invoices.length;
     } catch (/** @type {any} */ e) {
       error = e.message || 'Error al cargar facturas';
     } finally { loading = false; }
+  }
+
+  /** Ordenar por columna: si es la misma, alterna asc/desc; si es nueva, arranca en desc. @param {string} col */
+  function applySort(col) {
+    if (sortBy === col) sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+    else { sortBy = col; sortOrder = 'desc'; }
+    page = 1;
+    load();   // el orden no cambia los KPIs → no recargamos stats
+  }
+
+  /** Exporta a Excel el set COMPLETO que cumple los filtros actuales (no solo la
+   *  página visible), respetando el orden. Cap 500 = tope del servidor. */
+  async function exportXlsx() {
+    exporting = true; error = '';
+    try {
+      const res = await invoicesApi.getPage({ page: 1, limit: 500, sortBy, sortOrder, ...buildFilterParams() });
+      const rows = res?.data ?? [];
+      if (!rows.length) { error = 'No hay facturas para exportar con los filtros actuales.'; return; }
+      const XLSX = await import('xlsx');
+      /** @type {Record<string,string>} */
+      const METHOD_PT = { CASH:'Efectivo', BANK_TRANSFER:'Consignación', WOMPI:'Wompi', CREDIT_CARD:'Tarjeta', OTHER:'Otro' };
+      const header = ['Número','Cliente','Documento','Emisión','Vencimiento','Subtotal (COP)','Total (COP)','Estado','Pagada','Medio(s) de pago'];
+      const data = rows.map((/** @type {any} */ inv) => {
+        const medios = [...new Set((inv.payments || [])
+          .filter((/** @type {any} */ p) => p.status === 'COMPLETED')
+          .map((/** @type {any} */ p) => METHOD_PT[p.method] || p.method))].join(', ');
+        return [
+          inv.invoiceNumber || '', inv.client?.name || '', inv.client?.documentNumber || '',
+          fmtDate(inv.issueDate), fmtDate(inv.dueDate),
+          Math.round((inv.amount || 0) / 100), Math.round((inv.total || 0) / 100),
+          STATUS_PT[inv.status] || inv.status, fmtDate(inv.paidDate), medios
+        ];
+      });
+      const ws = XLSX.utils.aoa_to_sheet([header, ...data]);
+      ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 20 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Facturas');
+      XLSX.writeFile(wb, `facturas_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      if (res?.meta?.total > rows.length) {
+        error = `Se exportaron ${rows.length} de ${res.meta.total} facturas (tope de exportación). Afina los filtros para exportar el resto.`;
+      }
+    } catch (/** @type {any} */ e) {
+      error = e.message || 'No se pudo exportar el Excel.';
+    } finally { exporting = false; }
   }
 
   /** Aggregate KPIs for the FULL filtered set. Run in parallel with load(). */
@@ -74,7 +141,12 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(reloadAll, 300);
   }
-  function onStatusChange() { reloadAll(); }
+
+  /** Ícono de orden para una columna. @param {string} col */
+  function arrowFor(col) {
+    if (sortBy !== col) return ArrowUpDown;
+    return sortOrder === 'asc' ? ArrowUp : ArrowDown;
+  }
 
   $: totalPages = Math.max(1, Math.ceil(total / pageSize));
   /** @param {number} p */
@@ -91,7 +163,7 @@
   $: kpiPending    = stats?.pending          ?? 0;
   $: kpiPaid       = stats?.paid             ?? 0;
   $: kpiPendingAmt = stats?.outstandingAmount ?? 0;
-  $: hasFilters    = !!(q.trim() || status);
+  $: hasFilters    = !!(q.trim() || status || paymentMethod || dateFrom || dateTo);
 
   /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
@@ -104,9 +176,9 @@
     return new Date(s).toLocaleDateString('es-CO', { day: '2-digit', month: '2-digit', year: 'numeric' });
   }
   /** @type {Record<string, string>} */
-  const STATUS_PT = { DRAFT:'Borrador', PENDING:'Pendiente', PAID:'Pagada', OVERDUE:'Vencida', CANCELLED:'Cancelada', REFUNDED:'Reembolsada' };
+  const STATUS_PT = { DRAFT:'Borrador', PENDING:'Pendiente', PARTIAL:'Parcial', PAID:'Pagada', OVERDUE:'Vencida', CANCELLED:'Cancelada', REFUNDED:'Reembolsada' };
   /** @type {Record<string, string>} */
-  const STATUS_CLS = { PAID:'badge-green', PENDING:'badge-yellow', OVERDUE:'badge-red', CANCELLED:'badge-gray', DRAFT:'badge-gray', REFUNDED:'badge-blue' };
+  const STATUS_CLS = { PAID:'badge-green', PENDING:'badge-yellow', PARTIAL:'badge-blue', OVERDUE:'badge-red', CANCELLED:'badge-gray', DRAFT:'badge-gray', REFUNDED:'badge-blue' };
 
   // ── Editar / Eliminar factura ──────────────────────────────
   let editOpen = false;
@@ -163,10 +235,17 @@
       {#if hasFilters}<span class="text-amber-700 font-medium">· filtros activos</span>{:else}<span>en el sistema</span>{/if}
     </p>
   </div>
-  <a href="/invoices/new" class="btn-primary btn-sm flex items-center gap-1.5">
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-    Nueva Factura
-  </a>
+  <div class="flex items-center gap-2">
+    <button class="btn-secondary btn-sm flex items-center gap-1.5" on:click={exportXlsx}
+            disabled={exporting || loading || total === 0} title="Exportar a Excel las facturas que cumplen los filtros">
+      {#if exporting}<Loader2 size={14} class="animate-spin" />{:else}<Download size={14} />{/if}
+      Exportar
+    </button>
+    <a href="/invoices/new" class="btn-primary btn-sm flex items-center gap-1.5">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      Nueva Factura
+    </a>
+  </div>
 </div>
 
 <!-- KPI strip — values are SERVER aggregates over the filtered set,
@@ -218,23 +297,54 @@
 {/if}
 
 <div class="card mb-5">
-  <div class="p-4 flex items-center gap-3 flex-wrap">
-    <div class="relative flex-1 min-w-[220px] max-w-sm">
-      <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-      <input class="input-search" placeholder="Número, cliente, cédula..." bind:value={q} on:input={onSearchInput} />
+  <div class="p-4 space-y-3">
+    <!-- Fila 1: búsqueda + estado + método de pago -->
+    <div class="flex items-center gap-3 flex-wrap">
+      <div class="relative flex-1 min-w-[220px] max-w-sm">
+        <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <input class="input-search" placeholder="Número, cliente, cédula..." bind:value={q} on:input={onSearchInput} />
+      </div>
+      <select class="select w-auto min-w-[150px]" bind:value={status} on:change={reloadAll} title="Estado de la factura">
+        <option value="">Todos los estados</option>
+        <option value="PENDING">Pendiente</option>
+        <option value="PARTIAL">Parcial</option>
+        <option value="PAID">Pagada</option>
+        <option value="OVERDUE">Vencida</option>
+        <option value="CANCELLED">Cancelada</option>
+        <option value="REFUNDED">Reembolsada</option>
+        <option value="DRAFT">Borrador</option>
+      </select>
+      <select class="select w-auto min-w-[150px]" bind:value={paymentMethod} on:change={reloadAll} title="Medio con que se pagó">
+        <option value="">Todos los medios</option>
+        <option value="CASH">Efectivo</option>
+        <option value="BANK_TRANSFER">Consignación</option>
+        <option value="WOMPI">Wompi</option>
+      </select>
     </div>
-    <select class="select w-auto min-w-[160px]" bind:value={status} on:change={onStatusChange}>
-      <option value="">Todos los estados</option>
-      <option value="PENDING">Pendiente</option>
-      <option value="PAID">Pagada</option>
-      <option value="OVERDUE">Vencida</option>
-      <option value="CANCELLED">Cancelada</option>
-      <option value="REFUNDED">Reembolsada</option>
-      <option value="DRAFT">Borrador</option>
-    </select>
-    {#if q || status}
-      <button class="btn-ghost text-xs" on:click={() => { q=''; status=''; page=1; load(); }}>Limpiar</button>
-    {/if}
+
+    <!-- Fila 2: rango de fechas sobre el campo elegido -->
+    <div class="flex items-end gap-3 flex-wrap">
+      <div>
+        <label for="date-field" class="block text-[11px] font-medium text-slate-500 mb-1">Filtrar por fecha de</label>
+        <select id="date-field" class="select w-auto min-w-[140px]" bind:value={dateField} on:change={() => (dateFrom || dateTo) && reloadAll()}>
+          <option value="dueDate">Vencimiento</option>
+          <option value="issueDate">Emisión</option>
+        </select>
+      </div>
+      <div>
+        <label for="date-from" class="block text-[11px] font-medium text-slate-500 mb-1">Desde</label>
+        <input id="date-from" type="date" class="input w-auto" bind:value={dateFrom} on:change={reloadAll} max={dateTo || undefined} />
+      </div>
+      <div>
+        <label for="date-to" class="block text-[11px] font-medium text-slate-500 mb-1">Hasta</label>
+        <input id="date-to" type="date" class="input w-auto" bind:value={dateTo} on:change={reloadAll} min={dateFrom || undefined} />
+      </div>
+      {#if hasFilters}
+        <button class="btn-ghost text-xs mb-0.5" on:click={clearFilters}>
+          <X size={13} /> Limpiar filtros
+        </button>
+      {/if}
+    </div>
   </div>
 </div>
 
@@ -243,13 +353,37 @@
     <table class="data-table">
       <thead>
         <tr>
-          <th>Número</th>
+          <th>
+            <button class="th-sort" class:th-active={sortBy==='invoiceNumber'} on:click={() => applySort('invoiceNumber')}>
+              Número <svelte:component this={arrowFor('invoiceNumber')} size={12} class={sortBy==='invoiceNumber' ? '' : 'text-slate-300'} />
+            </button>
+          </th>
           <th>Cliente</th>
-          <th>Emisión</th>
-          <th>Vencimiento</th>
-          <th class="text-right">Subtotal</th>
-          <th class="text-right">Total</th>
-          <th>Estado</th>
+          <th>
+            <button class="th-sort" class:th-active={sortBy==='issueDate'} on:click={() => applySort('issueDate')}>
+              Emisión <svelte:component this={arrowFor('issueDate')} size={12} class={sortBy==='issueDate' ? '' : 'text-slate-300'} />
+            </button>
+          </th>
+          <th>
+            <button class="th-sort" class:th-active={sortBy==='dueDate'} on:click={() => applySort('dueDate')}>
+              Vencimiento <svelte:component this={arrowFor('dueDate')} size={12} class={sortBy==='dueDate' ? '' : 'text-slate-300'} />
+            </button>
+          </th>
+          <th class="text-right">
+            <button class="th-sort justify-end w-full" class:th-active={sortBy==='amount'} on:click={() => applySort('amount')}>
+              Subtotal <svelte:component this={arrowFor('amount')} size={12} class={sortBy==='amount' ? '' : 'text-slate-300'} />
+            </button>
+          </th>
+          <th class="text-right">
+            <button class="th-sort justify-end w-full" class:th-active={sortBy==='total'} on:click={() => applySort('total')}>
+              Total <svelte:component this={arrowFor('total')} size={12} class={sortBy==='total' ? '' : 'text-slate-300'} />
+            </button>
+          </th>
+          <th>
+            <button class="th-sort" class:th-active={sortBy==='status'} on:click={() => applySort('status')}>
+              Estado <svelte:component this={arrowFor('status')} size={12} class={sortBy==='status' ? '' : 'text-slate-300'} />
+            </button>
+          </th>
           <th>Pagada</th>
           <th class="text-right">Acciones</th>
         </tr>
@@ -270,7 +404,7 @@
               </div>
               <div>
                 <p class="text-sm font-semibold text-slate-700">
-                  {q || status ? 'Ninguna factura coincide con los filtros' : 'Aún no hay facturas'}
+                  {hasFilters ? 'Ninguna factura coincide con los filtros' : 'Aún no hay facturas'}
                 </p>
               </div>
             </div>
@@ -280,7 +414,7 @@
             <tr>
               <td class="font-mono text-xs text-slate-700">{inv.invoiceNumber ?? '—'}</td>
               <td>
-                <a href="/clients/{inv.client?.id}" class="font-medium text-slate-900 hover:text-brand-800 transition-colors">
+                <a href="/clients/{inv.client?.id}?from=/invoices" class="font-medium text-slate-900 hover:text-brand-800 transition-colors">
                   {inv.client?.name ?? '—'}
                 </a>
                 {#if inv.client?.documentNumber}
@@ -372,3 +506,24 @@
     </div>
   </div>
 {/if}
+
+<style>
+  /* Encabezados ordenables: heredan el estilo de la celda th de .data-table
+     y solo agregan el layout del ícono + el color de marca en hover/activo. */
+  .th-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    text-transform: inherit;
+    letter-spacing: inherit;
+    transition: color .12s;
+  }
+  .th-sort:hover { color: #16357E; }
+  .th-active { color: #16357E; }
+</style>
