@@ -424,6 +424,8 @@
       <option value="">Todos los medios</option>
       <option value="CASH">Efectivo</option>
       <option value="BANK_TRANSFER">Consignación</option>
+      <option value="NEQUI">Nequi</option>
+      <option value="BANCOLOMBIA">Bancolombia</option>
       <option value="WOMPI">Wompi</option>
     </select>
 

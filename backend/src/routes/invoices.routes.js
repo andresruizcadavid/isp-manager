@@ -38,8 +38,8 @@ const invoiceQuerySchema = commonSchemas.pagination.extend({
   dueDateTo: z.string().optional(),
   amountMin: z.coerce.number().optional(),
   amountMax: z.coerce.number().optional(),
-  // efectivo=CASH, consignación=BANK_TRANSFER, wompi=WOMPI
-  paymentMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CREDIT_CARD', 'WOMPI', 'OTHER']).optional()
+  // efectivo=CASH, consignación=BANK_TRANSFER, wompi=WOMPI, nequi, bancolombia
+  paymentMethod: z.enum(['CASH', 'BANK_TRANSFER', 'CREDIT_CARD', 'WOMPI', 'NEQUI', 'BANCOLOMBIA', 'OTHER']).optional()
 });
 
 const bulkGenerateSchema = z.object({

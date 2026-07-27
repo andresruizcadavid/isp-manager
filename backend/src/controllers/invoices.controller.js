@@ -11,7 +11,7 @@ import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.templ
 // getInvoiceStats, so the list and its KPI aggregates can never drift.
 // Every param is optional and INDEPENDENT: a single date bound (only "from"
 // or only "to") works on its own — you don't need both ends of a range.
-const INVOICE_PAYMENT_METHODS = new Set(['CASH', 'BANK_TRANSFER', 'CREDIT_CARD', 'WOMPI', 'OTHER']);
+const INVOICE_PAYMENT_METHODS = new Set(['CASH', 'BANK_TRANSFER', 'CREDIT_CARD', 'WOMPI', 'NEQUI', 'BANCOLOMBIA', 'OTHER']);
 
 /** Parse a "YYYY-MM-DD" (or full ISO) string into a UTC day boundary.
  *  Invoices are stored at UTC midnight, so a date-only value maps to the

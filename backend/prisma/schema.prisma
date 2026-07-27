@@ -50,6 +50,8 @@ enum PaymentMethod {
   BANK_TRANSFER
   CREDIT_CARD
   WOMPI
+  NEQUI
+  BANCOLOMBIA
   OTHER
 }
 
