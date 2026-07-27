@@ -273,6 +273,10 @@ class ClientsController {
     const openStatus = () => (dueDate < new Date() ? 'OVERDUE' : 'PENDING');
     const itemDesc  = `Mensualidad ${MONTHS_ES[m - 1]} ${y}`;
 
+    // Set when a payment is created (action === 'pay') so the client can attach
+    // an evidence photo (comprobante) to that exact payment afterwards.
+    let createdPaymentId = null;
+
     // Create or reactivate an invoice slot for the month at `cents`.
     const ensureInvoice = async (cents) => {
       if (cents <= 0) throw new AppError('Define la mensualidad del cliente antes de facturar', 400, 'NO_FEE');
@@ -315,10 +319,11 @@ class ClientsController {
       if (prevPaid + payCents > total) throw new AppError('El pago excede el saldo de la factura', 400, 'PAYMENT_EXCEEDS');
       const remaining = Math.max(0, total - (prevPaid + payCents));
       const newStatus = remaining === 0 ? 'PAID' : 'PARTIAL';
-      await prisma.$transaction([
+      const [createdPayment] = await prisma.$transaction([
         prisma.payment.create({ data: { invoiceId: inv.id, clientId: id, amount: payCents, method, status: 'COMPLETED', notes: 'Pago registrado desde la planilla', createdByUserId: req.user?.id, createdByUserName: req.user?.name } }),
         prisma.invoice.update({ where: { id: inv.id }, data: { status: newStatus, balanceDue: remaining, ...(newStatus === 'PAID' && { paidDate: new Date() }) } })
       ]);
+      createdPaymentId = createdPayment.id;
 
     } else if (action === 'unpay') {
       if (!invoice) throw new AppError('No hay factura en ese mes', 404, 'NO_INVOICE');
@@ -348,7 +353,7 @@ class ClientsController {
       ? { invoiceId: finalInv.id, invoiceNumber: finalInv.invoiceNumber, status: finalInv.status, amount: finalInv.total ?? finalInv.amount, balanceDue: finalInv.balanceDue }
       : null;
 
-    res.json({ success: true, data: { month: m, cell, totalDebt: debtAgg._sum.balanceDue || 0 } });
+    res.json({ success: true, data: { month: m, cell, totalDebt: debtAgg._sum.balanceDue || 0, paymentId: createdPaymentId } });
   });
 
   // GET /clients/archive — list deleted-client archive rows (snapshot + financial

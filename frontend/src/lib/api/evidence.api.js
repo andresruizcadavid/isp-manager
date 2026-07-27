@@ -22,7 +22,7 @@ export const evidenceApi = {
   /**
    * @param {string} clientId
    * @param {File[] | FileList} files
-   * @param {{ type?: string, description?: string }} [meta]
+   * @param {{ type?: string, description?: string, paymentId?: string }} [meta]
    * @returns {Promise<EvidencePhoto[]>}
    */
   upload: async (clientId, files, meta = {}) => {
@@ -30,6 +30,7 @@ export const evidenceApi = {
     for (const f of files) form.append('files', f);
     if (meta.type)        form.append('type', meta.type);
     if (meta.description) form.append('description', meta.description);
+    if (meta.paymentId)   form.append('paymentId', meta.paymentId);
 
     const res = await fetch(`${BASE}/api/v1/clients/${clientId}/evidence-photos`, {
       method: 'POST',

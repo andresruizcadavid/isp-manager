@@ -2,11 +2,12 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { clientsApi } from '$lib/api/clients.api.js';
+  import { evidenceApi } from '$lib/api/evidence.api.js';
   import {
     Search, Loader2, AlertCircle, Table2, RefreshCw, Wallet,
     Undo2, Redo2, CheckCircle2, XCircle, X, Banknote, Landmark, Ban, RotateCcw, Plus,
     Download, Upload, AlertTriangle, Pencil, Trash2, Send, Check,
-    Mail, MessageSquare, Link2, Copy, ExternalLink
+    Mail, MessageSquare, Link2, Copy, ExternalLink, Camera, ArrowUp, ArrowDown, ArrowUpDown
   } from 'lucide-svelte';
 
   // ── State ───────────────────────────────────────────
@@ -15,6 +16,8 @@
   let loading = true;
   let error = '';
   let q = '';
+  /** Ordenamiento por IP. null = orden natural (por ID/nombre del backend). @type {null|'asc'|'desc'} */
+  let ipSort = null;
   const NOW_YEAR = new Date().getFullYear();
   let year = NOW_YEAR;
   const YEARS = [NOW_YEAR + 1, NOW_YEAR, NOW_YEAR - 1, NOW_YEAR - 2];
@@ -35,6 +38,23 @@
   const norm = (s) => (s || '').toString().toLowerCase();
   const cop = (cents) => Math.round((cents || 0) / 100);   // cents -> COP integer
   const LABELS = { fullName:'nombre', name:'nombre', phone:'teléfono', email:'correo', monthlyFee:'mensualidad' };
+
+  /** IPv4 → entero comparable (por octetos, no alfabético: .10 va después de .2). Vacías/invalidas al final. @param {any} ip */
+  function ipKey(ip) {
+    const parts = String(ip || '').trim().split('.');
+    if (parts.length !== 4) return Number.POSITIVE_INFINITY;
+    let n = 0;
+    for (const p of parts) {
+      const o = Number(p);
+      if (!Number.isInteger(o) || o < 0 || o > 255) return Number.POSITIVE_INFINITY;
+      n = n * 256 + o;
+    }
+    return n;
+  }
+  // Ciclo del encabezado IP: natural → ascendente → descendente → natural.
+  function toggleIpSort() {
+    ipSort = ipSort === 'asc' ? 'desc' : ipSort === 'desc' ? null : 'asc';
+  }
 
   function cellState(m) {
     if (!m) return 'none';
@@ -119,12 +139,32 @@
   let cellModal = null;
   let cellBusy = false;
 
+  // Foto de comprobante opcional para el registro de pago. Se sube a la evidencia
+  // del cliente ligada al pago recién creado (paymentId que devuelve sheetCell).
+  /** @type {File|null} */
+  let payPhoto = null;
+  let payPhotoUrl = '';
+  /** @param {Event} e */
+  function onPayPhoto(e) {
+    const input = /** @type {HTMLInputElement} */ (e.currentTarget);
+    const f = input.files?.[0];
+    input.value = '';
+    if (payPhotoUrl) URL.revokeObjectURL(payPhotoUrl);
+    payPhoto = f || null;
+    payPhotoUrl = f ? URL.createObjectURL(f) : '';
+  }
+  function clearPayPhoto() {
+    if (payPhotoUrl) URL.revokeObjectURL(payPhotoUrl);
+    payPhoto = null; payPhotoUrl = '';
+  }
+
   function openCell(r, m, cell) {
     const st = cellState(cell);
     const prefill = cop((cell?.balanceDue || cell?.amount) || r.monthlyFee || 0);
+    clearPayPhoto();
     cellModal = { r, m, cell, mode: 'menu', method: 'CASH', amountCop: prefill, st };
   }
-  function closeCell() { if (!cellBusy) cellModal = null; }
+  function closeCell() { if (!cellBusy) { clearPayPhoto(); cellModal = null; } }
 
   async function doCell(action, extra = {}) {
     if (!cellModal) return;
@@ -136,7 +176,23 @@
       if (resp.cell) r.months = { ...r.months, [m]: resp.cell };
       else { const mm = { ...r.months }; delete mm[m]; r.months = mm; }
       r.totalDebt = resp.totalDebt; rows = rows;
-      setStatus('ok', `${MONTHS[m - 1]} de ${r.name} actualizado`);
+
+      // Adjuntar el comprobante al pago recién creado, si el usuario cargó una foto.
+      if (action === 'pay' && payPhoto && resp.paymentId) {
+        try {
+          await evidenceApi.upload(r.id, [payPhoto], {
+            type: 'payment', paymentId: resp.paymentId,
+            description: `Comprobante de pago · ${MONTHS[m - 1]} ${year}`
+          });
+          setStatus('ok', `${MONTHS[m - 1]} de ${r.name} actualizado · foto adjunta`);
+        } catch (/** @type {any} */ e) {
+          // El pago YA quedó registrado; solo falló la foto. No revertimos.
+          setStatus('err', `Pago guardado, pero la foto no se pudo subir: ${e?.message || 'error'}`);
+        }
+      } else {
+        setStatus('ok', `${MONTHS[m - 1]} de ${r.name} actualizado`);
+      }
+      clearPayPhoto();
       cellModal = null;
     } catch (e) {
       setStatus('err', e?.message || 'No se pudo actualizar el mes');
@@ -155,7 +211,7 @@
     try {
       const XLSX = await import('xlsx');
       const header = ['ID', 'Nombre', 'IP', 'Teléfono', 'Correo', 'Documento', 'Mensual', 'Cobro enviado', 'Medio cobro', ...MONTHS, 'Deuda total'];
-      const data = filtered.map(r => [
+      const data = displayed.map(r => [
         r.id, r.name, r.ip || '', r.phone || '', r.email || '', r.documentNumber || '', cop(r.monthlyFee),
         r.reminderSentAt ? new Date(r.reminderSentAt).toLocaleDateString('es-CO') : '', remLabel(r.reminderChannel),
         ...MONTHS.map((_, i) => monthToken(r.months[i + 1])),
@@ -433,6 +489,13 @@
            norm(r.email).includes(t) || norm(r.phone).includes(t) ||
            norm(r.documentNumber).includes(t);
   });
+  // Orden de visualización: aplica el orden por IP sobre lo filtrado. Los totales
+  // y conteos usan `filtered` (el orden no los cambia); la tabla y el export usan `displayed`.
+  $: displayed = !ipSort ? filtered : [...filtered].sort((a, b) => {
+    const ka = ipKey(a.ip), kb = ipKey(b.ip);
+    const cmp = ka === kb ? norm(a.name).localeCompare(norm(b.name)) : ka - kb;
+    return ipSort === 'asc' ? cmp : -cmp;
+  });
   $: totalDebt = filtered.reduce((s, r) => s + (r.totalDebt || 0), 0);
   $: debtorCount = filtered.filter(r => (r.totalDebt || 0) > 0).length;
 </script>
@@ -496,7 +559,7 @@
     <span class="inline-flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-green-500"></span> Pagó</span>
     <span class="inline-flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-red-500"></span> Debe</span>
     <span class="inline-flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-gray-200"></span> No facturado</span>
-    <span class="text-gray-400">· Nombre, teléfono, correo y mensualidad se editan al instante (autosave). IP y meses, solo lectura por ahora.</span>
+    <span class="text-gray-400">· Nombre, teléfono, correo y mensualidad se editan al instante (autosave). Clic en el encabezado <b>IP</b> para ordenar. Al registrar un pago puedes adjuntar el comprobante.</span>
   </div>
 
   {#if loading}
@@ -513,7 +576,17 @@
         <thead class="sticky top-0 z-20">
           <tr class="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
             <th class="sticky left-0 z-30 bg-gray-50 text-left px-3 py-2 border-b border-r border-gray-200 min-w-[220px]">Cliente</th>
-            <th class="text-left px-3 py-2 border-b border-gray-200 min-w-[120px]">IP</th>
+            <th class="text-left px-1 py-1 border-b border-gray-200 min-w-[120px]">
+              <button type="button" on:click={toggleIpSort}
+                      class="inline-flex items-center gap-1 px-2 py-1 rounded uppercase tracking-wide text-xs font-semibold
+                             hover:bg-gray-200/70 {ipSort ? 'text-[#16357E]' : 'text-gray-600'}"
+                      title="Ordenar por IP (asc/desc)">
+                IP
+                {#if ipSort === 'asc'}<ArrowUp class="w-3.5 h-3.5" />
+                {:else if ipSort === 'desc'}<ArrowDown class="w-3.5 h-3.5" />
+                {:else}<ArrowUpDown class="w-3.5 h-3.5 text-gray-400" />{/if}
+              </button>
+            </th>
             <th class="text-left px-3 py-2 border-b border-gray-200 min-w-[130px]">Teléfono</th>
             <th class="text-left px-3 py-2 border-b border-gray-200 min-w-[210px]">Correo</th>
             <th class="text-right px-3 py-2 border-b border-gray-200 min-w-[110px]">Mensual</th>
@@ -525,7 +598,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each filtered as r (r.id)}
+          {#each displayed as r (r.id)}
             <tr class="hover:bg-blue-50/30 border-b border-gray-100">
               <!-- Name (editable) + open-ficha link -->
               <td class="sticky left-0 z-10 bg-white px-2 py-1 border-r border-gray-200">
@@ -600,7 +673,7 @@
               </td>
             </tr>
           {/each}
-          {#if filtered.length === 0}
+          {#if displayed.length === 0}
             <tr><td colspan={19} class="text-center py-10 text-gray-400">Sin resultados</td></tr>
           {/if}
         </tbody>
@@ -667,6 +740,22 @@
             </div>
             <label class="block text-xs font-medium text-gray-600 mt-2">Monto (COP)</label>
             <input type="number" min="0" bind:value={cellModal.amountCop} class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:ring-2 focus:ring-[#16357E]/30" />
+
+            <!-- Comprobante (opcional): foto que se adjunta al pago -->
+            <label class="block text-xs font-medium text-gray-600 mt-2">Comprobante (opcional)</label>
+            {#if payPhotoUrl}
+              <div class="flex items-center gap-2 rounded-lg border border-gray-200 p-2">
+                <img src={payPhotoUrl} alt="Comprobante" class="w-12 h-12 rounded object-cover border border-gray-200" />
+                <span class="text-xs text-gray-500 truncate flex-1">{payPhoto?.name}</span>
+                <button type="button" class="text-gray-400 hover:text-red-600" on:click={clearPayPhoto} title="Quitar foto" disabled={cellBusy}><X class="w-4 h-4" /></button>
+              </div>
+            {:else}
+              <label class="flex items-center justify-center gap-2 rounded-lg border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-500 cursor-pointer hover:bg-gray-50">
+                <Camera class="w-4 h-4" /> Adjuntar foto
+                <input type="file" accept="image/*" class="hidden" on:change={onPayPhoto} />
+              </label>
+            {/if}
+
             <div class="flex gap-2 pt-1">
               <button class="btn-ghost flex-1" on:click={() => cellModal = { ...cm, mode: 'menu' }} disabled={cellBusy}>Atrás</button>
               <button class="btn-primary flex-1" on:click={() => doCell('pay', { method: cm.method, amount: Math.round((cm.amountCop || 0) * 100) })} disabled={cellBusy || !(cm.amountCop > 0)}>

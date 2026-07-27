@@ -102,10 +102,19 @@ router.post('/', (req, res, next) => {
       return res.status(404).json({ success: false, error: 'Cliente no encontrado.' });
     }
 
-    const allowedTypes = new Set(['installation', 'support', 'visit', 'other']);
+    const allowedTypes = new Set(['installation', 'support', 'visit', 'payment', 'other']);
     const type = allowedTypes.has(req.body?.type) ? req.body.type : 'other';
     const description = (req.body?.description || '').trim() || null;
     const technicianId = req.user?.id || null;
+
+    // Optional link to a payment (comprobante de pago). Only honored when the
+    // payment exists AND belongs to this client — otherwise ignored so a bad
+    // id can't attach the photo to someone else's payment.
+    let paymentId = (req.body?.paymentId || '').trim() || null;
+    if (paymentId) {
+      const pay = await prisma.payment.findUnique({ where: { id: paymentId }, select: { clientId: true } });
+      if (!pay || pay.clientId !== clientId) paymentId = null;
+    }
 
     const records = [];
     for (const f of req.files) {
@@ -115,6 +124,7 @@ router.post('/', (req, res, next) => {
           technicianId,
           type,
           description,
+          paymentId,
           fileUrl:  `/uploads/evidence/${path.basename(f.path)}`,
           fileName: f.originalname || null,
           mimeType: f.mimetype || null,
