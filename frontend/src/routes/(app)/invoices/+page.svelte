@@ -6,7 +6,8 @@
     Search, FileText, Eye, AlertCircle,
     Wallet, Clock, CheckCircle2, AlertTriangle,
     Pencil, Trash2, X, Loader2, Save,
-    ArrowUp, ArrowDown, ArrowUpDown, Download
+    ArrowUp, ArrowDown, ArrowUpDown, Download,
+    Calendar, ChevronDown
   } from 'lucide-svelte';
 
   /** @type {import('$lib/types').Invoice[]} */
@@ -37,6 +38,79 @@
   /** @type {ReturnType<typeof setTimeout> | undefined} */
   let searchTimer;
 
+  // ── Estado del selector de fecha (popover con atajos) ──────────────
+  let dateOpen = false;
+  let datePreset = '';              // etiqueta del atajo activo (para el chip)
+  // Valores en edición dentro del popover (se confirman al "Aplicar").
+  let pDateField = 'dueDate';
+  let pFrom = '';
+  let pTo = '';
+  let pPreset = '';
+
+  // Estado como pestañas rápidas; los estados menos comunes van al select "Otros".
+  const STATUS_TABS = [
+    { v: '', l: 'Todas' },
+    { v: 'PENDING', l: 'Pendientes' },
+    { v: 'OVERDUE', l: 'Vencidas' },
+    { v: 'PAID', l: 'Pagadas' }
+  ];
+  const OTHER_STATUSES = ['PARTIAL', 'CANCELLED', 'REFUNDED', 'DRAFT'];
+  const DATE_PRESETS = [
+    { k: 'today', l: 'Hoy' }, { k: 'week', l: 'Esta semana' }, { k: 'month', l: 'Este mes' },
+    { k: 'lastmonth', l: 'Mes pasado' }, { k: 'd30', l: 'Últimos 30 días' },
+    { k: 'd90', l: 'Últimos 90 días' }, { k: 'year', l: 'Este año' }
+  ];
+  /** @type {Record<string,string>} */
+  const METHOD_PT = { CASH: 'Efectivo', BANK_TRANSFER: 'Consignación', WOMPI: 'Wompi', CREDIT_CARD: 'Tarjeta', NEQUI: 'Nequi', BANCOLOMBIA: 'Bancolombia', OTHER: 'Otro' };
+
+  /** @param {string} v */
+  function setStatus(v) { status = v; reloadAll(); }
+  /** @param {Event} e */
+  function onOtherStatus(e) { status = /** @type {HTMLSelectElement} */ (e.currentTarget).value; reloadAll(); }
+
+  /** Date → 'YYYY-MM-DD' local. @param {Date} d */
+  function ymd(d) { const p = (/** @type {number} */ n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+  /** 'YYYY-MM-DD' → 'DD/MM/YYYY'. @param {string} s */
+  function dm(s) { return s ? s.split('-').reverse().join('/') : ''; }
+  /** @param {string} k */
+  function presetRange(k) {
+    const t = new Date(); let a, b;
+    if (k === 'today') { a = new Date(t); b = new Date(t); }
+    else if (k === 'week') { a = new Date(t); a.setDate(t.getDate() - ((t.getDay() + 6) % 7)); b = new Date(a); b.setDate(a.getDate() + 6); }
+    else if (k === 'month') { a = new Date(t.getFullYear(), t.getMonth(), 1); b = new Date(t.getFullYear(), t.getMonth() + 1, 0); }
+    else if (k === 'lastmonth') { a = new Date(t.getFullYear(), t.getMonth() - 1, 1); b = new Date(t.getFullYear(), t.getMonth(), 0); }
+    else if (k === 'd30') { b = new Date(t); a = new Date(t); a.setDate(t.getDate() - 29); }
+    else if (k === 'd90') { b = new Date(t); a = new Date(t); a.setDate(t.getDate() - 89); }
+    else if (k === 'year') { a = new Date(t.getFullYear(), 0, 1); b = new Date(t.getFullYear(), 11, 31); }
+    else return null;
+    return { from: ymd(a), to: ymd(b) };
+  }
+  /** @param {string} f @param {string} t */
+  function rangeText(f, t) {
+    if (f && t) return `${dm(f)} – ${dm(t)}`;
+    if (f) return `desde ${dm(f)}`;
+    if (t) return `hasta ${dm(t)}`;
+    return '';
+  }
+
+  function openDate() { pDateField = dateField; pFrom = dateFrom; pTo = dateTo; pPreset = datePreset; dateOpen = true; }
+  /** @param {{k:string,l:string}} p */
+  function pickPreset(p) { const r = presetRange(p.k); if (r) { pFrom = r.from; pTo = r.to; pPreset = p.l; } }
+  function onCustomDate() { pPreset = ''; }          // editar fechas a mano = deja de ser un atajo
+  function applyDate() { dateField = pDateField; dateFrom = pFrom; dateTo = pTo; datePreset = pPreset; dateOpen = false; reloadAll(); }
+  function clearDate() { dateFrom = ''; dateTo = ''; datePreset = ''; dateOpen = false; reloadAll(); }
+
+  /** Medios de pago (COMPLETED) de una factura, sin repetir. @param {any} inv */
+  function invMethods(inv) { return [...new Set((inv.payments || []).filter((/** @type {any} */ p) => p.status === 'COMPLETED').map((/** @type {any} */ p) => p.method))]; }
+
+  /** @param {string} key */
+  function removeChip(key) {
+    if (key === 'status') status = '';
+    else if (key === 'method') paymentMethod = '';
+    else if (key === 'date') { dateFrom = ''; dateTo = ''; datePreset = ''; }
+    reloadAll();
+  }
+
   /** Build the shared filter object used by BOTH the list query and the
    *  stats query. Single source of truth so they can't drift. All filters
    *  combine (server ANDs them); date bounds are independent (solo "desde",
@@ -57,7 +131,7 @@
 
   function clearFilters() {
     q = ''; status = ''; paymentMethod = '';
-    dateField = 'dueDate'; dateFrom = ''; dateTo = '';
+    dateField = 'dueDate'; dateFrom = ''; dateTo = ''; datePreset = '';
     reloadAll();
   }
 
@@ -165,6 +239,26 @@
   $: kpiPendingAmt = stats?.outstandingAmount ?? 0;
   $: hasFilters    = !!(q.trim() || status || paymentMethod || dateFrom || dateTo);
 
+  // Estado avanzado (para el select "Otros"): vacío si el estado activo es uno
+  // de las pestañas rápidas o "Todas".
+  $: otherStatusValue = OTHER_STATUSES.includes(status) ? status : '';
+  // Etiqueta del botón de fecha.
+  $: dateLabel = (dateFrom || dateTo)
+    ? `${dateField === 'dueDate' ? 'Venc.' : 'Emisión'}: ${datePreset || rangeText(dateFrom, dateTo)}`
+    : 'Fecha';
+  // Vista previa dentro del popover.
+  $: datePreview = (() => {
+    const f = pDateField === 'dueDate' ? 'vencimiento' : 'emisión';
+    if (!pFrom && !pTo) return `Elige un atajo o un rango para filtrar por ${f}.`;
+    return `Filtra por ${f} entre ${dm(pFrom) || '—'} y ${dm(pTo) || '—'}.`;
+  })();
+  // Chips de filtros activos (búsqueda no lleva chip; tiene su propio campo).
+  $: chips = [
+    ...(status ? [{ key: 'status', label: 'Estado', val: STATUS_PT[status] || status }] : []),
+    ...(paymentMethod ? [{ key: 'method', label: 'Medio', val: METHOD_PT[paymentMethod] || paymentMethod }] : []),
+    ...((dateFrom || dateTo) ? [{ key: 'date', label: dateField === 'dueDate' ? 'Vencimiento' : 'Emisión', val: datePreset || rangeText(dateFrom, dateTo) }] : [])
+  ];
+
   /** @param {number|null|undefined} cents */
   function fmtMoney(cents) {
     if (cents == null) return '—';
@@ -226,6 +320,7 @@
 </script>
 
 <svelte:head><title>Facturas — ISP Manager</title></svelte:head>
+<svelte:window on:keydown={(e) => { if (e.key === 'Escape' && dateOpen) dateOpen = false; }} />
 
 <div class="page-header">
   <div>
@@ -296,57 +391,111 @@
   </div>
 {/if}
 
-<div class="card mb-5">
-  <div class="p-4 space-y-3">
-    <!-- Fila 1: búsqueda + estado + método de pago -->
-    <div class="flex items-center gap-3 flex-wrap">
-      <div class="relative flex-1 min-w-[220px] max-w-sm">
-        <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input class="input-search" placeholder="Número, cliente, cédula..." bind:value={q} on:input={onSearchInput} />
-      </div>
-      <select class="select w-auto min-w-[150px]" bind:value={status} on:change={reloadAll} title="Estado de la factura">
-        <option value="">Todos los estados</option>
-        <option value="PENDING">Pendiente</option>
-        <option value="PARTIAL">Parcial</option>
-        <option value="PAID">Pagada</option>
-        <option value="OVERDUE">Vencida</option>
-        <option value="CANCELLED">Cancelada</option>
-        <option value="REFUNDED">Reembolsada</option>
-        <option value="DRAFT">Borrador</option>
-      </select>
-      <select class="select w-auto min-w-[150px]" bind:value={paymentMethod} on:change={reloadAll} title="Medio con que se pagó">
-        <option value="">Todos los medios</option>
-        <option value="CASH">Efectivo</option>
-        <option value="BANK_TRANSFER">Consignación</option>
-        <option value="WOMPI">Wompi</option>
-      </select>
+<!-- Barra de filtros: compacta y sticky -->
+<div class="card mb-3 sticky top-2 z-30">
+  <div class="p-2.5 flex items-center gap-2.5 flex-wrap">
+    <!-- Búsqueda -->
+    <div class="relative flex-1 min-w-[200px] max-w-sm">
+      <Search size={14} class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      <input class="input-search" placeholder="Número, cliente, cédula..." bind:value={q} on:input={onSearchInput} />
     </div>
 
-    <!-- Fila 2: rango de fechas sobre el campo elegido -->
-    <div class="flex items-end gap-3 flex-wrap">
-      <div>
-        <label for="date-field" class="block text-[11px] font-medium text-slate-500 mb-1">Filtrar por fecha de</label>
-        <select id="date-field" class="select w-auto min-w-[140px]" bind:value={dateField} on:change={() => (dateFrom || dateTo) && reloadAll()}>
-          <option value="dueDate">Vencimiento</option>
-          <option value="issueDate">Emisión</option>
-        </select>
-      </div>
-      <div>
-        <label for="date-from" class="block text-[11px] font-medium text-slate-500 mb-1">Desde</label>
-        <input id="date-from" type="date" class="input w-auto" bind:value={dateFrom} on:change={reloadAll} max={dateTo || undefined} />
-      </div>
-      <div>
-        <label for="date-to" class="block text-[11px] font-medium text-slate-500 mb-1">Hasta</label>
-        <input id="date-to" type="date" class="input w-auto" bind:value={dateTo} on:change={reloadAll} min={dateFrom || undefined} />
-      </div>
-      {#if hasFilters}
-        <button class="btn-ghost text-xs mb-0.5" on:click={clearFilters}>
-          <X size={13} /> Limpiar filtros
-        </button>
+    <!-- Estado como pestañas rápidas -->
+    <div class="inline-flex bg-slate-100 rounded-lg p-1 gap-0.5" role="tablist" aria-label="Estado">
+      {#each STATUS_TABS as t}
+        <button type="button" role="tab" aria-selected={status === t.v}
+                class="px-3 py-1.5 rounded-md text-sm font-medium transition whitespace-nowrap
+                       {status === t.v ? 'bg-white text-brand-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}"
+                on:click={() => setStatus(t.v)}>{t.l}</button>
+      {/each}
+    </div>
+
+    <!-- Otros estados (parcial, cancelada, …) -->
+    <select class="select w-auto min-w-[125px]" value={otherStatusValue} on:change={onOtherStatus} title="Otros estados">
+      <option value="">Otros estados</option>
+      <option value="PARTIAL">Parcial</option>
+      <option value="CANCELLED">Cancelada</option>
+      <option value="REFUNDED">Reembolsada</option>
+      <option value="DRAFT">Borrador</option>
+    </select>
+
+    <!-- Medio de pago -->
+    <select class="select w-auto min-w-[135px]" bind:value={paymentMethod} on:change={reloadAll} title="Medio con que se pagó">
+      <option value="">Todos los medios</option>
+      <option value="CASH">Efectivo</option>
+      <option value="BANK_TRANSFER">Consignación</option>
+      <option value="WOMPI">Wompi</option>
+    </select>
+
+    <!-- Rango de fechas con atajos -->
+    <div class="relative">
+      <button type="button" aria-haspopup="dialog" aria-expanded={dateOpen}
+              class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border text-sm font-medium transition whitespace-nowrap
+                     {(dateFrom || dateTo) ? 'border-brand-600 text-brand-800 bg-brand-50' : 'border-slate-300 text-slate-700 hover:bg-slate-50'}"
+              on:click={() => (dateOpen ? (dateOpen = false) : openDate())}>
+        <Calendar size={15} /> {dateLabel} <ChevronDown size={13} class="opacity-60 transition-transform {dateOpen ? 'rotate-180' : ''}" />
+      </button>
+
+      {#if dateOpen}
+        <!-- Cierra al hacer clic fuera -->
+        <button class="fixed inset-0 z-40 cursor-default" tabindex="-1" aria-label="Cerrar" on:click={() => (dateOpen = false)}></button>
+        <div class="absolute right-0 top-full mt-2 z-50 w-[440px] max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden"
+             role="dialog" aria-label="Filtrar por fecha">
+          <!-- Campo a filtrar -->
+          <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+            <div class="inline-flex bg-slate-100 rounded-lg p-0.5">
+              <button type="button" class="px-3 py-1.5 rounded-md text-xs font-semibold transition {pDateField === 'dueDate' ? 'bg-white text-brand-800 shadow-sm' : 'text-slate-500'}" on:click={() => (pDateField = 'dueDate')}>Vencimiento</button>
+              <button type="button" class="px-3 py-1.5 rounded-md text-xs font-semibold transition {pDateField === 'issueDate' ? 'bg-white text-brand-800 shadow-sm' : 'text-slate-500'}" on:click={() => (pDateField = 'issueDate')}>Emisión</button>
+            </div>
+            <span class="text-xs text-slate-400">¿Qué fecha filtrar?</span>
+          </div>
+          <div class="grid grid-cols-[148px_1fr]">
+            <!-- Atajos -->
+            <div class="border-r border-slate-100 p-2 flex flex-col gap-0.5">
+              {#each DATE_PRESETS as p}
+                <button type="button" class="text-left px-2.5 py-2 rounded-md text-[13px] transition {pPreset === p.l ? 'bg-brand-50 text-brand-800 font-semibold' : 'text-slate-700 hover:bg-slate-50'}" on:click={() => pickPreset(p)}>{p.l}</button>
+              {/each}
+            </div>
+            <!-- Rango personalizado -->
+            <div class="p-3.5 flex flex-col gap-3">
+              <div>
+                <label for="dr-from" class="block text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Desde</label>
+                <input id="dr-from" type="date" class="input w-full" bind:value={pFrom} on:change={onCustomDate} max={pTo || undefined} />
+              </div>
+              <div>
+                <label for="dr-to" class="block text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-1">Hasta</label>
+                <input id="dr-to" type="date" class="input w-full" bind:value={pTo} on:change={onCustomDate} min={pFrom || undefined} />
+              </div>
+              <div class="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">{datePreview}</div>
+            </div>
+          </div>
+          <!-- Acciones -->
+          <div class="flex items-center justify-between px-4 py-3 border-t border-slate-100">
+            <button class="btn-ghost text-xs" on:click={clearDate}>Quitar fecha</button>
+            <div class="flex gap-2">
+              <button class="btn-secondary btn-sm" on:click={() => (dateOpen = false)}>Cancelar</button>
+              <button class="btn-primary btn-sm" on:click={applyDate}>Aplicar</button>
+            </div>
+          </div>
+        </div>
       {/if}
     </div>
   </div>
 </div>
+
+<!-- Chips de filtros activos -->
+{#if chips.length}
+  <div class="flex items-center gap-2 flex-wrap mb-4 px-1">
+    <span class="text-xs text-slate-400 font-medium">Filtros:</span>
+    {#each chips as c}
+      <span class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-full pl-3 pr-1 py-1">
+        {c.label}: <b class="text-brand-800">{c.val}</b>
+        <button class="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-100 hover:bg-red-100 hover:text-red-600 text-slate-500" title="Quitar" on:click={() => removeChip(c.key)}><X size={11} /></button>
+      </span>
+    {/each}
+    <button class="btn-ghost text-xs" on:click={clearFilters}>Limpiar todo</button>
+  </div>
+{/if}
 
 <div class="card overflow-hidden">
   <div class="overflow-x-auto">
@@ -426,7 +575,17 @@
               <td class="text-right font-mono text-xs text-slate-600">{fmtMoney(inv.amount)}</td>
               <td class="text-right font-mono text-xs font-semibold">{fmtMoney(inv.total)}</td>
               <td><span class="{STATUS_CLS[inv.status] || 'badge-gray'}">{STATUS_PT[inv.status] || inv.status}</span></td>
-              <td class="text-slate-600 text-xs">{fmtDate(inv.paidDate)}</td>
+              <td>
+                <div class="flex flex-col gap-1">
+                  <span class="text-slate-600 text-xs">{fmtDate(inv.paidDate)}</span>
+                  {#if invMethods(inv).length}
+                    {@const ms = invMethods(inv)}
+                    <span class="inline-flex items-center w-fit text-[11px] font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5">
+                      {METHOD_PT[ms[0]] || ms[0]}{ms.length > 1 ? ` +${ms.length - 1}` : ''}
+                    </span>
+                  {/if}
+                </div>
+              </td>
               <td>
                 <div class="flex items-center justify-end gap-1">
                   <a href="/invoices/{inv.id}" class="btn-icon" title="Ver">
