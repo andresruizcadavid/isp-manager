@@ -441,7 +441,7 @@
       {#if dateOpen}
         <!-- Cierra al hacer clic fuera -->
         <button class="fixed inset-0 z-40 cursor-default" tabindex="-1" aria-label="Cerrar" on:click={() => (dateOpen = false)}></button>
-        <div class="absolute left-0 top-full mt-2 z-50 w-[440px] max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden"
+        <div class="absolute right-0 top-full mt-2 z-50 w-[440px] max-w-[calc(100vw-2rem)] bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden"
              role="dialog" aria-label="Filtrar por fecha">
           <!-- Campo a filtrar -->
           <div class="flex items-center justify-between px-4 py-3 border-b border-slate-100">
