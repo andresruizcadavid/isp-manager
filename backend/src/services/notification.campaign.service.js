@@ -2,6 +2,10 @@ import { notificationService } from './notification.service.js';
 import { paymentLinkService } from './payment-link.service.js';
 import { prisma } from '../config/database.js';
 
+// Throttle preventivo entre envíos de una campaña (ms). Configurable por env.
+const CAMPAIGN_SEND_DELAY_MS = Number(process.env.CAMPAIGN_SEND_DELAY_MS) || 120;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 /**
  * Variable substitution. Supports {{name}}, {{plan}}, {{balance}}, {{email}},
  * {{phone}}, {{zone}}, {{ip}}, {{dueDate}}, {{amount}}, {{paymentLink}}.
@@ -124,19 +128,22 @@ export async function sendToClient({
   const subject = renderTemplate(template.subject || '', vars);
   const body    = renderTemplate(template.body, vars);
 
-  let sent = 0, failed = 0;
+  let sent = 0, failed = 0, skipped = 0;
   for (const ch of channels) {
     const recipient = ch === 'EMAIL' ? (client.email || '') : (client.phone || '');
     if (!recipient) {
+      // Sin contacto para el canal ≠ error de envío. Se registra como
+      // "skipped" (omitido) para NO inflar el conteo rojo de errores ni el
+      // reintento. Es un dato faltante del cliente, no una falla del sistema.
       await prisma.notificationLog.create({
         data: {
           clientId: client.id, campaignId, type, channel: ch, recipient: '',
           subject: ch === 'EMAIL' ? subject : null, content: body,
-          status: 'failed',
+          status: 'skipped',
           error: ch === 'EMAIL' ? 'Cliente sin email' : 'Cliente sin teléfono'
         }
       }).catch(() => {});
-      failed++;
+      skipped++;
       continue;
     }
     try {
@@ -172,7 +179,7 @@ export async function sendToClient({
       failed++;
     }
   }
-  return { sent, failed };
+  return { sent, failed, skipped };
 }
 
 /**
@@ -295,8 +302,10 @@ export async function runCampaign(campaignId) {
 
   let sent = 0;
   let failed = 0;
+  let skipped = 0;
 
-  for (const client of audience) {
+  for (let idx = 0; idx < audience.length; idx++) {
+    const client = audience[idx];
     const r = await sendToClient({
       client,
       template: campaign.template,
@@ -304,23 +313,34 @@ export async function runCampaign(campaignId) {
       generatePaymentLinks: campaign.generatePaymentLinks,
       campaignId
     });
-    sent   += r.sent;
-    failed += r.failed;
+    sent    += r.sent;
+    failed  += r.failed;
+    skipped += (r.skipped || 0);
 
     // Update counters after each client so the UI poll sees live progress.
+    // failedCount = SOLO errores reales (los omitidos no cuentan como error).
     await prisma.notificationCampaign.update({
       where: { id: campaignId },
       data: { sentCount: sent, failedCount: failed }
     }).catch(() => {});
+
+    // Throttle preventivo entre clientes para no chocar límites del proveedor
+    // (Brevo). Barato hoy (26 clientes) y protege cuando crezca la base.
+    if (idx < audience.length - 1) await sleep(CAMPAIGN_SEND_DELAY_MS);
   }
 
-  // Final status:
-  //   • empty_audience → resolved 0 recipients
-  //   • failed         → all attempts errored
-  //   • completed      → at least one delivery succeeded (even if some failed)
-  let finalStatus = 'completed';
-  if (total === 0)          finalStatus = 'empty_audience';
-  else if (failed === total) finalStatus = 'failed';
+  // Estado final más fino:
+  //   • empty_audience → 0 destinatarios
+  //   • skipped        → nada se envió, solo omitidos (sin email/teléfono)
+  //   • failed         → todo lo INTENTADO falló por error real (0 enviados)
+  //   • completed_with_errors → algunos enviados y algunos con error
+  //   • completed      → todos los intentados OK (puede haber omitidos)
+  let finalStatus;
+  if (total === 0)                          finalStatus = 'empty_audience';
+  else if (sent === 0 && failed === 0 && skipped > 0) finalStatus = 'skipped';
+  else if (sent === 0 && failed > 0)        finalStatus = 'failed';
+  else if (failed > 0)                      finalStatus = 'completed_with_errors';
+  else                                      finalStatus = 'completed';
 
   await prisma.notificationCampaign.update({
     where: { id: campaignId },
@@ -332,67 +352,77 @@ export async function runCampaign(campaignId) {
     }
   });
 
-  console.log(`[campaign ${campaignId}] done status=${finalStatus} sent=${sent} failed=${failed} total=${total}`);
-  return { total, sent, failed, status: finalStatus };
+  console.log(`[campaign ${campaignId}] done status=${finalStatus} sent=${sent} failed=${failed} skipped=${skipped} total=${total}`);
+  return { total, sent, failed, skipped, status: finalStatus };
 }
 
 /**
- * Retry only the deliveries that previously failed for a campaign. Re-runs
- * the actual send for each failed log row and appends a new attempt log.
+ * Reintenta las entregas fallidas Y omitidas de una campaña, de forma robusta:
+ *   • Re-carga cada cliente para usar su email/teléfono ACTUALES (así un
+ *     "Cliente sin email" se recupera si después le cargaste el correo).
+ *   • Vuelve a pasar por sendToClient → REGENERA el payment link + el botón
+ *     "Pagar ahora" y re-renderiza la plantilla (no reenvía contenido crudo).
+ *   • Ignora los logs de "error de sistema" (clientId null): no son reintentables.
+ *   • Marca los logs viejos como 'superseded' para no duplicar el conteo.
  */
 export async function retryFailed(campaignId) {
-  const failedLogs = await prisma.notificationLog.findMany({
-    where: { campaignId, status: 'failed' },
-    include: { client: {
-      include: {
-        plan: { select: { name: true } },
-        zone: { select: { name: true } },
-        mikrotikAccount: { select: { remoteAddress: true } },
-        invoices: { where: { status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } } }
-      }
-    } }
+  const campaign = await prisma.notificationCampaign.findUnique({
+    where: { id: campaignId },
+    include: { template: true }
+  });
+  if (!campaign) throw new Error('Campaña no encontrada');
+  if (!campaign.template) throw new Error('La campaña no tiene plantilla asociada; no se puede reintentar.');
+
+  // Logs reintentables: fallidos u omitidos, con cliente asociado (excluye
+  // los logs de error de sistema, que tienen clientId null).
+  const logs = await prisma.notificationLog.findMany({
+    where: { campaignId, status: { in: ['failed', 'skipped'] }, clientId: { not: null } },
+    select: { id: true, clientId: true }
+  });
+  const clientIds = [...new Set(logs.map((l) => l.clientId).filter(Boolean))];
+  if (!clientIds.length) return { recovered: 0, stillFailed: 0, skipped: 0, retriedClients: 0 };
+
+  // Retira del conteo los intentos previos de esos clientes (se re-emiten).
+  await prisma.notificationLog.updateMany({
+    where: { id: { in: logs.map((l) => l.id) } },
+    data: { status: 'superseded' }
   });
 
-  let recovered = 0;
-  let stillFailed = 0;
-
-  for (const log of failedLogs) {
-    const recipient = log.recipient;
-    if (!recipient) { stillFailed++; continue; }
-    try {
-      if (log.channel === 'EMAIL') {
-        await notificationService.sendEmailRaw({
-          to: recipient,
-          subject: log.subject || 'Aviso',
-          body: log.content
-        });
-      } else {
-        await notificationService.sendWhatsApp({ to: recipient, message: log.content });
-      }
-      // Mark the original log as recovered + append a fresh "sent" entry.
-      await prisma.notificationLog.update({
-        where: { id: log.id },
-        data: { status: 'sent', sentAt: new Date(), error: null }
-      });
-      recovered++;
-    } catch (e) {
-      await prisma.notificationLog.update({
-        where: { id: log.id },
-        data: { error: e.message?.slice(0, 500) }
-      });
-      stillFailed++;
-    }
+  let recovered = 0, stillFailed = 0, skipped = 0;
+  for (const cid of clientIds) {
+    const client = await loadClientForSend(cid);
+    if (!client) { stillFailed++; continue; }
+    const r = await sendToClient({
+      client,
+      template: campaign.template,
+      channel: campaign.channel,
+      generatePaymentLinks: campaign.generatePaymentLinks,
+      campaignId
+    });
+    recovered   += r.sent;
+    stillFailed += r.failed;
+    skipped     += (r.skipped || 0);
+    await sleep(CAMPAIGN_SEND_DELAY_MS);
   }
 
-  // Refresh campaign counters.
-  const [sent, failed] = await Promise.all([
+  // Recalcula contadores + estado. 'skipped'/'superseded' no cuentan como error.
+  const [sent, failed, skippedNow] = await Promise.all([
     prisma.notificationLog.count({ where: { campaignId, status: 'sent' } }),
-    prisma.notificationLog.count({ where: { campaignId, status: 'failed' } })
+    prisma.notificationLog.count({ where: { campaignId, status: 'failed' } }),
+    prisma.notificationLog.count({ where: { campaignId, status: 'skipped' } })
   ]);
+  let status = campaign.status;
+  const attempted = sent + failed + skippedNow;
+  if (attempted > 0) {
+    if (sent === 0 && failed === 0 && skippedNow > 0) status = 'skipped';
+    else if (sent === 0 && failed > 0)                status = 'failed';
+    else if (failed > 0)                              status = 'completed_with_errors';
+    else                                              status = 'completed';
+  }
   await prisma.notificationCampaign.update({
     where: { id: campaignId },
-    data: { sentCount: sent, failedCount: failed }
+    data: { sentCount: sent, failedCount: failed, status }
   });
 
-  return { recovered, stillFailed };
+  return { recovered, stillFailed, skipped, retriedClients: clientIds.length, status };
 }

@@ -725,10 +725,16 @@ Email: contacto@internetonline.co
 
   /** @param {any} c */
   async function retryCmp(c) {
-    if (!confirm(`Reintentar los envíos fallidos de "${c.name}"?`)) return;
+    if (!confirm(`Reintentar los envíos fallidos y omitidos de "${c.name}"?\n\nSe re-lee el email/teléfono actual de cada cliente y se regenera el link de pago.`)) return;
     try {
-      await notificationsApi.retryCampaign(c.id);
+      const res = await notificationsApi.retryCampaign(c.id);
+      const d = res?.data ?? res ?? {};
       await Promise.all([loadCampaigns(), loadHistory()]);
+      const parts = [];
+      if (d.recovered) parts.push(`${d.recovered} recuperado${d.recovered === 1 ? '' : 's'}`);
+      if (d.stillFailed) parts.push(`${d.stillFailed} aún con error`);
+      if (d.skipped) parts.push(`${d.skipped} sin contacto`);
+      alert(parts.length ? `Reintento: ${parts.join(' · ')}.` : 'No había envíos reintentables.');
     } catch (/** @type {any} */ e) { alert(e.message); }
   }
 
@@ -1060,23 +1066,37 @@ Email: contacto@internetonline.co
   const CHANNEL_ICON  = { EMAIL: Mail, WHATSAPP: MessageSquare, BOTH: Send };
   /** @type {Record<string, string>} */
   const STATUS_BADGE = {
-    draft:          'bg-slate-100 text-slate-600 ring-slate-200',
-    running:        'bg-amber-50   text-amber-700   ring-amber-100',
-    completed:      'bg-emerald-50 text-emerald-700 ring-emerald-100',
-    failed:         'bg-red-50     text-red-700     ring-red-100',
-    empty_audience: 'bg-amber-50   text-amber-700   ring-amber-100',
-    sent:           'bg-emerald-50 text-emerald-700 ring-emerald-100',
-    pending:        'bg-amber-50   text-amber-700   ring-amber-100'
+    draft:                  'bg-slate-100 text-slate-600 ring-slate-200',
+    running:                'bg-amber-50   text-amber-700   ring-amber-100',
+    completed:              'bg-emerald-50 text-emerald-700 ring-emerald-100',
+    completed_with_errors:  'bg-orange-50  text-orange-700  ring-orange-100',
+    failed:                 'bg-red-50     text-red-700     ring-red-100',
+    skipped:                'bg-amber-50   text-amber-700   ring-amber-100',
+    empty_audience:         'bg-amber-50   text-amber-700   ring-amber-100',
+    sent:                   'bg-emerald-50 text-emerald-700 ring-emerald-100',
+    superseded:             'bg-slate-100  text-slate-500   ring-slate-200',
+    pending:                'bg-amber-50   text-amber-700   ring-amber-100'
   };
   /** @type {Record<string, string>} */
   const STATUS_LABEL = {
     draft: 'Borrador',
     running: 'Enviando',
     completed: 'Completada',
+    completed_with_errors: 'Completada con errores',
     failed: 'Con errores',
+    skipped: 'Omitida (sin contacto)',
     empty_audience: 'Sin destinatarios',
     sent: 'Enviado',
+    superseded: 'Reintentada',
     pending: 'Pendiente'
+  };
+  // Etiquetas para el estado de un ENVÍO individual (log), distinto del estado
+  // de la campaña (p.ej. 'failed' de un log = "Fallido", no "Con errores").
+  /** @type {Record<string, string>} */
+  const LOG_STATUS_LABEL = {
+    sent: 'Enviado', delivered: 'Entregado', read: 'Leído',
+    failed: 'Fallido', skipped: 'Omitido', pending: 'Pendiente',
+    superseded: 'Reintentado', received: 'Recibido'
   };
 
   // Build a human-readable summary of the audience filter for inline display.
@@ -1190,7 +1210,9 @@ Email: contacto@internetonline.co
           </thead>
           <tbody>
             {#each campaigns as c (c.id)}
-              {@const pct = c.totalCount > 0 ? Math.round(((c.sentCount + c.failedCount) / c.totalCount) * 100) : 0}
+              {@const cDone = !['draft','running'].includes(c.status)}
+              {@const cSkip = Math.max(0, (c.totalCount || 0) - (c.sentCount || 0) - (c.failedCount || 0))}
+              {@const pct = cDone ? 100 : (c.totalCount > 0 ? Math.round(((c.sentCount + c.failedCount) / c.totalCount) * 100) : 0)}
               <tr>
                 <td>
                   <div class="text-sm font-medium text-slate-900">{c.name}</div>
@@ -1217,11 +1239,15 @@ Email: contacto@internetonline.co
                   </span>
                 </td>
                 <td class="text-right">
-                  <div class="text-xs text-slate-600 tabular-nums">
+                  <div class="text-xs text-slate-600 tabular-nums" title="enviados / con error / omitidos (sin contacto) / total">
                     <span class="text-emerald-700 font-medium">{c.sentCount}</span> /
                     <span class="text-red-600">{c.failedCount}</span> /
+                    {#if cSkip > 0 && c.status !== 'running'}<span class="text-amber-600">{cSkip}</span> / {/if}
                     {c.totalCount}
                   </div>
+                  {#if cSkip > 0 && c.status !== 'running'}
+                    <div class="text-[10px] text-amber-600">{cSkip} omitido{cSkip === 1 ? '' : 's'} (sin contacto)</div>
+                  {/if}
                   <div class="h-1 mt-1 bg-slate-100 rounded overflow-hidden w-32 ml-auto">
                     <div class="h-full bg-brand-600 transition-all" style="width: {pct}%"></div>
                   </div>
@@ -1235,8 +1261,8 @@ Email: contacto@internetonline.co
                         <Play size={14} />
                       </button>
                     {/if}
-                    {#if c.failedCount > 0 && c.status !== 'running'}
-                      <button class="btn-icon" title="Reintentar fallidos" on:click={() => retryCmp(c)}>
+                    {#if (c.failedCount > 0 || cSkip > 0) && c.status !== 'running'}
+                      <button class="btn-icon" title="Reintentar fallidos y omitidos (re-lee el contacto actual y regenera el link)" on:click={() => retryCmp(c)}>
                         <RefreshCw size={14} />
                       </button>
                     {/if}
@@ -1357,6 +1383,7 @@ Email: contacto@internetonline.co
         <option value="">Todos los estados</option>
         <option value="sent">Enviados</option>
         <option value="failed">Fallidos</option>
+        <option value="skipped">Omitidos (sin contacto)</option>
         <option value="pending">Pendientes</option>
       </select>
       <select bind:value={hisFilter.channel} on:change={loadHistory} class="select !py-1.5 text-xs max-w-xs">
@@ -1411,9 +1438,9 @@ Email: contacto@internetonline.co
                 </td>
                 <td class="font-mono text-xs text-slate-600 truncate max-w-[180px]" title={h.recipient}>{h.recipient || '—'}</td>
                 <td>
-                  <span class="badge {STATUS_BADGE[h.status]}">{STATUS_LABEL[h.status] ?? h.status}</span>
-                  {#if h.status === 'failed' && h.error}
-                    <div class="text-[10px] text-red-600 mt-0.5 truncate max-w-[180px]" title={h.error}>{h.error}</div>
+                  <span class="badge {STATUS_BADGE[h.status]}">{LOG_STATUS_LABEL[h.status] ?? h.status}</span>
+                  {#if (h.status === 'failed' || h.status === 'skipped') && h.error}
+                    <div class="text-[10px] mt-0.5 truncate max-w-[180px] {h.status === 'skipped' ? 'text-amber-600' : 'text-red-600'}" title={h.error}>{h.error}</div>
                   {/if}
                 </td>
                 <td class="text-xs text-slate-500 truncate max-w-[140px]">{h.campaign?.name || '—'}</td>
@@ -2152,7 +2179,7 @@ Email: contacto@internetonline.co
                 {#each diagData.logs as l (l.id)}
                   <tr class="border-t border-slate-100">
                     <td class="px-2 py-1">
-                      <span class="badge {STATUS_BADGE[l.status]}">{l.status}</span>
+                      <span class="badge {STATUS_BADGE[l.status]}">{LOG_STATUS_LABEL[l.status] ?? l.status}</span>
                     </td>
                     <td class="px-2 py-1">{l.client?.name || (l.clientId === null ? '(sistema)' : '—')}</td>
                     <td class="px-2 py-1 font-mono">{l.recipient || '—'}</td>
@@ -2375,7 +2402,7 @@ Email: contacto@internetonline.co
             {#if cmpNoContact > 0}
               <p class="text-[11px] text-amber-700 inline-flex items-center gap-1">
                 <AlertCircle size={11} />
-                {cmpNoContact} sin {cmpForm.channel === 'WHATSAPP' ? 'teléfono' : 'email'} — si los incluyes, esos envíos quedarán como “fallidos”.
+                {cmpNoContact} sin {cmpForm.channel === 'WHATSAPP' ? 'teléfono' : 'email'} — se marcarán como “omitidos” (no cuentan como error); cárgales el dato y usa “Reintentar”.
               </p>
             {/if}
           {/if}
