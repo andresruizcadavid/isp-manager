@@ -534,6 +534,12 @@ class InvoicesController {
     // sub-aggregate. Per-status counts/sums are derived from byStatus so
     // a `?status=PAID` filter cleanly reports "pending: 0" instead of
     // ignoring the filter.
+    // "Vencida" = mora dentro del MISMO set filtrado. Si el filtro ya restringe
+    // dueDate (p.ej. un mes), se INTERSECTA con `lt: now` en vez de sobreescribir
+    // el rango — así el KPI de vencida nunca supera al de cobranza del filtro.
+    const overdueDueDate = (where.dueDate && typeof where.dueDate === 'object')
+      ? { ...where.dueDate, lt: now }
+      : { lt: now };
     const [total, byStatus, overdueAgg] = await Promise.all([
       prisma.invoice.count({ where }),
       prisma.invoice.groupBy({
@@ -543,7 +549,7 @@ class InvoicesController {
         _sum: { total: true, balanceDue: true }
       }),
       prisma.invoice.aggregate({
-        where: { ...where, status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] }, dueDate: { lt: now } },
+        where: { ...where, status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] }, dueDate: overdueDueDate },
         _sum:  { balanceDue: true }
       })
     ]);

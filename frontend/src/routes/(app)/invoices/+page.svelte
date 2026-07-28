@@ -151,10 +151,23 @@
     if (paymentMethod) p.paymentMethod = paymentMethod;
     if (dateFrom || dateTo) {
       p.dateField = dateField;
-      if (dateFrom) p.dateFrom = dateFrom;
-      if (dateTo)   p.dateTo   = dateTo;
+      // Enviar los límites como ISO en la ZONA LOCAL del navegador (no fecha
+      // suelta, que el backend interpretaría como UTC). Así el filtro por mes
+      // coincide con las fechas TAL COMO se muestran en la tabla — sin el
+      // corrimiento de zona horaria que hacía que "julio" mostrara facturas
+      // que se ven como 30/06.
+      if (dateFrom) p.dateFrom = localDayBoundaryISO(dateFrom, false);
+      if (dateTo)   p.dateTo   = localDayBoundaryISO(dateTo, true);
     }
     return p;
+  }
+
+  /** 'YYYY-MM-DD' → ISO del inicio (00:00) o fin (23:59:59.999) de ese día en
+   *  la zona local del navegador. @param {string} s @param {boolean} endOfDay */
+  function localDayBoundaryISO(s, endOfDay) {
+    const [y, m, d] = s.split('-').map(Number);
+    const dt = endOfDay ? new Date(y, m - 1, d, 23, 59, 59, 999) : new Date(y, m - 1, d, 0, 0, 0, 0);
+    return dt.toISOString();
   }
 
   function clearFilters() {
