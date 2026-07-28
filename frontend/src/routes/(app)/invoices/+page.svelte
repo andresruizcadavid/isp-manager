@@ -7,7 +7,7 @@
     Wallet, Clock, CheckCircle2, AlertTriangle,
     Pencil, Trash2, X, Loader2, Save,
     ArrowUp, ArrowDown, ArrowUpDown, Download,
-    Calendar, ChevronDown
+    Calendar, ChevronDown, ChevronLeft, ChevronRight
   } from 'lucide-svelte';
 
   /** @type {import('$lib/types').Invoice[]} */
@@ -46,6 +46,9 @@
   let pFrom = '';
   let pTo = '';
   let pPreset = '';
+  let pYear = new Date().getFullYear();   // año mostrado en la grilla de meses
+  const MONTHS_ABBR = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const MONTHS_FULL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
   // Estado como pestañas rápidas; los estados menos comunes van al select "Otros".
   const STATUS_TABS = [
@@ -93,12 +96,37 @@
     return '';
   }
 
-  function openDate() { pDateField = dateField; pFrom = dateFrom; pTo = dateTo; pPreset = datePreset; dateOpen = true; }
+  function openDate() {
+    pDateField = dateField; pFrom = dateFrom; pTo = dateTo; pPreset = datePreset;
+    // Arranca la grilla en el año del filtro actual (o el año en curso).
+    pYear = dateFrom ? Number(dateFrom.slice(0, 4)) : new Date().getFullYear();
+    dateOpen = true;
+  }
   /** @param {{k:string,l:string}} p */
   function pickPreset(p) { const r = presetRange(p.k); if (r) { pFrom = r.from; pTo = r.to; pPreset = p.l; } }
+  /** Selecciona un mes completo (0-based) del año `pYear`. @param {number} mIdx */
+  function pickMonth(mIdx) {
+    pFrom = ymd(new Date(pYear, mIdx, 1));
+    pTo   = ymd(new Date(pYear, mIdx + 1, 0));
+    pPreset = `${MONTHS_FULL[mIdx]} ${pYear}`;
+  }
+  // Mes resaltado en la grilla: el que coincide con el rango pendiente + año.
+  $: pActiveMonth = MONTHS_FULL.findIndex((_, m) =>
+    pFrom === ymd(new Date(pYear, m, 1)) && pTo === ymd(new Date(pYear, m + 1, 0)));
   function onCustomDate() { pPreset = ''; }          // editar fechas a mano = deja de ser un atajo
   function applyDate() { dateField = pDateField; dateFrom = pFrom; dateTo = pTo; datePreset = pPreset; dateOpen = false; reloadAll(); }
   function clearDate() { dateFrom = ''; dateTo = ''; datePreset = ''; dateOpen = false; reloadAll(); }
+
+  /** Filtro por defecto al entrar: el MES ACTUAL por vencimiento ("la realidad
+   *  actual"). En este ISP casi todas las facturas del mes vencen dentro del mes,
+   *  así que vencimiento es el campo que refleja el mes en curso. */
+  function applyCurrentMonthDefault() {
+    const now = new Date();
+    dateField = 'dueDate';
+    dateFrom  = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
+    dateTo    = ymd(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    datePreset = `${MONTHS_FULL[now.getMonth()]} ${now.getFullYear()}`;
+  }
 
   /** Medios de pago (COMPLETED) de una factura, sin repetir. @param {any} inv */
   function invMethods(inv) { return [...new Set((inv.payments || []).filter((/** @type {any} */ p) => p.status === 'COMPLETED').map((/** @type {any} */ p) => p.method))]; }
@@ -209,7 +237,7 @@
     loadStats();
   }
 
-  onMount(() => { load(); loadStats(); });
+  onMount(() => { applyCurrentMonthDefault(); load(); loadStats(); });
 
   function onSearchInput() {
     clearTimeout(searchTimer);
@@ -451,6 +479,27 @@
             </div>
             <span class="text-xs text-slate-400">¿Qué fecha filtrar?</span>
           </div>
+
+          <!-- Selección rápida por MES (Ene…Dic) -->
+          <div class="px-3.5 pt-3 pb-3 border-b border-slate-100">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Mes</span>
+              <div class="inline-flex items-center gap-1">
+                <button type="button" class="btn-icon" title="Año anterior" on:click={() => (pYear = pYear - 1)}><ChevronLeft size={14} /></button>
+                <span class="text-sm font-semibold text-slate-800 tabular-nums w-12 text-center">{pYear}</span>
+                <button type="button" class="btn-icon" title="Año siguiente" on:click={() => (pYear = pYear + 1)}><ChevronRight size={14} /></button>
+              </div>
+            </div>
+            <div class="grid grid-cols-4 gap-1.5">
+              {#each MONTHS_ABBR as mon, i}
+                <button type="button" on:click={() => pickMonth(i)}
+                        class="py-1.5 rounded-md text-[13px] font-medium transition {pActiveMonth === i ? 'bg-brand-600 text-white' : 'text-slate-700 hover:bg-slate-100'}">
+                  {mon}
+                </button>
+              {/each}
+            </div>
+          </div>
+
           <div class="grid grid-cols-[148px_1fr]">
             <!-- Atajos -->
             <div class="border-r border-slate-100 p-2 flex flex-col gap-0.5">
