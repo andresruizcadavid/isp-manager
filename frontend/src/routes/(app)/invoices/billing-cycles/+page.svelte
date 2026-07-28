@@ -8,7 +8,7 @@
   import {
     ArrowLeft, Plus, Edit3, Trash2, CheckCircle2, RefreshCw, Loader2,
     AlertCircle, ChevronDown, ChevronRight, Calendar, Power, PauseCircle,
-    AlertTriangle, Lock, Play, Eye, Users
+    AlertTriangle, Lock, Play, Eye, Users, Repeat, Save, Wand2
   } from 'lucide-svelte';
 
   let loading = true;
@@ -74,7 +74,66 @@
       loading = false;
     }
   }
-  onMount(load);
+
+  // ── Regla de ciclo recurrente ──────────────────────────────────────
+  let ruleOpen = false;
+  let ruleLoading = true;
+  let ruleSaving = false;
+  let ensuring = false;
+  let ruleMsg = '';
+  /** @type {{enabled:boolean, startDay:number, endMode:string, endDay:number|null, moraGraceDays:number, autoSuspendEnabled:boolean}} */
+  let rule = { enabled: false, startDay: 25, endMode: 'end-of-month', endDay: 1, moraGraceDays: 7, autoSuspendEnabled: false };
+
+  async function loadRule() {
+    ruleLoading = true;
+    try {
+      const r = await api.get('/billing-cycles/rule');
+      const data = r?.data ?? r;
+      rule = { ...rule, ...(data || {}), endDay: (data?.endDay ?? rule.endDay) || 1 };
+    } catch (/** @type {any} */ e) { /* no fatal: se usan defaults */ }
+    finally { ruleLoading = false; }
+  }
+
+  /** @param {boolean} [reload] */
+  async function ensureFromRule(reload = true) {
+    ensuring = true;
+    try {
+      await api.post('/billing-cycles/ensure', { monthsAhead: 1 });
+      if (reload) await load();
+    } catch (/** @type {any} */ e) { error = e.message || 'No se pudo generar desde la regla'; }
+    finally { ensuring = false; }
+  }
+
+  async function saveRule() {
+    ruleSaving = true; error = ''; ruleMsg = '';
+    try {
+      const payload = {
+        enabled:            rule.enabled,
+        startDay:           Number(rule.startDay),
+        endMode:            rule.endMode,
+        endDay:             rule.endMode === 'day-of-month' ? Number(rule.endDay) : null,
+        moraGraceDays:      Number(rule.moraGraceDays),
+        autoSuspendEnabled: rule.autoSuspendEnabled
+      };
+      const r = await api.put('/billing-cycles/rule', payload);
+      const data = r?.data ?? r;
+      rule = { ...rule, ...(data || {}), endDay: (data?.endDay ?? rule.endDay) || 1 };
+      ruleMsg = 'Regla guardada';
+      if (rule.enabled) await ensureFromRule(false);   // materializa de una
+      await load();
+    } catch (/** @type {any} */ e) { error = e.message || 'No se pudo guardar la regla'; }
+    finally { ruleSaving = false; setTimeout(() => (ruleMsg = ''), 2500); }
+  }
+
+  $: rulePreview = rule.enabled
+    ? `Día ${rule.startDay} de cada mes → ${rule.endMode === 'end-of-month' ? 'último día del mes' : 'día ' + rule.endDay} · mora ${rule.moraGraceDays} d${rule.autoSuspendEnabled ? ' · corte auto ON' : ''}`
+    : 'Regla desactivada — los ciclos se crean manualmente.';
+
+  onMount(async () => {
+    await loadRule();
+    if (rule.enabled) { try { await api.post('/billing-cycles/ensure', { monthsAhead: 1 }); } catch (/** @type {any} */ e) { /* silencioso */ } }
+    await load();
+  });
 
   /** @param {string} id */
   async function toggleExpand(id) {
@@ -230,6 +289,107 @@
     <AlertCircle size={14} /> {error}
   </div>
 {/if}
+
+<!-- Regla de ciclo recurrente -->
+<div class="card mb-4">
+  <button type="button" class="w-full px-4 py-3 flex items-center justify-between gap-3 hover:bg-slate-50/50"
+          on:click={() => (ruleOpen = !ruleOpen)}>
+    <div class="flex items-center gap-2 min-w-0">
+      <Repeat size={16} class="text-brand-600 flex-shrink-0" />
+      <span class="font-semibold text-text-primary">Regla recurrente</span>
+      {#if ruleLoading}
+        <Loader2 size={12} class="animate-spin text-text-muted" />
+      {:else if rule.enabled}
+        <span class="inline-block px-1.5 py-0.5 rounded border text-[10px] font-semibold bg-emerald-50 text-emerald-700 border-emerald-200">● Activa</span>
+      {:else}
+        <span class="inline-block px-1.5 py-0.5 rounded border text-[10px] font-medium bg-slate-100 text-slate-500 border-slate-200">Desactivada</span>
+      {/if}
+      <span class="text-xs text-text-muted truncate hidden sm:inline">· {rulePreview}</span>
+    </div>
+    {#if ruleOpen}<ChevronDown size={16} class="text-text-muted flex-shrink-0" />{:else}<ChevronRight size={16} class="text-text-muted flex-shrink-0" />{/if}
+  </button>
+
+  {#if ruleOpen}
+    <div class="px-4 pb-4 pt-1 border-t border-slate-100 space-y-4">
+      <p class="text-xs text-text-muted mt-3">
+        Definí la ventana en <strong>días del mes</strong> y el sistema crea el ciclo de cada mes
+        automáticamente (mes actual + próximo), sin cargarlos a mano. Los ciclos manuales que ya
+        existan <strong>mandan</strong>: la regla solo llena los meses que falten.
+      </p>
+
+      <!-- Activar regla -->
+      <label class="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" bind:checked={rule.enabled} class="rounded border-slate-300 text-brand-600 focus:ring-brand-600/30" />
+        <span class="text-sm font-medium text-text-primary">Aplicar esta regla automáticamente a cada mes</span>
+      </label>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <!-- Inicio -->
+        <div>
+          <label class="label" for="rule-start">Inicio de cobro — día del mes</label>
+          <input id="rule-start" type="number" min="1" max="31" class="input w-28" bind:value={rule.startDay} />
+          <p class="text-[11px] text-text-muted mt-1">Ej. 20 = el cobro abre el 20 de cada mes. Se ajusta si el mes es más corto.</p>
+        </div>
+
+        <!-- Fin -->
+        <div>
+          <span class="label">Fecha máxima de pago</span>
+          <div class="space-y-1.5 mt-1">
+            <label class="flex items-center gap-2 cursor-pointer text-sm">
+              <input type="radio" bind:group={rule.endMode} value="end-of-month" class="text-brand-600 focus:ring-brand-600/30" />
+              Último día del mes <span class="text-[11px] text-text-muted">(31, 30, 28/29…)</span>
+            </label>
+            <label class="flex items-center gap-2 cursor-pointer text-sm">
+              <input type="radio" bind:group={rule.endMode} value="day-of-month" class="text-brand-600 focus:ring-brand-600/30" />
+              Día fijo
+              <input type="number" min="1" max="31" class="input w-20 py-1" bind:value={rule.endDay}
+                     disabled={rule.endMode !== 'day-of-month'} />
+            </label>
+          </div>
+          <p class="text-[11px] text-text-muted mt-1">Si el día fijo es menor al de inicio, se toma del mes siguiente.</p>
+        </div>
+
+        <!-- Mora -->
+        <div>
+          <label class="label" for="rule-mora">Días para entrar en mora</label>
+          <input id="rule-mora" type="number" min="0" max="60" class="input w-28" bind:value={rule.moraGraceDays} />
+        </div>
+
+        <!-- Corte auto default -->
+        <div class="flex items-end">
+          <label class="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" bind:checked={rule.autoSuspendEnabled} class="mt-0.5 rounded border-slate-300 text-red-600 focus:ring-red-600/30" />
+            <span class="text-sm text-text-primary">
+              <span class="font-medium flex items-center gap-1"><Power size={13} class="text-red-600" /> Corte automático por defecto</span>
+              <span class="text-[11px] text-text-muted block">Solo etiqueta "suspendible"; la suspensión sigue siendo manual.</span>
+            </span>
+          </label>
+        </div>
+      </div>
+
+      <div class="rounded-lg bg-brand-50 border border-brand-100 px-3 py-2 text-xs text-brand-800 flex items-center gap-2">
+        <Calendar size={13} /> <span>Resultado: <strong>{rulePreview}</strong></span>
+      </div>
+
+      <div class="flex items-center justify-between gap-2 flex-wrap">
+        <span class="text-xs text-emerald-600 font-medium">{ruleMsg}</span>
+        <div class="flex items-center gap-2">
+          {#if rule.enabled}
+            <button class="btn-secondary" on:click={() => ensureFromRule(true)} disabled={ensuring || ruleSaving}
+                    title="Crear ahora los ciclos faltantes (mes actual + próximo)">
+              {#if ensuring}<Loader2 size={14} class="animate-spin" />{:else}<Wand2 size={14} />{/if}
+              Generar meses
+            </button>
+          {/if}
+          <button class="btn-primary" on:click={saveRule} disabled={ruleSaving}>
+            {#if ruleSaving}<Loader2 size={14} class="animate-spin" />{:else}<Save size={14} />{/if}
+            Guardar regla
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+</div>
 
 <div class="card">
   {#if loading && rows.length === 0}

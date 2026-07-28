@@ -18,10 +18,128 @@
 // emitida para el período (year, month) del ciclo.
 
 import { prisma } from '../config/database.js';
+import { getValue, setValue } from './system-config.service.js';
 
 const STATUS_DRAFT  = 'draft';
 const STATUS_ACTIVE = 'active';
 const STATUS_CLOSED = 'closed';
+
+// ── Regla de ciclo recurrente ────────────────────────────────────────
+// Una plantilla ÚNICA (guardada en SystemConfig como JSON) expresada en
+// DÍAS del mes, que el sistema materializa a un BillingCycle concreto por
+// cada mes. Evita crear cada ciclo a mano. Los ciclos manuales existentes
+// mandan: la regla solo llena los meses que aún no tienen ciclo.
+const RULE_KEY = 'billing_cycle_rule';
+const DEFAULT_RULE = Object.freeze({
+  enabled:            false,
+  startDay:           25,               // día de inicio de cobro (1..31, se ajusta al mes)
+  endMode:            'end-of-month',   // 'end-of-month' | 'day-of-month'
+  endDay:            null,              // usado solo si endMode='day-of-month'
+  moraGraceDays:      7,
+  autoSuspendEnabled: false
+});
+
+/** @param {number} y @param {number} m 1..12 → días del mes */
+function daysInMonth(y, m) { return new Date(y, m, 0).getDate(); }
+
+/** Lee la regla (con defaults si nunca se guardó). */
+export async function getRule() {
+  const saved = await getValue(RULE_KEY);
+  return { ...DEFAULT_RULE, ...(saved && typeof saved === 'object' ? saved : {}) };
+}
+
+/** Valida + guarda la regla. Devuelve la regla normalizada. */
+export async function saveRule(input) {
+  const clamp = (/** @type {number} */ n, /** @type {number} */ lo, /** @type {number} */ hi) =>
+    Math.min(hi, Math.max(lo, Math.round(Number(n) || 0)));
+  const endMode = input.endMode === 'day-of-month' ? 'day-of-month' : 'end-of-month';
+  const rule = {
+    enabled:            !!input.enabled,
+    startDay:           clamp(input.startDay ?? 25, 1, 31),
+    endMode,
+    endDay:             endMode === 'day-of-month' ? clamp(input.endDay ?? 1, 1, 31) : null,
+    moraGraceDays:      clamp(input.moraGraceDays ?? 7, 0, 60),
+    autoSuspendEnabled: !!input.autoSuspendEnabled
+  };
+  await setValue(RULE_KEY, rule, 'json');
+  return rule;
+}
+
+/** Calcula las fechas concretas de un mes a partir de la regla.
+ *  Usa mediodía UTC para que la fecha mostrada sea el día correcto en
+ *  cualquier zona horaria (Colombia UTC-5). @param {any} rule */
+export function materializeRuleForMonth(rule, year, month) {
+  const dim = daysInMonth(year, month);
+  const startDay = Math.min(Math.max(1, rule.startDay), dim);
+  const start = new Date(Date.UTC(year, month - 1, startDay, 12, 0, 0));
+
+  let end;
+  if (rule.endMode === 'day-of-month' && rule.endDay) {
+    if (rule.endDay < startDay) {
+      // El fin cae en el mes siguiente (ej. inicia 20, vence 5 del próximo).
+      const nm = month === 12 ? 1 : month + 1;
+      const ny = month === 12 ? year + 1 : year;
+      const ed = Math.min(rule.endDay, daysInMonth(ny, nm));
+      end = new Date(Date.UTC(ny, nm - 1, ed, 12, 0, 0));
+    } else {
+      end = new Date(Date.UTC(year, month - 1, Math.min(rule.endDay, dim), 12, 0, 0));
+    }
+  } else {
+    // Fin de mes = último día real del mes.
+    end = new Date(Date.UTC(year, month - 1, dim, 12, 0, 0));
+  }
+  return { collectionStart: start, collectionEnd: end, moraGraceDays: rule.moraGraceDays, autoSuspendEnabled: rule.autoSuspendEnabled };
+}
+
+/** Materializa la regla en ciclos concretos para el mes actual y los
+ *  próximos `monthsAhead`. No pisa ciclos existentes. Si no hay ningún
+ *  ciclo activo, activa el del mes en curso (para que "adopte" la regla
+ *  sin trabajo manual). @param {{monthsAhead?:number, now?:Date, createdById?:string|null}} opts */
+export async function ensureCyclesFromRule({ monthsAhead = 1, now = new Date(), createdById = null } = {}) {
+  const rule = await getRule();
+  if (!rule.enabled) return { enabled: false, created: [], skipped: [] };
+
+  const created = [];
+  const skipped = [];
+  const base = new Date(now);
+  for (let i = 0; i <= monthsAhead; i++) {
+    const y = base.getFullYear();
+    const m = base.getMonth() + 1 + i;               // 1-based, puede exceder 12
+    const year  = y + Math.floor((m - 1) / 12);
+    const month = ((m - 1) % 12) + 1;
+
+    const existing = await prisma.billingCycle.findUnique({ where: { year_month: { year, month } } });
+    if (existing) { skipped.push({ year, month, id: existing.id }); continue; }
+
+    const dates = materializeRuleForMonth(rule, year, month);
+    const row = await prisma.billingCycle.create({
+      data: {
+        year, month,
+        collectionStart:    dates.collectionStart,
+        collectionEnd:      dates.collectionEnd,
+        moraGraceDays:      dates.moraGraceDays,
+        status:             STATUS_DRAFT,
+        autoSuspendEnabled: dates.autoSuspendEnabled,
+        notes:              'Generado por la regla de ciclo recurrente',
+        createdById
+      }
+    });
+    created.push(row);
+  }
+
+  // Si no hay ciclo activo, activa el del mes en curso (recién creado o previo).
+  const active = await findActive();
+  if (!active) {
+    const cy = base.getFullYear();
+    const cm = base.getMonth() + 1;
+    const current = await prisma.billingCycle.findUnique({ where: { year_month: { year: cy, month: cm } } });
+    if (current && current.status === STATUS_DRAFT) {
+      await prisma.billingCycle.update({ where: { id: current.id }, data: { status: STATUS_ACTIVE } });
+    }
+  }
+
+  return { enabled: true, created, skipped };
+}
 
 export async function listCycles() {
   return prisma.billingCycle.findMany({

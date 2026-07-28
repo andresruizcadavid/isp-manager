@@ -27,8 +27,21 @@ const updateSchema = z.object({
   notes:              z.string().max(1000).optional().nullable()
 });
 
+const ruleSchema = z.object({
+  enabled:            z.boolean().optional(),
+  startDay:           z.number().int().min(1).max(31).optional(),
+  endMode:            z.enum(['end-of-month', 'day-of-month']).optional(),
+  endDay:             z.number().int().min(1).max(31).nullable().optional(),
+  moraGraceDays:      z.number().int().min(0).max(60).optional(),
+  autoSuspendEnabled: z.boolean().optional()
+});
+
 router.get('/',                billingCyclesController.list);
 router.get('/active',          billingCyclesController.active);
+// Regla recurrente (rutas literales ANTES de /:id para que no las capture).
+router.get('/rule',            billingCyclesController.getRule);
+router.put('/rule',            validateBody(ruleSchema), billingCyclesController.saveRule);
+router.post('/ensure',         billingCyclesController.ensureFromRule);
 router.get('/:id',             validateParams(commonSchemas.idParam), billingCyclesController.get);
 router.get('/:id/impact',      validateParams(commonSchemas.idParam), billingCyclesController.impact);
 

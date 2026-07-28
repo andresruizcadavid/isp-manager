@@ -1,7 +1,8 @@
 import { asyncHandler, AppError } from '../middleware/error.middleware.js';
 import {
   listCycles, getCycle, findActive, createCycle, updateCycle,
-  activateCycle, closeCycle, deleteCycle, classifyClients
+  activateCycle, closeCycle, deleteCycle, classifyClients,
+  getRule, saveRule, ensureCyclesFromRule
 } from '../services/billing-cycle.service.js';
 import { invoiceService } from '../services/invoice.service.js';
 
@@ -10,6 +11,26 @@ export const billingCyclesController = {
     const rows = await listCycles();
     const active = await findActive();
     res.json({ success: true, data: rows, meta: { activeCycleId: active?.id || null } });
+  }),
+
+  // ── Regla de ciclo recurrente ──────────────────────────────────────
+  getRule: asyncHandler(async (_req, res) => {
+    res.json({ success: true, data: await getRule() });
+  }),
+
+  saveRule: asyncHandler(async (req, res) => {
+    res.json({ success: true, data: await saveRule(req.body) });
+  }),
+
+  // Materializa la regla en ciclos concretos (mes actual + próximos). No pisa
+  // ciclos existentes. Idempotente: se puede llamar en cada carga de la página.
+  ensureFromRule: asyncHandler(async (req, res) => {
+    const monthsAhead = Number(req.body?.monthsAhead);
+    const result = await ensureCyclesFromRule({
+      monthsAhead: Number.isInteger(monthsAhead) ? Math.min(Math.max(monthsAhead, 0), 12) : 1,
+      createdById: req.user?.id || null
+    });
+    res.json({ success: true, data: result });
   }),
 
   get: asyncHandler(async (req, res) => {
