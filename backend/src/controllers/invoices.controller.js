@@ -5,6 +5,27 @@ import { invoiceService } from '../services/invoice.service.js';
 import { paymentLinkService } from '../services/payment-link.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
+import { getValue, setValue } from '../services/system-config.service.js';
+
+// ── Generación automática de facturas (config en SystemConfig) ────────
+// enabled = "activar el sistema"; dayOfMonth = día del mes en que se generan.
+export const AUTO_GEN_KEY = 'auto_invoice_generation';
+const AUTO_GEN_DEFAULT = Object.freeze({ enabled: false, dayOfMonth: 1 });
+
+/** Lee la config con defaults. */
+export async function getAutoGenConfig() {
+  const saved = await getValue(AUTO_GEN_KEY);
+  return { ...AUTO_GEN_DEFAULT, ...(saved && typeof saved === 'object' ? saved : {}) };
+}
+
+/** Fechas limpias de un período a MEDIODÍA UTC (a prueba de zona horaria: la
+ *  fecha mostrada es el día correcto en cualquier huso). @param {number} year @param {number} month 1..12 */
+function periodDatesUTC(year, month) {
+  return {
+    issueDate: new Date(Date.UTC(year, month - 1, 1, 12, 0, 0)),  // día 1
+    dueDate:   new Date(Date.UTC(year, month, 0, 12, 0, 0))       // último día del mes
+  };
+}
 
 // ── Shared invoice filter builder ────────────────────────────────────
 // Single source of truth for the `where` used by BOTH getInvoices and
@@ -524,6 +545,44 @@ class InvoicesController {
   // match what the operator can see by paging through the list.
   //
   // Calls reduce to ~5 prisma queries that run in parallel.
+  // ── Generación automática de facturas ──────────────────────────────
+  getAutoGen = asyncHandler(async (_req, res) => {
+    res.json({ success: true, data: await getAutoGenConfig() });
+  });
+
+  saveAutoGen = asyncHandler(async (req, res) => {
+    const enabled    = !!req.body.enabled;
+    const dayOfMonth = Math.min(28, Math.max(1, Math.round(Number(req.body.dayOfMonth) || 1)));
+    const cfg = { enabled, dayOfMonth };
+    await setValue(AUTO_GEN_KEY, cfg, 'json');
+    res.json({ success: true, data: cfg });
+  });
+
+  // Genera (masivo, idempotente) las facturas de un período elegido. Sirve
+  // para "generar ahora" el mes que el operador quiera, sin esperar al cron.
+  generatePeriod = asyncHandler(async (req, res) => {
+    const year  = Number(req.body.year);
+    const month = Number(req.body.month);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+      throw new AppError('Período inválido', 400, 'BAD_PERIOD');
+    }
+    const { issueDate, dueDate } = periodDatesUTC(year, month);
+    const r = await invoiceService.generateMonthlyInvoices(new Date(year, month - 1, 1), { year, month, issueDate, dueDate });
+    const already = r.failed.filter(f => /already exists/i.test(f.reason || '')).length;
+    const sinMonto = r.failed.filter(f => /zero|negative|no plan|monthly/i.test(f.reason || '')).length;
+    res.json({
+      success: true,
+      data: {
+        period: { year, month },
+        total: r.total,
+        created: r.successful.length,
+        skippedExisting: already,
+        skippedNoAmount: sinMonto,
+        otherFailed: r.failed.length - already - sinMonto
+      }
+    });
+  });
+
   getInvoiceStats = asyncHandler(async (req, res) => {
     const where = buildInvoiceWhere(req.query);
 

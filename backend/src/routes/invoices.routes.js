@@ -51,6 +51,13 @@ const bulkGenerateSchema = z.object({
   periodEnd: z.string().datetime('Fecha de fin inválida')
 });
 
+// Generación automática de facturas (rutas literales ANTES de /:id).
+router.get('/auto-generation', invoiceController.getAutoGen);
+router.put('/auto-generation', requireOperatorOrAdmin, invoiceController.saveAutoGen);
+router.post('/generate-period', requireOperatorOrAdmin,
+  validateBody(z.object({ year: z.number().int().min(2020).max(2100), month: z.number().int().min(1).max(12) })),
+  invoiceController.generatePeriod);
+
 // CRUD routes
 router.get('/', validateQuery(invoiceQuerySchema), invoiceController.getInvoices);
 router.get('/:id', validateParams(commonSchemas.idParam), invoiceController.getInvoice);

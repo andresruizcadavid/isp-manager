@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import { invoiceService } from '../services/invoice.service.js';
 import { notificationService } from '../services/notification.service.js';
 import { prisma } from '../config/database.js';
+import { getValue } from '../services/system-config.service.js';
 
 class BillingJob {
   constructor() {
@@ -10,32 +11,42 @@ class BillingJob {
   }
 
   setupSchedules() {
+    // ═══════════════════════════════════════════════════════════
+    // NOTIFICACIONES AUTOMÁTICAS DESHABILITADAS por solicitud del
+    // operador (2026-06-09). No se envían recordatorios ni avisos
+    // a clientes con facturas pendientes hasta nuevo aviso.
+    // ═══════════════════════════════════════════════════════════
+    // Para re-activar: descomentar las líneas marcadas con [NOTIF]
+    // ═══════════════════════════════════════════════════════════
+
     // Generate invoices according to the ACTIVE billing cycle. Runs DAILY at
     // 2:00 AM but only generates once the cycle's collectionStart has arrived
     // (idempotent — see invoiceService.generateInvoicesForActiveCycle). This
     // replaces the old fixed "1st of the month" schedule so invoicing always
     // follows the operator-configured ciclo de cobro.
-    cron.schedule('0 2 * * *', async () => {
-      console.log('🔄 Revisando ciclo de cobro para generación automática de facturas...');
-      await this.generateMonthlyInvoices();
-    });
+    // [NOTIF] Genera facturas Y envía notificación al cliente
+    // cron.schedule('0 2 * * *', async () => {
+    //   console.log('🔄 Revisando ciclo de cobro para generación automática de facturas...');
+    //   await this.generateMonthlyInvoices();
+    // });
 
     // Mark overdue invoices - Run daily at 1:00 AM
-    cron.schedule('0 1 * * *', async () => {
-      console.log('🔄 Starting overdue invoices marking job...');
-      await this.markOverdueInvoices();
-    });
+    // [NOTIF] Marca vencidas Y envía recordatorio
+    // cron.schedule('0 1 * * *', async () => {
+    //   console.log('🔄 Starting overdue invoices marking job...');
+    //   await this.markOverdueInvoices();
+    // });
 
     // Send payment reminders - Run daily at 9:00 AM and 6:00 PM
-    cron.schedule('0 9 * * *', async () => {
-      console.log('🔄 Starting morning payment reminders job...');
-      await this.sendPaymentReminders();
-    });
-
-    cron.schedule('0 18 * * *', async () => {
-      console.log('🔄 Starting evening payment reminders job...');
-      await this.sendPaymentReminders();
-    });
+    // [NOTIF] Envía recordatorios de pago
+    // cron.schedule('0 9 * * *', async () => {
+    //   console.log('🔄 Starting morning payment reminders job...');
+    //   await this.sendPaymentReminders();
+    // });
+    // cron.schedule('0 18 * * *', async () => {
+    //   console.log('🔄 Starting evening payment reminders job...');
+    //   await this.sendPaymentReminders();
+    // });
 
     // Clean up old sessions - Run daily at 3:00 AM
     cron.schedule('0 3 * * *', async () => {
@@ -43,26 +54,48 @@ class BillingJob {
       await this.cleanupOldSessions();
     });
 
-    // Generate reports - Run monthly on last day at 11:00 PM
-    cron.schedule('0 23 * * *', async () => {
-      const today = new Date();
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      
-      // Check if tomorrow is the first day of the month (i.e., today is the last day)
-      if (tomorrow.getDate() === 1) {
-        console.log('🔄 Starting monthly reports generation job...');
-        await this.generateMonthlyReports();
+    // Generación AUTOMÁTICA de facturas — corre a diario 04:00 pero solo actúa
+    // si el operador la activó (SystemConfig `auto_invoice_generation`) y hoy es
+    // el día configurado. Genera el mes en curso (idempotente, fechas a mediodía
+    // UTC). NO suspende ni notifica — solo crea las facturas del período.
+    cron.schedule('0 4 * * *', async () => {
+      try {
+        const cfg = await getValue('auto_invoice_generation');
+        if (!cfg?.enabled) return;
+        const now = new Date();
+        if (now.getDate() !== (cfg.dayOfMonth || 1)) return;
+        const year = now.getFullYear();
+        const month = now.getMonth() + 1;
+        const issueDate = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0));
+        const dueDate   = new Date(Date.UTC(year, month, 0, 12, 0, 0));
+        console.log(`🧾 [auto-gen] Generando facturas de ${year}-${String(month).padStart(2, '0')}…`);
+        const r = await invoiceService.generateMonthlyInvoices(new Date(year, month - 1, 1), { year, month, issueDate, dueDate });
+        console.log(`🧾 [auto-gen] creadas=${r.successful.length} de ${r.total} (idempotente).`);
+      } catch (e) {
+        console.error('[auto-gen] error:', e.message);
       }
     });
 
-    // Send daily consolidated report to admins — runs at 8:00
-    cron.schedule('0 8 * * *', async () => {
-      console.log('🔄 Starting daily consolidated report email...');
-      await this.sendDailyConsolidatedReport();
-    });
+    // Generate reports - Run monthly on last day at 11:00 PM
+    // [NOTIF] Envía resumen mensual por email a admins
+    // cron.schedule('0 23 * * *', async () => {
+    //   const today = new Date();
+    //   const tomorrow = new Date(today);
+    //   tomorrow.setDate(tomorrow.getDate() + 1);
+    //   if (tomorrow.getDate() === 1) {
+    //     console.log('🔄 Starting monthly reports generation job...');
+    //     await this.generateMonthlyReports();
+    //   }
+    // });
 
-    console.log('📅 Billing jobs scheduled successfully');
+    // Send daily consolidated report to admins — runs at 8:00
+    // [NOTIF] Envía reporte diario por email a admins
+    // cron.schedule('0 8 * * *', async () => {
+    //   console.log('🔄 Starting daily consolidated report email...');
+    //   await this.sendDailyConsolidatedReport();
+    // });
+
+    console.log('📅 Billing jobs scheduled (notificaciones a clientes DESHABILITADAS)');
   }
 
   async generateMonthlyInvoices() {

@@ -29,6 +29,15 @@
   let saving = false;
   let form = emptyForm();
 
+  // ── Generación automática de facturas ──
+  let autoGen = { enabled: false, dayOfMonth: 1 };
+  let autoGenSaving = false;
+  const _now = new Date();
+  let genPeriod = { year: _now.getFullYear(), month: _now.getMonth() + 1 };
+  let genBusy = false;
+  /** @type {any} */
+  let genResult = null;
+
   function emptyForm() {
     const now = new Date();
     const y = now.getFullYear();
@@ -73,6 +82,38 @@
     } finally {
       loading = false;
     }
+  }
+
+  // ── Generación automática de facturas ──────────────────────────────
+  async function loadAutoGen() {
+    try {
+      const r = await api.get('/invoices/auto-generation');
+      const d = r?.data ?? r;
+      if (d) autoGen = { enabled: !!d.enabled, dayOfMonth: Number(d.dayOfMonth) || 1 };
+    } catch (/** @type {any} */ e) { /* defaults */ }
+  }
+  async function saveAutoGen() {
+    autoGenSaving = true; error = '';
+    try {
+      const r = await api.put('/invoices/auto-generation', {
+        enabled: autoGen.enabled,
+        dayOfMonth: Math.min(28, Math.max(1, Number(autoGen.dayOfMonth) || 1))
+      });
+      const d = r?.data ?? r;
+      if (d) autoGen = { enabled: !!d.enabled, dayOfMonth: Number(d.dayOfMonth) || 1 };
+    } catch (/** @type {any} */ e) { error = e.message || 'No se pudo guardar'; }
+    finally { autoGenSaving = false; }
+  }
+  async function generatePeriodNow() {
+    genBusy = true; error = ''; genResult = null;
+    try {
+      const r = await api.post('/invoices/generate-period', {
+        year: Number(genPeriod.year), month: Number(genPeriod.month)
+      });
+      genResult = r?.data ?? r;
+      await load();
+    } catch (/** @type {any} */ e) { error = e.message || 'No se pudo generar el período'; }
+    finally { genBusy = false; }
   }
 
   // ── Regla de ciclo recurrente ──────────────────────────────────────
@@ -130,7 +171,7 @@
     : 'Regla desactivada — los ciclos se crean manualmente.';
 
   onMount(async () => {
-    await loadRule();
+    await Promise.all([loadRule(), loadAutoGen()]);
     if (rule.enabled) { try { await api.post('/billing-cycles/ensure', { monthsAhead: 1 }); } catch (/** @type {any} */ e) { /* silencioso */ } }
     await load();
   });
@@ -270,6 +311,58 @@
     </button>
     <a href="/invoices" class="btn-secondary"><ArrowLeft size={14} /> Facturas</a>
     <button class="btn-primary" on:click={openCreate}><Plus size={14} /> Nuevo ciclo</button>
+  </div>
+</div>
+
+<!-- Generación automática de facturas -->
+<div class="card p-4 sm:p-5 mb-4">
+  <div class="flex items-start justify-between gap-3 flex-wrap">
+    <div class="flex items-start gap-2.5">
+      <div class="w-9 h-9 rounded-lg bg-brand-50 flex items-center justify-center flex-shrink-0"><Calendar size={18} class="text-brand-600" /></div>
+      <div>
+        <h3 class="font-semibold text-slate-900">Generación automática de facturas</h3>
+        <p class="text-xs text-text-muted mt-0.5">Crea las facturas del <strong>mes en curso</strong> automáticamente el día que elijas. Idempotente — nunca duplica. No suspende ni notifica.</p>
+      </div>
+    </div>
+    <label class="inline-flex items-center gap-2 cursor-pointer flex-shrink-0">
+      <input type="checkbox" bind:checked={autoGen.enabled} class="rounded border-slate-300 text-brand-600 focus:ring-brand-600/30" />
+      <span class="text-sm font-medium {autoGen.enabled ? 'text-emerald-700' : 'text-slate-500'}">{autoGen.enabled ? 'Sistema activado' : 'Desactivado'}</span>
+    </label>
+  </div>
+
+  <div class="mt-3 flex items-end gap-3 flex-wrap">
+    <div>
+      <label class="label" for="ag-day">Día de generación (1–28)</label>
+      <input id="ag-day" type="number" min="1" max="28" class="input w-28" bind:value={autoGen.dayOfMonth} />
+    </div>
+    <button class="btn-primary" on:click={saveAutoGen} disabled={autoGenSaving}>
+      {#if autoGenSaving}<Loader2 size={14} class="animate-spin" />{:else}<CheckCircle2 size={14} />{/if} Guardar
+    </button>
+  </div>
+
+  <!-- Generar un período específico ahora (manual) -->
+  <div class="mt-4 pt-4 border-t border-slate-100">
+    <div class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">Generar un período ahora</div>
+    <div class="flex items-end gap-2 flex-wrap">
+      <div>
+        <label class="label" for="ag-month">Mes</label>
+        <select id="ag-month" class="select" bind:value={genPeriod.month}>
+          {#each MONTH_NAMES as name, i}<option value={i + 1}>{name}</option>{/each}
+        </select>
+      </div>
+      <div>
+        <label class="label" for="ag-year">Año</label>
+        <input id="ag-year" type="number" min="2020" max="2100" class="input w-24" bind:value={genPeriod.year} />
+      </div>
+      <button class="btn-secondary" on:click={generatePeriodNow} disabled={genBusy}>
+        {#if genBusy}<Loader2 size={14} class="animate-spin" />{:else}<Play size={14} />{/if} Generar
+      </button>
+      {#if genResult}
+        <span class="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          <strong>{genResult.created}</strong> creadas · {genResult.skippedExisting} ya existían · {genResult.skippedNoAmount} sin monto
+        </span>
+      {/if}
+    </div>
   </div>
 </div>
 
