@@ -61,8 +61,17 @@
   let genBusyMonth = null;
 
   const MONTHS_ES = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+  const MONTHS_FULL_ES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+  // Mes en curso — para el atajo "generar y cobrar el mes actual".
+  const _now = new Date();
+  const curYear  = _now.getFullYear();
+  const curMonth = _now.getMonth() + 1;              // 1..12
+  const curMonthLabel = `${MONTHS_FULL_ES[curMonth - 1]} ${curYear}`;
 
   $: payable = (invoices || []).filter(i => PAYABLE.includes(i.status));
+  // ¿El cliente ya tiene una factura pagable (o cualquiera) del mes en curso?
+  $: hasCurrentMonthInvoice = (invoices || []).some(i => i.periodYear === curYear && i.periodMonth === curMonth);
 
   /** @param {any} inv */
   function balanceOf(inv) {
@@ -204,6 +213,30 @@
     }
   }
 
+  // Atajo: genera (si falta) la factura del MES EN CURSO y la deja marcada para
+  // cobrar en el mismo paso. Es lo que hace la planilla al pagar; aquí lo dejamos
+  // en un clic para que "registrar un pago de julio" cree la factura automáticamente.
+  async function payCurrentMonth() {
+    const c = client;
+    if (!c) return;
+    genBusyMonth = curMonth;
+    errorText = '';
+    try {
+      const res = await billingApi.generateInvoices(c.id, [{ year: curYear, month: curMonth }]);
+      const created = res?.invoices?.[0]?.invoice;
+      if (created) {
+        const enriched = { ...created, invoiceNumber: created.number, periodYear: curYear, periodMonth: curMonth };
+        if (!(invoices || []).some(i => i.id === enriched.id)) invoices = [...invoices, enriched];
+        if (!selected.includes(enriched.id)) selected = [...selected, enriched.id];
+      }
+      if (monthsData) await loadMonths();
+    } catch (/** @type {any} */ e) {
+      errorText = e.message || `No se pudo generar la factura de ${curMonthLabel}`;
+    } finally {
+      genBusyMonth = null;
+    }
+  }
+
   function close() { dispatch('close'); }
 </script>
 
@@ -222,10 +255,23 @@
         <div class="bg-red-50 border border-red-200 text-red-700 rounded-lg px-3 py-2 text-sm">{errorText}</div>
       {/if}
 
+      <!-- Atajo: generar + cobrar el mes en curso (crea la factura si falta) -->
+      {#if !hasCurrentMonthInvoice}
+        <button type="button" on:click={payCurrentMonth} disabled={genBusyMonth === curMonth}
+                class="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-brand-200 bg-brand-50/60 hover:bg-brand-50 text-brand-800 font-medium px-4 py-3 text-sm transition-colors disabled:opacity-60">
+          {#if genBusyMonth === curMonth}<Loader2 size={15} class="animate-spin" />{:else}<Plus size={15} />{/if}
+          Generar factura de <strong>{curMonthLabel}</strong> y cobrar
+        </button>
+      {/if}
+
       <!-- Facturas pendientes -->
       {#if payable.length === 0}
         <div class="bg-amber-50 border border-amber-200 text-amber-700 rounded-lg px-4 py-3 text-sm">
-          Este cliente no tiene facturas pendientes. Usa <strong>Generar factura</strong> para crear una.
+          {#if hasCurrentMonthInvoice}
+            Este cliente no tiene facturas pendientes por cobrar.
+          {:else}
+            Este cliente no tiene facturas pendientes. Usa el botón de arriba para generar la de <strong>{curMonthLabel}</strong>, o <strong>Generar factura</strong> para otro mes.
+          {/if}
         </div>
       {:else}
         <div>
