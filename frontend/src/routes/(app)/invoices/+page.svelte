@@ -233,11 +233,13 @@
   }
 
   /** Aggregate KPIs for the FULL filtered set. Run in parallel with load(). */
+  // Los KPIs de arriba son SIEMPRE del sistema completo (TODOS los períodos),
+  // para que coincidan con la Planilla y el Dashboard (deuda total = una sola
+  // realidad). El filtro de fecha/estado afecta solo el LISTADO de abajo.
   async function loadStats() {
     statsLoading = true;
     try {
-      const qs = new URLSearchParams(buildFilterParams()).toString();
-      stats = await api.get(`/invoices/stats/overview${qs ? '?' + qs : ''}`);
+      stats = await api.get('/invoices/stats/overview');
     } catch (/** @type {any} */ e) {
       // Non-fatal: leave previous stats in place + flag.
       console.error('stats load failed:', e.message);
@@ -384,15 +386,15 @@
   </div>
 </div>
 
-<!-- KPI strip — values are SERVER aggregates over the filtered set,
-     not derived from the visible page. -->
+<!-- KPI strip — SIEMPRE del sistema completo (todos los períodos), para que
+     coincidan con Planilla y Dashboard. El filtro afecta solo el listado. -->
 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
   <div class="kpi-tile">
     <div class="icon-square-blue"><FileText size={14} /></div>
     <div class="kpi-tile-text">
       <div class="kpi-label">Total</div>
       <div class="kpi-value">{kpiTotal}</div>
-      <div class="kpi-sub">{hasFilters ? 'Coinciden con filtros' : 'Facturas en sistema'}</div>
+      <div class="kpi-sub">Facturas en el sistema</div>
     </div>
   </div>
   <div class="kpi-tile">
@@ -418,8 +420,8 @@
       <div class="kpi-value">{fmtMoney(kpiPendingAmt)}</div>
       <div class="kpi-sub">
         {#if stats?.overdueAmount > 0}
-          <span class="text-red-600 font-medium">{fmtMoney(stats.overdueAmount)} vencida</span>
-        {:else}Saldo por cobrar{/if}
+          <span class="text-red-600 font-medium">{fmtMoney(stats.overdueAmount)} vencida</span> · todo el sistema
+        {:else}Saldo por cobrar (todo){/if}
       </div>
     </div>
   </div>

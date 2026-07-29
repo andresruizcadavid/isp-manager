@@ -17,7 +17,8 @@ class ReportsController {
       prisma.invoice.count(),
       prisma.invoice.count({
         where: {
-          status: { in: ['PENDING', 'OVERDUE'] },
+          status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] },
+          balanceDue: { gt: 0 },
           dueDate: { lt: new Date() }
         }
       }),
@@ -28,13 +29,16 @@ class ReportsController {
       })
     ]);
 
-    const overdueAmount = await prisma.invoice.aggregate({
-      where: {
-        status: { in: ['PENDING', 'OVERDUE'] },
-        dueDate: { lt: new Date() }
-      },
-      _sum: { amount: true }
-    });
+    // Definición ÚNICA de deuda (coherente con Facturas y Planilla): saldo
+    // pendiente (balanceDue) de facturas abiertas, TODOS los períodos.
+    //   • outstandingAmount = deuda por cobrar (todo lo abierto).
+    //   • overdueAmount     = subconjunto ya vencido (dueDate < hoy).
+    const OPEN = { status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] }, balanceDue: { gt: 0 } };
+    const [outstandingAgg, overdueAmount, debtors] = await Promise.all([
+      prisma.invoice.aggregate({ where: OPEN, _sum: { balanceDue: true } }),
+      prisma.invoice.aggregate({ where: { ...OPEN, dueDate: { lt: new Date() } }, _sum: { balanceDue: true } }),
+      prisma.invoice.groupBy({ by: ['clientId'], where: OPEN })
+    ]);
 
     res.json({
       success: true,
@@ -47,7 +51,9 @@ class ReportsController {
         invoices: {
           total: totalInvoices,
           overdue: overdueInvoices,
-          overdueAmount: overdueAmount._sum.amount || 0
+          overdueAmount: overdueAmount._sum.balanceDue || 0,
+          outstandingAmount: outstandingAgg._sum.balanceDue || 0,
+          debtorCount: debtors.length
         },
         revenue: {
           monthly: monthlyRevenue,

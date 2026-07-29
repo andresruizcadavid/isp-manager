@@ -31,7 +31,9 @@ router.get('/stats', async (req, res) => {
       prisma.client.groupBy({ by: ['connectionType'], _count: { _all: true } }),
       prisma.invoice.count(),
       prisma.invoice.groupBy({ by: ['status'], _count: { _all: true }, _sum: { total: true } }),
-      prisma.invoice.aggregate({ where: { status: { in: ['PENDING', 'OVERDUE'] } }, _sum: { total: true }, _count: { _all: true } }),
+      // Deuda por cobrar (definición ÚNICA, = Facturas/Planilla): SALDO
+      // pendiente (balanceDue) de facturas abiertas, todos los períodos.
+      prisma.invoice.aggregate({ where: { status: { in: OPEN }, balanceDue: { gt: 0 } }, _sum: { balanceDue: true }, _count: { _all: true } }),
       prisma.payment.aggregate({ where: { status: 'COMPLETED', createdAt: { gte: startOfMonth } }, _sum: { amount: true }, _count: { _all: true } }),
       prisma.router.count(),
       prisma.plan.count({ where: { isActive: true } }),
@@ -135,7 +137,7 @@ router.get('/stats', async (req, res) => {
       const paidThisMonth = paidThisMonthAggregate._sum.amount || 0;
       data.kpis.totalInvoices    = totalInvoices;
       data.kpis.pendingInvoices  = pendingAggregate._count._all;
-      data.kpis.pendingAmount    = pendingAggregate._sum.total || 0;
+      data.kpis.pendingAmount    = pendingAggregate._sum.balanceDue || 0;
       data.kpis.paidThisMonth    = paidThisMonth;
       data.kpis.mrr              = mrr;
       data.invoicesByStatus = invoicesByStatus.map(s => ({ status: s.status, count: s._count._all, total: s._sum.total || 0 }));
