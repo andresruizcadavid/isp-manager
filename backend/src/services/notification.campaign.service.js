@@ -43,22 +43,55 @@ function clientVars(client, overrides = {}) {
   };
 }
 
+const OPEN_STATUSES = ['PENDING', 'OVERDUE', 'PARTIAL'];
+
 /**
- * Resolve campaign audience from the JSON filter saved on the campaign.
- * Filter shape: { zoneId?, status?, planId?, overdue? }
+ * Construye el `where` de Prisma para la audiencia de una campaña. ÚNICA fuente
+ * de verdad — la usan tanto el conteo/preview (rutas) como el envío real
+ * (resolveAudience) para que no se desincronicen.
+ *
+ * Filtro: {
+ *   clientIds?, zoneId?, planId?, status? (estado del CLIENTE),
+ *   debt?: 'open'|'overdue'|'none',   // deuda: con deuda / vencida / al día
+ *   debtYear?, debtMonth?,            // restringe la deuda a un período (ej. jul 2026)
+ *   overdue?  // compat viejo → debt:'overdue'
+ * }
  */
-async function resolveAudience(filter) {
+export function buildAudienceWhere(filter) {
+  /** @type {Record<string, any>} */
   const where = {};
-  // Explicit selection wins: when the operator picked specific clients via the
-  // UI checkboxes we send ONLY to those (the other filters were used to build
-  // the candidate list and are redundant here, but kept for safety/AND).
+  // La selección explícita manda: si el operador marcó clientes puntuales,
+  // se envía SOLO a esos.
   if (filter?.clientIds?.length) where.id = { in: filter.clientIds };
   if (filter?.zoneId)  where.zoneId  = Number(filter.zoneId);
   if (filter?.planId)  where.planId  = filter.planId;
   if (filter?.status)  where.status  = filter.status;
-  if (filter?.overdue) {
-    where.invoices = { some: { status: 'OVERDUE' } };
+
+  const debt = filter?.debt || (filter?.overdue ? 'overdue' : undefined);
+  if (debt) {
+    const hasPeriod = filter?.debtYear && filter?.debtMonth;
+    /** @type {Record<string, any>} */
+    const inv = { status: { in: OPEN_STATUSES }, balanceDue: { gt: 0 } };
+    if (hasPeriod) { inv.periodYear = Number(filter.debtYear); inv.periodMonth = Number(filter.debtMonth); }
+    if (debt === 'overdue') inv.dueDate = { lt: new Date() };   // vencida = abierta + ya venció
+
+    if (debt === 'none') {
+      // Al día = sin NINGUNA factura abierta (en el período si se indicó).
+      const none = { status: { in: OPEN_STATUSES }, balanceDue: { gt: 0 } };
+      if (hasPeriod) { none.periodYear = Number(filter.debtYear); none.periodMonth = Number(filter.debtMonth); }
+      where.invoices = { none };
+    } else {
+      where.invoices = { some: inv };
+    }
   }
+  return where;
+}
+
+/**
+ * Resolve campaign audience from the JSON filter saved on the campaign.
+ */
+async function resolveAudience(filter) {
+  const where = buildAudienceWhere(filter);
   return prisma.client.findMany({
     where,
     include: {

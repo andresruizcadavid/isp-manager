@@ -338,10 +338,14 @@ Email: contacto@internetonline.co
   // Live search to filter the recipient list (name / email / phone / zone / plan).
   let cmpSearch = '';
 
+  const AUD_NOW = new Date();
+  const AUD_MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   function emptyCmp() {
     return {
       name: '', templateId: '', channel: 'EMAIL', generatePaymentLinks: false,
-      audience: { zoneId: '', planId: '', status: '', overdue: false }
+      // debt: '' (cualquiera) | 'open' (con deuda) | 'overdue' (vencida) | 'none' (al día)
+      // debtYear/debtMonth: período de la deuda (aplica si debt ≠ '')
+      audience: { zoneId: '', planId: '', status: '', debt: '', debtYear: AUD_NOW.getFullYear(), debtMonth: AUD_NOW.getMonth() + 1 }
     };
   }
   function resetCmpModalState() {
@@ -384,7 +388,9 @@ Email: contacto@internetonline.co
         zoneId:  audience.zoneId  ?? '',
         planId:  audience.planId  ?? '',
         status:  audience.status  ?? '',
-        overdue: !!audience.overdue
+        debt:    audience.debt ?? (audience.overdue ? 'overdue' : ''),
+        debtYear:  audience.debtYear  ?? AUD_NOW.getFullYear(),
+        debtMonth: audience.debtMonth ?? (AUD_NOW.getMonth() + 1)
       }
     };
     resetCmpModalState();
@@ -454,12 +460,24 @@ Email: contacto@internetonline.co
     }
   }
 
-  async function loadAudienceList() {
+  /** Construye el objeto `filter` de audiencia (zona/plan/estado/deuda/período)
+   *  desde cmpForm. Fuente única para preview, lista y lanzamiento. */
+  function audienceFilterFromForm() {
+    const a = cmpForm.audience;
+    /** @type {Record<string, any>} */
     const filter = {};
-    if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
-    if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
-    if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
-    if (cmpForm.audience.overdue) filter.overdue = true;
+    if (a.zoneId) filter.zoneId = a.zoneId;
+    if (a.planId) filter.planId = a.planId;
+    if (a.status) filter.status = a.status;
+    if (a.debt) {
+      filter.debt = a.debt;
+      if (a.debtYear && a.debtMonth) { filter.debtYear = Number(a.debtYear); filter.debtMonth = Number(a.debtMonth); }
+    }
+    return filter;
+  }
+
+  async function loadAudienceList() {
+    const filter = audienceFilterFromForm();
     audienceListLoading = true;
     try {
       const res = await notificationsApi.previewClients(filter);
@@ -487,11 +505,7 @@ Email: contacto@internetonline.co
   async function previewAudience() {
     previewLoading = true;
     try {
-      const filter = {};
-      if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
-      if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
-      if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
-      if (cmpForm.audience.overdue) filter.overdue = true;
+      const filter = audienceFilterFromForm();
       const res = await notificationsApi.previewAudience(filter);
       audiencePreview = res?.count ?? 0;
     } catch (/** @type {any} */ e) { audiencePreview = null; cmpError = e.message; }
@@ -500,7 +514,7 @@ Email: contacto@internetonline.co
   // Re-preview whenever audience filter changes. We depend on primitives
   // (audienceKey) instead of the whole audience object so writes to OTHER
   // cmpForm fields don't refire the preview.
-  $: audienceKey = `${cmpForm.audience.zoneId}|${cmpForm.audience.planId}|${cmpForm.audience.status}|${cmpForm.audience.overdue}`;
+  $: audienceKey = `${cmpForm.audience.zoneId}|${cmpForm.audience.planId}|${cmpForm.audience.status}|${cmpForm.audience.debt}|${cmpForm.audience.debtYear}|${cmpForm.audience.debtMonth}`;
   $: if (cmpModalOpen && audienceKey) {
     previewAudience();
     loadAudienceList();   // auto-load so the operator can pick recipients
@@ -584,11 +598,7 @@ Email: contacto@internetonline.co
   // Build the {name, templateId, channel, generatePaymentLinks, audience}
   // payload from the current form state. Shared by save-draft and launch.
   function buildCampaignPayload() {
-    const filter = {};
-    if (cmpForm.audience.zoneId)  filter.zoneId  = cmpForm.audience.zoneId;
-    if (cmpForm.audience.planId)  filter.planId  = cmpForm.audience.planId;
-    if (cmpForm.audience.status)  filter.status  = cmpForm.audience.status;
-    if (cmpForm.audience.overdue) filter.overdue = true;
+    const filter = audienceFilterFromForm();
     // Explicit recipient selection — unless "todos" is marked on a truncated
     // list, where we defer to the filter so everyone matching is included.
     if (!(cmpTruncated && cmpAllSelected)) {
@@ -1116,7 +1126,12 @@ Email: contacto@internetonline.co
       parts.push(`plan: ${p?.name || f.planId}`);
     }
     if (f.status)  parts.push(`estado: ${f.status}`);
-    if (f.overdue) parts.push('vencidas');
+    const debt = f.debt || (f.overdue ? 'overdue' : '');
+    if (debt) {
+      const lbl = debt === 'overdue' ? 'con deuda vencida' : debt === 'none' ? 'al día' : 'con deuda';
+      const per = (f.debtYear && f.debtMonth) ? ` de ${AUD_MONTHS[f.debtMonth - 1]} ${f.debtYear}` : '';
+      parts.push(lbl + per);
+    }
     return parts.length ? parts.join(' · ') : 'todos los clientes';
   }
 
@@ -2279,19 +2294,44 @@ Email: contacto@internetonline.co
           </select>
         </div>
         <div>
-          <label for="aud-status" class="label">Estado</label>
+          <label for="aud-status" class="label">Estado del cliente</label>
           <select id="aud-status" bind:value={cmpForm.audience.status} class="select">
             <option value="">Todos</option>
             <option value="ACTIVE">Activos</option>
             <option value="SUSPENDED">Suspendidos</option>
-            <option value="PENDING">Pendientes</option>
+            <option value="PENDING">Pendientes (instalación)</option>
           </select>
         </div>
-        <label class="flex items-end gap-2 text-sm pb-1">
-          <input type="checkbox" bind:checked={cmpForm.audience.overdue} class="w-4 h-4" />
-          Solo con facturas vencidas
-        </label>
+        <div>
+          <label for="aud-debt" class="label">Deuda / pago</label>
+          <select id="aud-debt" bind:value={cmpForm.audience.debt} class="select">
+            <option value="">Cualquiera</option>
+            <option value="open">Con deuda (no han pagado)</option>
+            <option value="overdue">Con deuda vencida</option>
+            <option value="none">Al día (sin deuda)</option>
+          </select>
+        </div>
       </div>
+
+      <!-- Período de la deuda (solo si se filtra por deuda) -->
+      {#if cmpForm.audience.debt}
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg bg-brand-50/40 border border-brand-100 p-3">
+          <div>
+            <label for="aud-debt-month" class="label">Deuda del mes</label>
+            <select id="aud-debt-month" bind:value={cmpForm.audience.debtMonth} class="select">
+              <option value={0}>Cualquier mes</option>
+              {#each AUD_MONTHS as name, i}<option value={i + 1}>{name}</option>{/each}
+            </select>
+          </div>
+          <div>
+            <label for="aud-debt-year" class="label">Año</label>
+            <input id="aud-debt-year" type="number" min="2020" max="2100" class="input" bind:value={cmpForm.audience.debtYear} />
+          </div>
+          <p class="sm:col-span-2 text-[11px] text-slate-500 -mt-1">
+            Ej.: <strong>Con deuda · {AUD_MONTHS[(cmpForm.audience.debtMonth || 1) - 1]} {cmpForm.audience.debtYear}</strong> = clientes con una factura sin pagar de ese mes. "Cualquier mes" = deuda de cualquier período.
+          </p>
+        </div>
+      {/if}
       <label class="inline-flex items-center gap-2 text-sm pt-1 border-t border-slate-200">
         <input type="checkbox" bind:checked={cmpForm.generatePaymentLinks} class="w-4 h-4" />
         <span>Generar links de pago para cada cliente</span>

@@ -4,7 +4,7 @@ import { prisma } from '../config/database.js';
 import { authMiddleware, requireAdmin } from '../middleware/auth.middleware.js';
 import { validateBody, validateQuery } from '../middleware/validate.middleware.js';
 import { renderEmailTemplate, EMAIL_PRESETS } from '../services/email-base.template.js';
-import { runCampaign, retryFailed, sendToClient, loadClientForSend } from '../services/notification.campaign.service.js';
+import { runCampaign, retryFailed, sendToClient, loadClientForSend, buildAudienceWhere } from '../services/notification.campaign.service.js';
 import { notificationSettings, NOTIFY_DEFAULTS } from '../services/notification-settings.service.js';
 
 const router = Router();
@@ -75,14 +75,10 @@ const singleSendSchema = z.object({
 
 // Build the Prisma `where` for an audience filter. Single source of truth for
 // /campaigns (preflight), /campaigns/:id/launch and the diagnose re-resolve.
+// Delegado al helper compartido del servicio (deuda + período + estado) para
+// que el conteo/preview y el envío real usen EXACTAMENTE el mismo filtro.
 function audienceWhere(audience) {
-  const where = {};
-  if (audience?.clientIds?.length) where.id = { in: audience.clientIds };
-  if (audience?.zoneId)  where.zoneId  = Number(audience.zoneId);
-  if (audience?.planId)  where.planId  = audience.planId;
-  if (audience?.status)  where.status  = audience.status;
-  if (audience?.overdue) where.invoices = { some: { status: 'OVERDUE' } };
-  return where;
+  return buildAudienceWhere(audience);
 }
 
 // Validate a template can be used for the requested channel. Returns
