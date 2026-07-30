@@ -309,6 +309,11 @@ Email: contacto@internetonline.co
     finally { cmpLoading = false; }
   }
 
+  // Definidas ANTES de `emptyCmp()` (que se invoca aquí abajo) para evitar el
+  // temporal-dead-zone que rompía la página al cargar.
+  const AUD_NOW = new Date();
+  const AUD_MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
   let cmpModalOpen = false;
   let cmpForm = emptyCmp();
   let cmpSaving = false;
@@ -338,8 +343,6 @@ Email: contacto@internetonline.co
   // Live search to filter the recipient list (name / email / phone / zone / plan).
   let cmpSearch = '';
 
-  const AUD_NOW = new Date();
-  const AUD_MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   function emptyCmp() {
     return {
       name: '', templateId: '', channel: 'EMAIL', generatePaymentLinks: false,
