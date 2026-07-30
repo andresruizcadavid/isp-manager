@@ -30,7 +30,7 @@
   let dateFrom = '';                // 'YYYY-MM-DD'
   let dateTo = '';                  // 'YYYY-MM-DD'
   let page = 1;
-  const pageSize = 20;
+  let pageSize = 25;                 // registros por página (10/25/50/100)
   // Ordenamiento (el backend valida contra una whitelist).
   let sortBy = 'createdAt';         // createdAt | invoiceNumber | issueDate | dueDate | amount | total | status
   let sortOrder = 'desc';           // 'asc' | 'desc'
@@ -674,10 +674,20 @@
     </table>
   </div>
 
-  <div class="px-5 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/40">
-    <span class="text-xs text-slate-500">
-      Mostrando {invoices.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} de {total}
-    </span>
+  <div class="px-5 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/40 gap-3 flex-wrap">
+    <div class="flex items-center gap-3 text-xs text-slate-500">
+      <span>Mostrando {invoices.length === 0 ? 0 : (page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} de {total}</span>
+      <span class="inline-flex items-center gap-1.5">
+        · Mostrar
+        <select class="select !w-auto !min-h-0 py-1 pl-2 pr-7 text-xs" bind:value={pageSize} on:change={() => { page = 1; load(); }} title="Registros por página">
+          <option value={10}>10</option>
+          <option value={25}>25</option>
+          <option value={50}>50</option>
+          <option value={100}>100</option>
+        </select>
+        por página
+      </span>
+    </div>
     <div class="flex items-center gap-1">
       <button class="btn-ghost text-xs py-1" disabled={page <= 1} on:click={() => setPage(page - 1)}>← Anterior</button>
       <span class="px-3 py-1 bg-brand-800 text-white text-xs rounded-md font-medium">{page} / {totalPages}</span>
