@@ -568,6 +568,7 @@
     <table class="data-table">
       <thead>
         <tr>
+          <th class="text-right w-12 text-slate-400" title="Posición en la lista filtrada">#</th>
           <th>
             <button class="th-sort" class:th-active={sortBy==='invoiceNumber'} on:click={() => applySort('invoiceNumber')}>
               Número <svelte:component this={arrowFor('invoiceNumber')} size={12} class={sortBy==='invoiceNumber' ? '' : 'text-slate-300'} />
@@ -605,14 +606,14 @@
       </thead>
       <tbody>
         {#if loading}
-          <tr><td colspan="9" class="py-16 text-center">
+          <tr><td colspan="10" class="py-16 text-center">
             <div class="flex items-center justify-center gap-2">
               <div class="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
               <span class="text-slate-500 text-sm">Cargando facturas...</span>
             </div>
           </td></tr>
         {:else if invoices.length === 0}
-          <tr><td colspan="9" class="py-20 text-center">
+          <tr><td colspan="10" class="py-20 text-center">
             <div class="flex flex-col items-center gap-4">
               <div class="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center">
                 <FileText size={28} class="text-slate-400" />
@@ -625,8 +626,9 @@
             </div>
           </td></tr>
         {:else}
-          {#each invoices as inv}
+          {#each invoices as inv, i}
             <tr>
+              <td class="text-right text-xs text-slate-400 tabular-nums">{(page - 1) * pageSize + i + 1}</td>
               <td class="font-mono text-xs text-slate-700">{inv.invoiceNumber ?? '—'}</td>
               <td>
                 <a href="/clients/{inv.client?.id}?from=/invoices" class="font-medium text-slate-900 hover:text-brand-800 transition-colors">
