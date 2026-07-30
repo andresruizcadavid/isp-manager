@@ -25,10 +25,26 @@ const fmtMoney = (cents) =>
 
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('es-CO') : '';
 
+/** Factura OBJETIVO del cobro de la campaña: la del período (year/month) si se
+ *  indicó y existe; si no, la pendiente más antigua. Así el link de pago y el
+ *  monto concuerdan con el mes que se está cobrando.
+ *  @param {any} client @param {{year:number,month:number}|null} period */
+function pickTargetInvoice(client, period) {
+  const pending = (client.invoices || []).filter(
+    i => ['PENDING', 'OVERDUE', 'PARTIAL'].includes(i.status) && (i.balanceDue == null || i.balanceDue > 0)
+  );
+  if (period) {
+    const m = pending.find(i => i.periodYear === period.year && i.periodMonth === period.month);
+    if (m) return m;
+  }
+  return [...pending].sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0] || null;
+}
+
 function clientVars(client, overrides = {}) {
-  // Oldest pending invoice for {{dueDate}} / {{amount}}
-  const pending = (client.invoices || []).filter(i => ['PENDING', 'OVERDUE', 'PARTIAL'].includes(i.status));
-  const oldest = pending.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
+  // {{dueDate}} / {{amount}} salen de la factura OBJETIVO (la del mes de la
+  // campaña si se indicó; si no, la pendiente más antigua). Así el cobro que
+  // ve el cliente concuerda con el mes que se le está cobrando.
+  const inv = overrides.targetInvoice || pickTargetInvoice(client, null);
   return {
     name:        client.name || '',
     email:       client.email || '',
@@ -37,8 +53,8 @@ function clientVars(client, overrides = {}) {
     zone:        client.zone?.name || '',
     ip:          client.mikrotikAccount?.remoteAddress || '',
     balance:     fmtMoney(client.balance),
-    dueDate:     oldest ? fmtDate(oldest.dueDate) : '',
-    amount:      oldest ? fmtMoney(oldest.balanceDue || oldest.total || oldest.amount) : '',
+    dueDate:     inv ? fmtDate(inv.dueDate) : '',
+    amount:      inv ? fmtMoney(inv.balanceDue || inv.total || inv.amount) : '',
     paymentLink: overrides.paymentLinkUrl || ''
   };
 }
@@ -101,7 +117,7 @@ async function resolveAudience(filter) {
       mikrotikAccount: { select: { remoteAddress: true } },
       invoices: {
         where: { status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
-        select: { id: true, status: true, total: true, amount: true, balanceDue: true, dueDate: true }
+        select: { id: true, status: true, total: true, amount: true, balanceDue: true, dueDate: true, periodYear: true, periodMonth: true }
       }
     }
   });
@@ -119,7 +135,7 @@ export async function loadClientForSend(clientId) {
       mikrotikAccount: { select: { remoteAddress: true } },
       invoices: {
         where: { status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] } },
-        select: { id: true, status: true, total: true, amount: true, balanceDue: true, dueDate: true }
+        select: { id: true, status: true, total: true, amount: true, balanceDue: true, dueDate: true, periodYear: true, periodMonth: true }
       }
     }
   });
@@ -137,28 +153,28 @@ export async function loadClientForSend(clientId) {
  */
 export async function sendToClient({
   client, template, channel, generatePaymentLinks = false,
-  campaignId = null, type = 'GENERAL_ANNOUNCEMENT'
+  campaignId = null, type = 'GENERAL_ANNOUNCEMENT', period = null
 }) {
   const channels = channel === 'BOTH' ? ['EMAIL', 'WHATSAPP'] : [channel];
 
-  // Generate payment link from the oldest open invoice when requested.
+  // Factura objetivo: la del MES de la campaña (period) si existe; si no, la más
+  // antigua. El link de pago y el cobro se generan sobre ESA factura, para que
+  // concuerden con el mes que se está cobrando.
+  const target = pickTargetInvoice(client, period);
+
   let paymentLinkUrl = '';
   let paymentLinkId = null;
-  if (generatePaymentLinks) {
-    const pending = (client.invoices || []).filter(i => ['PENDING', 'OVERDUE', 'PARTIAL'].includes(i.status));
-    const oldest = pending.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate))[0];
-    if (oldest) {
-      try {
-        const link = await paymentLinkService.createForInvoice(oldest.id);
-        paymentLinkUrl = link.checkoutUrl;
-        paymentLinkId = link.id;
-      } catch (e) {
-        console.error(`[sendToClient ${client.id}] failed to create payment link: ${e.message}`);
-      }
+  if (generatePaymentLinks && target) {
+    try {
+      const link = await paymentLinkService.createForInvoice(target.id);
+      paymentLinkUrl = link.checkoutUrl;
+      paymentLinkId = link.id;
+    } catch (e) {
+      console.error(`[sendToClient ${client.id}] failed to create payment link: ${e.message}`);
     }
   }
 
-  const vars = clientVars(client, { paymentLinkUrl });
+  const vars = clientVars(client, { paymentLinkUrl, targetInvoice: target });
   const subject = renderTemplate(template.subject || '', vars);
   const body    = renderTemplate(template.body, vars);
 
@@ -338,6 +354,12 @@ export async function runCampaign(campaignId) {
   let failed = 0;
   let skipped = 0;
 
+  // Si la campaña se segmentó por mes (deuda de un período), el cobro/link se
+  // hace sobre la factura de ESE mes en cada cliente.
+  const campaignPeriod = (audienceFilter?.debtYear && audienceFilter?.debtMonth)
+    ? { year: Number(audienceFilter.debtYear), month: Number(audienceFilter.debtMonth) }
+    : null;
+
   for (let idx = 0; idx < audience.length; idx++) {
     const client = audience[idx];
     const r = await sendToClient({
@@ -345,7 +367,8 @@ export async function runCampaign(campaignId) {
       template: campaign.template,
       channel: campaign.channel,
       generatePaymentLinks: campaign.generatePaymentLinks,
-      campaignId
+      campaignId,
+      period: campaignPeriod
     });
     sent    += r.sent;
     failed  += r.failed;
@@ -407,6 +430,10 @@ export async function retryFailed(campaignId) {
   if (!campaign) throw new Error('Campaña no encontrada');
   if (!campaign.template) throw new Error('La campaña no tiene plantilla asociada; no se puede reintentar.');
 
+  let af = {};
+  try { af = campaign.audienceJson ? JSON.parse(campaign.audienceJson) : {}; } catch { af = {}; }
+  const campaignPeriod = (af?.debtYear && af?.debtMonth) ? { year: Number(af.debtYear), month: Number(af.debtMonth) } : null;
+
   // Logs reintentables: fallidos u omitidos, con cliente asociado (excluye
   // los logs de error de sistema, que tienen clientId null).
   const logs = await prisma.notificationLog.findMany({
@@ -431,7 +458,8 @@ export async function retryFailed(campaignId) {
       template: campaign.template,
       channel: campaign.channel,
       generatePaymentLinks: campaign.generatePaymentLinks,
-      campaignId
+      campaignId,
+      period: campaignPeriod
     });
     recovered   += r.sent;
     stillFailed += r.failed;
