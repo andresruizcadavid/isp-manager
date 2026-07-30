@@ -1131,7 +1131,7 @@ Email: contacto@internetonline.co
     if (f.status)  parts.push(`estado: ${f.status}`);
     const debt = f.debt || (f.overdue ? 'overdue' : '');
     if (debt) {
-      const lbl = debt === 'overdue' ? 'con deuda vencida' : debt === 'none' ? 'al día' : 'con deuda';
+      const lbl = debt === 'overdue' ? 'en mora' : debt === 'due_soon' ? 'por vencer' : debt === 'none' ? 'al día' : 'con deuda';
       const per = (f.debtYear && f.debtMonth) ? ` de ${AUD_MONTHS[f.debtMonth - 1]} ${f.debtYear}` : '';
       parts.push(lbl + per);
     }
@@ -2309,8 +2309,9 @@ Email: contacto@internetonline.co
           <label for="aud-debt" class="label">Deuda / pago</label>
           <select id="aud-debt" bind:value={cmpForm.audience.debt} class="select">
             <option value="">Cualquiera</option>
-            <option value="open">Con deuda (no han pagado)</option>
-            <option value="overdue">Con deuda vencida</option>
+            <option value="open">Con deuda (todas)</option>
+            <option value="due_soon">Por vencer (no en mora)</option>
+            <option value="overdue">En mora (vencida)</option>
             <option value="none">Al día (sin deuda)</option>
           </select>
         </div>

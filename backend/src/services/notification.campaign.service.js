@@ -73,7 +73,8 @@ export function buildAudienceWhere(filter) {
     /** @type {Record<string, any>} */
     const inv = { status: { in: OPEN_STATUSES }, balanceDue: { gt: 0 } };
     if (hasPeriod) { inv.periodYear = Number(filter.debtYear); inv.periodMonth = Number(filter.debtMonth); }
-    if (debt === 'overdue') inv.dueDate = { lt: new Date() };   // vencida = abierta + ya venció
+    if (debt === 'overdue')       inv.dueDate = { lt: new Date() };   // vencida (en mora) = abierta + ya venció
+    else if (debt === 'due_soon') inv.dueDate = { gte: new Date() };  // por vencer (NO en mora) = abierta + aún no vence
 
     if (debt === 'none') {
       // Al día = sin NINGUNA factura abierta (en el período si se indicó).
