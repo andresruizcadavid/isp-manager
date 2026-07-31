@@ -1,13 +1,18 @@
 <script>
   import { onMount } from 'svelte';
+  import { browser } from '$app/environment';
+  import { page as pageStore } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { invoicesApi } from '$lib/api/invoices.api.js';
   import { api } from '$lib/api/client.js';
+  import RegisterPaymentModal from '$lib/components/payments/RegisterPaymentModal.svelte';
   import {
     Search, FileText, Eye, AlertCircle,
     Wallet, Clock, CheckCircle2, AlertTriangle,
     Pencil, Trash2, X, Loader2, Save,
     ArrowUp, ArrowDown, ArrowUpDown, Download,
-    Calendar, ChevronDown, ChevronLeft, ChevronRight
+    Calendar, ChevronDown, ChevronLeft, ChevronRight,
+    CreditCard, Send, Link2, CheckSquare
   } from 'lucide-svelte';
 
   /** @type {import('$lib/types').Invoice[]} */
@@ -178,6 +183,7 @@
 
   async function load() {
     loading = true; error = '';
+    syncUrl();   // mantiene la URL en sync con los filtros/orden/página
     try {
       const params = { page, limit: pageSize, sortBy, sortOrder, ...buildFilterParams() };
       const res = await invoicesApi.getPage(params);
@@ -248,11 +254,69 @@
 
   function reloadAll() {
     page = 1;
+    clearSelection();
     load();
     loadStats();
+    loadFilteredTotals();
   }
 
-  onMount(() => { applyCurrentMonthDefault(); load(); loadStats(); });
+  // ── Totales del SET FILTRADO (pie de tabla) — distinto de los KPIs globales.
+  /** @type {any} */
+  let filteredTotals = null;
+  async function loadFilteredTotals() {
+    try {
+      const qs = new URLSearchParams(buildFilterParams()).toString();
+      filteredTotals = await api.get(`/invoices/stats/overview${qs ? '?' + qs : ''}`);
+    } catch (/** @type {any} */ e) { filteredTotals = null; }
+  }
+
+  // ── Persistencia de filtros en la URL ──────────────────────────────
+  function syncUrl() {
+    if (!browser) return;
+    const p = new URLSearchParams();
+    if (q.trim())      p.set('q', q.trim());
+    if (status)        p.set('status', status);
+    if (paymentMethod) p.set('method', paymentMethod);
+    if (dateFrom || dateTo) {
+      p.set('df', dateField);
+      if (dateFrom) p.set('from', dateFrom);
+      if (dateTo)   p.set('to', dateTo);
+      if (datePreset) p.set('pl', datePreset);
+    }
+    if (sortBy !== 'createdAt') p.set('sort', sortBy);
+    if (sortOrder !== 'desc')   p.set('dir', sortOrder);
+    if (page > 1)        p.set('page', String(page));
+    if (pageSize !== 25) p.set('ps', String(pageSize));
+    const qs = p.toString();
+    goto(qs ? `?${qs}` : location.pathname, { replaceState: true, keepFocus: true, noScroll: true });
+  }
+  /** Lee filtros de la URL al montar. Devuelve true si había alguno. */
+  function readUrl() {
+    const sp = $pageStore.url.searchParams;
+    let any = false;
+    const g = (/** @type {string} */ k) => sp.get(k);
+    if (g('q'))      { q = g('q') || ''; any = true; }
+    if (g('status')) { status = g('status') || ''; any = true; }
+    if (g('method')) { paymentMethod = g('method') || ''; any = true; }
+    if (g('from') || g('to')) {
+      dateField = g('df') === 'issueDate' ? 'issueDate' : 'dueDate';
+      dateFrom  = g('from') || '';
+      dateTo    = g('to') || '';
+      datePreset = g('pl') || '';
+      any = true;
+    }
+    if (g('sort')) sortBy = g('sort') || 'createdAt';
+    if (g('dir'))  sortOrder = g('dir') === 'asc' ? 'asc' : 'desc';
+    if (g('page')) page = Math.max(1, Number(g('page')) || 1);
+    if (g('ps'))   pageSize = [10, 25, 50, 100].includes(Number(g('ps'))) ? Number(g('ps')) : 25;
+    return any;
+  }
+
+  onMount(() => {
+    const hadUrlFilters = readUrl();
+    if (!hadUrlFilters) applyCurrentMonthDefault();   // default solo si la URL no traía filtros
+    load(); loadStats(); loadFilteredTotals();
+  });
 
   function onSearchInput() {
     clearTimeout(searchTimer);
@@ -316,6 +380,84 @@
   const STATUS_PT = { DRAFT:'Borrador', PENDING:'Pendiente', PARTIAL:'Parcial', PAID:'Pagada', OVERDUE:'Vencida', CANCELLED:'Cancelada', REFUNDED:'Reembolsada' };
   /** @type {Record<string, string>} */
   const STATUS_CLS = { PAID:'badge-green', PENDING:'badge-yellow', PARTIAL:'badge-blue', OVERDUE:'badge-red', CANCELLED:'badge-gray', DRAFT:'badge-gray', REFUNDED:'badge-blue' };
+
+  const OPEN_ST = ['PENDING', 'PARTIAL', 'OVERDUE'];
+  /** Días de mora (>0 solo si la factura está abierta y ya venció). @param {any} inv */
+  function daysOverdue(inv) {
+    if (!inv?.dueDate || !OPEN_ST.includes(inv.status)) return 0;
+    if (inv.balanceDue != null && inv.balanceDue <= 0) return 0;
+    const d = Math.floor((Date.now() - new Date(inv.dueDate).getTime()) / 86400000);
+    return d > 0 ? d : 0;
+  }
+  /** @param {any} inv */
+  const isPayable = (inv) => OPEN_ST.includes(inv?.status) && (inv?.balanceDue == null || inv?.balanceDue > 0);
+
+  // ── Selección múltiple (acciones masivas) ──────────────────────────
+  /** @type {Set<string>} */
+  let selectedIds = new Set();
+  let bulkBusy = false;
+  let bulkMsg = '';
+  function clearSelection() { selectedIds = new Set(); }
+  /** @param {string} id */
+  function toggleRow(id) { const s = new Set(selectedIds); s.has(id) ? s.delete(id) : s.add(id); selectedIds = s; }
+  function toggleAllVisible() {
+    const ids = invoices.map(i => i.id);
+    const allSel = ids.length > 0 && ids.every(id => selectedIds.has(id));
+    const s = new Set(selectedIds);
+    if (allSel) ids.forEach(id => s.delete(id)); else ids.forEach(id => s.add(id));
+    selectedIds = s;
+  }
+  $: allVisibleSelected = invoices.length > 0 && invoices.every(i => selectedIds.has(i.id));
+  $: selectedInvoices = invoices.filter(i => selectedIds.has(i.id));
+
+  /** Ejecuta una acción sobre cada factura seleccionada, secuencial, con progreso.
+   *  @param {string} label @param {(inv:any)=>Promise<any>} fn */
+  async function bulkRun(label, fn) {
+    const items = [...selectedInvoices];
+    if (!items.length) return;
+    bulkBusy = true; error = '';
+    let ok = 0, fail = 0;
+    for (let i = 0; i < items.length; i++) {
+      bulkMsg = `${label}… ${i + 1}/${items.length}`;
+      try { await fn(items[i]); ok++; } catch (/** @type {any} */ e) { fail++; }
+    }
+    bulkBusy = false; bulkMsg = '';
+    error = `${label}: ${ok} ok${fail ? ` · ${fail} con error` : ''}`;
+    clearSelection();
+    reloadAll();
+  }
+  function bulkReminder() {
+    if (!confirm(`¿Enviar recordatorio a ${selectedInvoices.length} factura(s)?`)) return;
+    bulkRun('Recordatorios', (inv) => invoicesApi.sendReminder(inv.id));
+  }
+  function bulkLinks() {
+    const payables = selectedInvoices.filter(isPayable);
+    if (!payables.length) { error = 'Ninguna de las seleccionadas es pagable (para generar link).'; return; }
+    if (!confirm(`¿Generar link de pago para ${payables.length} factura(s)?`)) return;
+    selectedIds = new Set(payables.map(i => i.id));
+    bulkRun('Links de pago', (inv) => invoicesApi.paymentLink(inv.id));
+  }
+  function bulkDelete() {
+    if (!confirm(`¿ELIMINAR ${selectedInvoices.length} factura(s)? Esta acción no se puede deshacer.`)) return;
+    bulkRun('Eliminar', (inv) => invoicesApi.remove(inv.id));
+  }
+
+  // ── Registrar pago desde la fila ───────────────────────────────────
+  let payModalOpen = false;
+  /** @type {any} */
+  let payClient = null;
+  /** @type {any[]} */
+  let payInvoices = [];
+  /** @type {string | null} */
+  let payPreselect = null;
+  /** @param {any} inv */
+  function openPayRow(inv) {
+    payClient = inv.client || null;
+    payInvoices = [inv];        // el modal permite pagar esta factura (y generar otro mes si hace falta)
+    payPreselect = inv.id;
+    payModalOpen = true;
+  }
+  function onPayDone() { payModalOpen = false; reloadAll(); }
 
   // ── Editar / Eliminar factura ──────────────────────────────
   let editOpen = false;
@@ -563,11 +705,26 @@
   </div>
 {/if}
 
+<!-- Barra de acciones masivas -->
+{#if selectedIds.size > 0}
+  <div class="flex items-center gap-2 flex-wrap mb-3 px-3 py-2 rounded-xl bg-brand-50 border border-brand-200">
+    <span class="text-sm font-semibold text-brand-800 inline-flex items-center gap-1.5"><CheckSquare size={15} /> {selectedIds.size} seleccionada{selectedIds.size === 1 ? '' : 's'}</span>
+    <button class="btn-secondary btn-sm flex items-center gap-1.5" on:click={bulkReminder} disabled={bulkBusy}><Send size={14} /> Recordatorio</button>
+    <button class="btn-secondary btn-sm flex items-center gap-1.5" on:click={bulkLinks} disabled={bulkBusy}><Link2 size={14} /> Generar links</button>
+    <button class="btn-secondary btn-sm flex items-center gap-1.5 !border-red-200 !text-red-600 hover:!bg-red-50" on:click={bulkDelete} disabled={bulkBusy}><Trash2 size={14} /> Eliminar</button>
+    <button class="btn-ghost btn-sm" on:click={clearSelection} disabled={bulkBusy}>Deseleccionar</button>
+    {#if bulkBusy}<span class="text-xs text-brand-700 inline-flex items-center gap-1"><Loader2 size={12} class="animate-spin" /> {bulkMsg}</span>{/if}
+  </div>
+{/if}
+
 <div class="card overflow-hidden">
   <div class="overflow-x-auto">
     <table class="data-table">
       <thead>
         <tr>
+          <th class="w-8 text-center">
+            <input type="checkbox" class="align-middle" checked={allVisibleSelected} on:change={toggleAllVisible} title="Seleccionar visibles" />
+          </th>
           <th class="text-right w-12 text-slate-400" title="Posición en la lista filtrada">#</th>
           <th>
             <button class="th-sort" class:th-active={sortBy==='invoiceNumber'} on:click={() => applySort('invoiceNumber')}>
@@ -606,14 +763,14 @@
       </thead>
       <tbody>
         {#if loading}
-          <tr><td colspan="10" class="py-16 text-center">
+          <tr><td colspan="11" class="py-16 text-center">
             <div class="flex items-center justify-center gap-2">
               <div class="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>
               <span class="text-slate-500 text-sm">Cargando facturas...</span>
             </div>
           </td></tr>
         {:else if invoices.length === 0}
-          <tr><td colspan="10" class="py-20 text-center">
+          <tr><td colspan="11" class="py-20 text-center">
             <div class="flex flex-col items-center gap-4">
               <div class="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center">
                 <FileText size={28} class="text-slate-400" />
@@ -627,7 +784,10 @@
           </td></tr>
         {:else}
           {#each invoices as inv, i}
-            <tr>
+            <tr class={selectedIds.has(inv.id) ? 'bg-brand-50/50' : ''}>
+              <td class="text-center">
+                <input type="checkbox" class="align-middle" checked={selectedIds.has(inv.id)} on:change={() => toggleRow(inv.id)} />
+              </td>
               <td class="text-right text-xs text-slate-400 tabular-nums">{(page - 1) * pageSize + i + 1}</td>
               <td class="font-mono text-xs text-slate-700">{inv.invoiceNumber ?? '—'}</td>
               <td>
@@ -642,7 +802,12 @@
               <td class="text-slate-600">{fmtDate(inv.dueDate)}</td>
               <td class="text-right font-mono text-xs text-slate-600">{fmtMoney(inv.amount)}</td>
               <td class="text-right font-mono text-xs font-semibold">{fmtMoney(inv.total)}</td>
-              <td><span class="{STATUS_CLS[inv.status] || 'badge-gray'}">{STATUS_PT[inv.status] || inv.status}</span></td>
+              <td>
+                <span class="{STATUS_CLS[inv.status] || 'badge-gray'}">{STATUS_PT[inv.status] || inv.status}</span>
+                {#if daysOverdue(inv) > 0}
+                  <span class="ml-1 text-[10px] font-semibold {daysOverdue(inv) > 30 ? 'text-red-700' : 'text-amber-600'}" title="Días en mora">· {daysOverdue(inv)}d</span>
+                {/if}
+              </td>
               <td>
                 <div class="flex flex-col gap-1">
                   <span class="text-slate-600 text-xs">{fmtDate(inv.paidDate)}</span>
@@ -659,6 +824,11 @@
                   <a href="/invoices/{inv.id}" class="btn-icon" title="Ver">
                     <Eye size={14} />
                   </a>
+                  {#if isPayable(inv)}
+                    <button class="btn-icon hover:!text-emerald-600" title="Registrar pago" on:click={() => openPayRow(inv)}>
+                      <CreditCard size={14} />
+                    </button>
+                  {/if}
                   {#if inv.status !== 'PAID'}
                     <button class="btn-icon" title="Editar" on:click={() => openEdit(inv)}>
                       <Pencil size={14} />
@@ -675,6 +845,17 @@
       </tbody>
     </table>
   </div>
+
+  {#if filteredTotals}
+    <div class="px-5 py-2 border-t border-slate-100 bg-white flex items-center gap-x-5 gap-y-1 flex-wrap text-xs">
+      <span class="text-slate-400 font-medium uppercase tracking-wide text-[10px]">Totales del filtro</span>
+      <span class="text-slate-500">Facturado <strong class="text-slate-800 tabular-nums">{fmtMoney(filteredTotals.billedAmount)}</strong></span>
+      <span class="text-slate-500">Por cobrar <strong class="text-brand-800 tabular-nums">{fmtMoney(filteredTotals.outstandingAmount)}</strong></span>
+      {#if filteredTotals.overdueAmount > 0}
+        <span class="text-slate-500">Vencida <strong class="text-red-600 tabular-nums">{fmtMoney(filteredTotals.overdueAmount)}</strong></span>
+      {/if}
+    </div>
+  {/if}
 
   <div class="px-5 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/40 gap-3 flex-wrap">
     <div class="flex items-center gap-3 text-xs text-slate-500">
@@ -742,6 +923,12 @@
       </div>
     </div>
   </div>
+{/if}
+
+<!-- Registrar pago desde la fila -->
+{#if payModalOpen}
+  <RegisterPaymentModal client={payClient} invoices={payInvoices} preselectInvoiceId={payPreselect}
+    on:done={onPayDone} on:close={() => (payModalOpen = false)} />
 {/if}
 
 <style>

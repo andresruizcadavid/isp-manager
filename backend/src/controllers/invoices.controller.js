@@ -624,6 +624,8 @@ class InvoicesController {
       (sumsBalanceDue.PARTIAL || 0) +
       (sumsBalanceDue.OVERDUE || 0);
     const paidAmount = sumsTotal.PAID || 0;
+    // Facturado = suma de `total` de TODO el set (todos los estados) del filtro.
+    const billedAmount = Object.values(sumsTotal).reduce((a, b) => a + b, 0);
 
     res.json({
       success: true,
@@ -635,6 +637,7 @@ class InvoicesController {
         outstandingAmount,
         overdueAmount: overdueAgg._sum.balanceDue || 0,
         paidAmount,
+        billedAmount,
         collectionRate: (paidAmount + outstandingAmount) > 0
           ? Math.round((paidAmount / (paidAmount + outstandingAmount)) * 100)
           : 0
