@@ -346,6 +346,15 @@
   $: kpiPendingAmt = stats?.outstandingAmount ?? 0;
   $: hasFilters    = !!(q.trim() || status || paymentMethod || dateFrom || dateTo);
 
+  // Pagos por medio (para el gráfico). Efectivo se resalta.
+  $: payMethods = /** @type {any[]} */ (stats?.paymentsByMethod ?? []);
+  $: payTotal   = payMethods.reduce((/** @type {number} */ s, /** @type {any} */ m) => s + (m.amount || 0), 0);
+  $: payMax     = payMethods.reduce((/** @type {number} */ mx, /** @type {any} */ x) => Math.max(mx, x.amount || 0), 0);
+  $: cashRow    = payMethods.find((/** @type {any} */ m) => m.method === 'CASH');
+  $: cashAmount = cashRow?.amount ?? 0;
+  $: cashCount  = cashRow?.count ?? 0;
+  $: cashPct    = payTotal > 0 ? Math.round((cashAmount / payTotal) * 100) : 0;
+
   // Estado avanzado (para el select "Otros"): vacío si el estado activo es uno
   // de las pestañas rápidas o "Todas".
   $: otherStatusValue = OTHER_STATUSES.includes(status) ? status : '';
@@ -568,6 +577,37 @@
     </div>
   </div>
 </div>
+
+<!-- Gráfico: pagos recibidos por medio (efectivo resaltado) -->
+{#if payMethods.length}
+  <div class="card p-4 mb-6">
+    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+      <h3 class="text-sm font-semibold text-slate-800 inline-flex items-center gap-1.5">
+        <Wallet size={14} class="text-slate-400" /> Pagos recibidos por medio
+      </h3>
+      <div class="text-xs inline-flex items-center gap-2 flex-wrap">
+        <span class="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
+          <span class="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span> Efectivo {fmtMoney(cashAmount)}
+        </span>
+        <span class="text-slate-400 tabular-nums">· {cashPct}% · {cashCount} pago{cashCount === 1 ? '' : 's'}</span>
+        <span class="text-[10px] uppercase tracking-wide text-slate-300 ml-1">todo el sistema</span>
+      </div>
+    </div>
+    <div class="space-y-2">
+      {#each payMethods as m}
+        {@const isCash = m.method === 'CASH'}
+        <div class="flex items-center gap-3" title="{METHOD_PT[m.method] || m.method}: {fmtMoney(m.amount)} ({m.count} pago{m.count === 1 ? '' : 's'})">
+          <span class="w-24 shrink-0 text-xs font-medium {isCash ? 'text-emerald-700' : 'text-slate-600'}">{METHOD_PT[m.method] || m.method}</span>
+          <div class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+            <div class="h-full rounded-full transition-all {isCash ? 'bg-emerald-500' : 'bg-slate-300'}" style="width: {payMax ? Math.max(3, Math.round((m.amount / payMax) * 100)) : 0}%"></div>
+          </div>
+          <span class="w-28 text-right text-xs tabular-nums {isCash ? 'font-semibold text-emerald-700' : 'text-slate-700'}">{fmtMoney(m.amount)}</span>
+          <span class="w-10 text-right text-[11px] text-slate-400 tabular-nums">{m.count}</span>
+        </div>
+      {/each}
+    </div>
+  </div>
+{/if}
 
 {#if error}
   <div class="card p-4 mb-4 flex items-start gap-3 border-red-200 bg-red-50">

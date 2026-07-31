@@ -599,7 +599,7 @@ class InvoicesController {
     const overdueDueDate = (where.dueDate && typeof where.dueDate === 'object')
       ? { ...where.dueDate, lt: now }
       : { lt: now };
-    const [total, byStatus, overdueAgg] = await Promise.all([
+    const [total, byStatus, overdueAgg, payByMethod] = await Promise.all([
       prisma.invoice.count({ where }),
       prisma.invoice.groupBy({
         by: ['status'],
@@ -610,6 +610,14 @@ class InvoicesController {
       prisma.invoice.aggregate({
         where: { ...where, status: { in: ['PENDING', 'PARTIAL', 'OVERDUE'] }, dueDate: overdueDueDate },
         _sum:  { balanceDue: true }
+      }),
+      // Pagos COMPLETADOS agrupados por medio (global) — para el gráfico
+      // "pagos por medio" (efectivo, consignación, nequi, bancolombia, wompi).
+      prisma.payment.groupBy({
+        by: ['method'],
+        where: { status: 'COMPLETED' },
+        _sum: { amount: true },
+        _count: true
       })
     ]);
 
@@ -638,6 +646,9 @@ class InvoicesController {
         overdueAmount: overdueAgg._sum.balanceDue || 0,
         paidAmount,
         billedAmount,
+        paymentsByMethod: payByMethod
+          .map(p => ({ method: p.method, amount: p._sum.amount || 0, count: p._count }))
+          .sort((a, b) => b.amount - a.amount),
         collectionRate: (paidAmount + outstandingAmount) > 0
           ? Math.round((paidAmount / (paidAmount + outstandingAmount)) * 100)
           : 0
