@@ -36,6 +36,7 @@
   let dateTo = '';                  // 'YYYY-MM-DD'
   let page = 1;
   let pageSize = 25;                 // registros por página (10/25/50/100)
+  let showPayChart = false;          // gráfico "pagos por medio" colapsado por defecto
   // Ordenamiento (el backend valida contra una whitelist).
   let sortBy = 'createdAt';         // createdAt | invoiceNumber | issueDate | dueDate | amount | total | status
   let sortOrder = 'desc';           // 'asc' | 'desc'
@@ -578,34 +579,40 @@
   </div>
 </div>
 
-<!-- Gráfico: pagos recibidos por medio (efectivo resaltado) -->
+<!-- Gráfico: pagos recibidos por medio — colapsable (Ver más) para no amontonar -->
 {#if payMethods.length}
-  <div class="card p-4 mb-6">
-    <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
-      <h3 class="text-sm font-semibold text-slate-800 inline-flex items-center gap-1.5">
-        <Wallet size={14} class="text-slate-400" /> Pagos recibidos por medio
-      </h3>
-      <div class="text-xs inline-flex items-center gap-2 flex-wrap">
+  <div class="card mb-6 px-4 py-2.5">
+    <button type="button" class="w-full flex items-center justify-between gap-3 flex-wrap text-left" on:click={() => (showPayChart = !showPayChart)}>
+      <span class="text-sm font-semibold text-slate-800 inline-flex items-center gap-1.5">
+        <Wallet size={14} class="text-slate-400" /> Pagos por medio
+      </span>
+      <span class="inline-flex items-center gap-2 text-xs flex-wrap">
         <span class="inline-flex items-center gap-1.5 text-emerald-700 font-semibold">
-          <span class="w-2.5 h-2.5 rounded-sm bg-emerald-500"></span> Efectivo {fmtMoney(cashAmount)}
+          <span class="w-2 h-2 rounded-sm bg-emerald-500"></span> Efectivo {fmtMoney(cashAmount)}
         </span>
-        <span class="text-slate-400 tabular-nums">· {cashPct}% · {cashCount} pago{cashCount === 1 ? '' : 's'}</span>
-        <span class="text-[10px] uppercase tracking-wide text-slate-300 ml-1">todo el sistema</span>
-      </div>
-    </div>
-    <div class="space-y-2">
-      {#each payMethods as m}
-        {@const isCash = m.method === 'CASH'}
-        <div class="flex items-center gap-3" title="{METHOD_PT[m.method] || m.method}: {fmtMoney(m.amount)} ({m.count} pago{m.count === 1 ? '' : 's'})">
-          <span class="w-24 shrink-0 text-xs font-medium {isCash ? 'text-emerald-700' : 'text-slate-600'}">{METHOD_PT[m.method] || m.method}</span>
-          <div class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
-            <div class="h-full rounded-full transition-all {isCash ? 'bg-emerald-500' : 'bg-slate-300'}" style="width: {payMax ? Math.max(3, Math.round((m.amount / payMax) * 100)) : 0}%"></div>
+        <span class="text-slate-400 tabular-nums">· {cashPct}%</span>
+        <span class="text-brand-700 font-medium inline-flex items-center gap-1 ml-1">
+          {showPayChart ? 'Ver menos' : 'Ver más'}
+          <ChevronDown size={14} class="transition-transform {showPayChart ? 'rotate-180' : ''}" />
+        </span>
+      </span>
+    </button>
+    {#if showPayChart}
+      <div class="mt-3 pt-3 border-t border-slate-100 space-y-2">
+        <div class="text-[10px] uppercase tracking-wide text-slate-300 text-right">Todo el sistema · {cashCount} pago{cashCount === 1 ? '' : 's'} en efectivo</div>
+        {#each payMethods as m}
+          {@const isCash = m.method === 'CASH'}
+          <div class="flex items-center gap-3" title="{METHOD_PT[m.method] || m.method}: {fmtMoney(m.amount)} ({m.count} pago{m.count === 1 ? '' : 's'})">
+            <span class="w-24 shrink-0 text-xs font-medium {isCash ? 'text-emerald-700' : 'text-slate-600'}">{METHOD_PT[m.method] || m.method}</span>
+            <div class="flex-1 h-2.5 bg-slate-100 rounded-full overflow-hidden">
+              <div class="h-full rounded-full transition-all {isCash ? 'bg-emerald-500' : 'bg-slate-300'}" style="width: {payMax ? Math.max(3, Math.round((m.amount / payMax) * 100)) : 0}%"></div>
+            </div>
+            <span class="w-28 text-right text-xs tabular-nums {isCash ? 'font-semibold text-emerald-700' : 'text-slate-700'}">{fmtMoney(m.amount)}</span>
+            <span class="w-10 text-right text-[11px] text-slate-400 tabular-nums">{m.count}</span>
           </div>
-          <span class="w-28 text-right text-xs tabular-nums {isCash ? 'font-semibold text-emerald-700' : 'text-slate-700'}">{fmtMoney(m.amount)}</span>
-          <span class="w-10 text-right text-[11px] text-slate-400 tabular-nums">{m.count}</span>
-        </div>
-      {/each}
-    </div>
+        {/each}
+      </div>
+    {/if}
   </div>
 {/if}
 
