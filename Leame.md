@@ -636,3 +636,12 @@ pm2 restart all
 nginx -t && systemctl reload nginx
 tail -n 100 /var/log/nginx/error.log
 ```
+
+---
+
+## Licencia
+
+**[PolyForm Noncommercial License 1.0.0](LICENSE)** — uso **no comercial** únicamente.
+Ver [README.md](README.md#licencia) para el detalle de qué está y qué no está permitido.
+
+Required Notice: Copyright 2026 Andrés Ruiz Cadavid (https://github.com/andresruizcadavid)

@@ -716,3 +716,21 @@ cd ../frontend && npm install --include=dev && npm run build   # genera build/ q
 pm2 restart isp-api
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:3001/api/health   # -> 200
 ```
+
+---
+
+## Licencia
+
+**[PolyForm Noncommercial License 1.0.0](LICENSE)** — uso **no comercial** únicamente.
+
+Podés usar, modificar, y redistribuir este software libremente para fines
+personales, educativos, de investigación, o dentro de organizaciones sin ánimo
+de lucro, instituciones educativas y entidades gubernamentales.
+
+**No está permitido** usarlo para fines comerciales — incluyendo operar un ISP
+con ánimo de lucro, ofrecerlo como servicio, o incorporarlo en un producto
+comercial — sin una licencia comercial por separado.
+
+Para licenciamiento comercial, contactá al autor.
+
+Required Notice: Copyright 2026 Andrés Ruiz Cadavid (https://github.com/andresruizcadavid)
