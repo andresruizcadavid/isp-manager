@@ -52,3 +52,6 @@ backend/prisma/generated/
 .cache/
 tmp/
 temp/
+
+# Seed con datos reales de clientes (PII) - usar seed-clients.example.js como plantilla
+backend/prisma/seed-clients.js
