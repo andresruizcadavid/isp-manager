@@ -151,6 +151,13 @@ model Client {
   // Control de cobranza (planilla): último recordatorio de cobro enviado.
   reminderSentAt   DateTime?    // fecha/hora del último mensaje de cobro enviado
   reminderChannel  String?      // medio: WHATSAPP | EMAIL | SMS | LLAMADA | MANUAL
+  // Trazabilidad del portal cautivo: cuántas veces el cliente cargó cada página
+  // (suspensión / aviso) y cuándo por última vez. Se incrementa en los endpoints
+  // públicos /suspendido/[token] y /aviso/[token].
+  suspendedViews    Int       @default(0)
+  suspendedViewedAt DateTime?
+  avisoViews        Int       @default(0)
+  avisoViewedAt     DateTime?
   // Tecnología de conexión del cliente. FIBER = fibra óptica (default, todos
   // los existentes), WIRELESS = inalámbrico (clientes de antenas).
   connectionType   String       @default("FIBER")
@@ -514,6 +521,18 @@ model Router {
   sshPort  Int?    @default(22)
   sshUser  String?
   sshPass  String?
+
+  // Nombres de las address-list de cobranza EN ESTE router (varían por WISP de
+  // origen: fibra usa Moroso/Aviso, antenas Mikrowisp usa Morosos/Suspendido…).
+  // El código de suspensión/aviso lee estos nombres según el router del cliente.
+  listMoroso  String @default("Moroso")   // corte (suspendido → página cautiva)
+  listAviso   String @default("Aviso")    // recordatorio (interstitial)
+  listAvisoOk String @default("AvisoOK")  // navegación temporal tras reconocer el aviso
+  // Router donde se ENFORZA el corte de cobranza para los clientes de ESTE
+  // router, cuando difiere (p.ej. antenas: PPPoE en .6 pero el corte en el
+  // balanceador .5). null = el corte se aplica en este mismo router. Escalar
+  // (se resuelve a mano en el código; sin FK para evitar migración de constraint).
+  collectionRouterId Int?
 
   mikrotikAccounts  MikrotikAccount[]
   zones             Zone[]

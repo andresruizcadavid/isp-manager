@@ -39,11 +39,19 @@ export const clientsApi = {
   suspend:  (id)       => api.post(`/clients/${id}/suspend`),
   /** @param {string} id */
   activate: (id)       => api.post(`/clients/${id}/activate`),
+  /** Poner en aviso (recordatorio de pago) — no corta servicio. @param {string} id @param {{recurrence?:string}} [body] */
+  aviso:      (id, body = {}) => api.post(`/clients/${id}/aviso`, body),
+  /** Quitar del aviso. @param {string} id */
+  avisoClear: (id)     => api.post(`/clients/${id}/aviso/clear`),
+  /** #4: reconciliar estado (SUSPENDED/ACTIVE) con la lista de corte del router. */
+  syncCollectionStatus: () => api.post('/clients/sync-collection-status', {}),
   nextPppoeNumber: ()  => api.get('/clients/next-pppoe-number'),
   /** Spreadsheet view: all clients with per-month invoice status for a year. @param {number} [year] */
   getSheet: (year)     => api.get(`/clients/sheet${year ? '?year=' + year : ''}`),
   /** Act on one month cell of the planilla. @param {string} id @param {{year:number,month:number,action:'pay'|'bill'|'unbill'|'unpay',method?:string,amount?:number}} body */
   sheetCell: (id, body) => api.post(`/clients/${id}/sheet-cell`, body),
+  /** Conciliar cambio de precio: actualiza monthlyFee, crea/asigna plan y re-liquida facturas abiertas. @param {string} id @param {{newFeeCents:number, planAction?:'none'|'attach'|'create', planId?:string, newPlanName?:string, invoiceIds?:string[]}} body */
+  reprice: (id, body) => api.post(`/clients/${id}/reprice`, body),
   /** Registrar/limpiar el envío del mensaje de cobro. @param {string} id @param {{channel:string|null, sentAt?:string}} body */
   setReminder: (id, body) => api.post(`/clients/${id}/collection-reminder`, body),
   /** Generar enlace de actualización de datos (envía por los canales elegidos). @param {string} id @param {{sendChannels:string[], notifyChannels?:string[]}} body */

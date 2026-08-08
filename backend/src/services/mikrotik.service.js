@@ -329,10 +329,35 @@ export class MikrotikService {
   }
 
   /**
+   * Asegura una regla /ip/proxy/access que redirige el HTTP del cliente (por su
+   * IP) a la página cautiva. Idempotente por src-address. Se usa al suspender/
+   * avisar para que el cliente vea NUESTRA página y no el fallback legacy.
+   * @param {{srcAddress:string, actionData:string, comment?:string}} p
+   */
+  async ensureProxyRedirect({ srcAddress, actionData, comment }) {
+    if (!srcAddress || !actionData) return { skipped: true };
+    const list = await this.request('/ip/proxy/access', 'GET', null, { retries: 1 });
+    const existing = Array.isArray(list) ? list.find(x => x['src-address'] === srcAddress) : null;
+    if (existing) {
+      await this.request(
+        `/ip/proxy/access/${encodeURIComponent(existing['.id'])}`,
+        'PATCH',
+        { 'action-data': actionData, action: 'redirect', disabled: 'false' }
+      );
+      return { updated: true, id: existing['.id'] };
+    }
+    const created = await this.request('/ip/proxy/access', 'PUT', {
+      'src-address': srcAddress, action: 'redirect', 'action-data': actionData,
+      ...(comment ? { comment } : {})
+    });
+    return { created: true, id: created?.['.id'] || null };
+  }
+
+  /**
    * Asegura que `address` esté presente y habilitado en la lista `list`.
    * Si ya existe, actualiza disabled=false y comment. Idempotente.
    */
-  async addToAddressList({ list, address, comment }) {
+  async addToAddressList({ list, address, comment, timeout }) {
     if (!list || !address) {
       throw new Error('addToAddressList: list y address son requeridos');
     }
@@ -341,12 +366,13 @@ export class MikrotikService {
       await this.request(
         `/ip/firewall/address-list/${encodeURIComponent(existing['.id'])}`,
         'PATCH',
-        { disabled: 'false', ...(comment ? { comment } : {}) }
+        { disabled: 'false', ...(comment ? { comment } : {}), ...(timeout ? { timeout } : {}) }
       );
       return { updated: true, id: existing['.id'] };
     }
     const body = { list, address, disabled: 'false' };
     if (comment) body.comment = comment;
+    if (timeout) body.timeout = timeout;
     const created = await this.request('/ip/firewall/address-list', 'PUT', body);
     return { created: true, id: created?.['.id'] || null };
   }
@@ -439,7 +465,33 @@ export async function getMikrotikServiceForClient(clientId) {
   if (!account.router.isActive) {
     throw new Error(`Router '${account.router.name}' está desactivado`);
   }
-  return { service: buildMikrotikService(account.router), account };
+  // Router de cobranza: donde se enforza el corte (Moroso/Aviso). Por defecto el
+  // mismo router del cliente; si el router define collectionRouterId, se usa ese
+  // (p.ej. antenas: PPPoE en .6, corte en el balanceador .5). El PPPoE sigue en
+  // `service` (router del cliente); las address-list de cobranza van a `collectionService`.
+  const router = account.router;
+  let collectionRouter = router;
+  let collectionService = buildMikrotikService(router);
+  if (router.collectionRouterId) {
+    const cr = await prisma.router.findUnique({
+      where: { id: router.collectionRouterId },
+      include: { routes: { orderBy: { priority: 'asc' } } }
+    });
+    if (cr && cr.isActive) { collectionRouter = cr; collectionService = buildMikrotikService(cr); }
+  }
+  return { service: buildMikrotikService(router), account, router, collectionService, collectionRouter };
+}
+
+/**
+ * Nombres de las address-list de cobranza para el router de un cliente, con
+ * fallback a los defaults si el router no las define. @param {any} router
+ */
+export function collectionLists(router) {
+  return {
+    moroso:  router?.listMoroso  || 'Moroso',
+    aviso:   router?.listAviso   || 'Aviso',
+    avisoOk: router?.listAvisoOk || 'AvisoOK'
+  };
 }
 
 /**

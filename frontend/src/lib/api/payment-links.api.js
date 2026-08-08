@@ -47,5 +47,8 @@ export const paymentLinksApi = {
   /** @param {string} id */
   getAttempt: (id) => api.get(`/payment-links/attempts/${id}`),
 
-  getConciliation: () => api.get('/payment-links/conciliation')
+  getConciliation: () => api.get('/payment-links/conciliation'),
+
+  /** Conciliar un intento COMPLETED: crea el Payment faltante y re-liquida la factura. @param {string} attemptId */
+  reconcile: (attemptId) => api.post('/payment-links/conciliation/reconcile', { attemptId })
 };

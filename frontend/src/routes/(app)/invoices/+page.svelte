@@ -765,7 +765,47 @@
 {/if}
 
 <div class="card overflow-hidden">
-  <div class="overflow-x-auto">
+  <!-- ── Vista móvil: tarjetas (sin scroll horizontal) ── -->
+  <div class="sm:hidden divide-y divide-slate-100">
+    {#if loading}
+      <div class="py-16 text-center text-sm text-slate-500 flex items-center justify-center gap-2">
+        <div class="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div> Cargando…
+      </div>
+    {:else if invoices.length === 0}
+      <div class="py-16 text-center text-sm text-slate-500">{hasFilters ? 'Ninguna factura coincide con los filtros' : 'Aún no hay facturas'}</div>
+    {:else}
+      {#each invoices as inv}
+        <div class="p-3 {selectedIds.has(inv.id) ? 'bg-brand-50/50' : ''}">
+          <div class="flex items-start gap-2.5">
+            <input type="checkbox" class="mt-1 shrink-0" checked={selectedIds.has(inv.id)} on:change={() => toggleRow(inv.id)} />
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center justify-between gap-2">
+                <a href="/clients/{inv.client?.id}?from=/invoices" class="font-semibold text-slate-900 truncate">{inv.client?.name ?? '—'}</a>
+                <span class="shrink-0 font-mono text-sm font-semibold">{fmtMoney(inv.total)}</span>
+              </div>
+              <div class="mt-1 flex items-center gap-2 flex-wrap text-xs">
+                <span class="font-mono text-slate-400">{inv.invoiceNumber ?? '—'}</span>
+                <span class="{STATUS_CLS[inv.status] || 'badge-gray'}">{STATUS_PT[inv.status] || inv.status}</span>
+                {#if daysOverdue(inv) > 0}<span class="font-semibold {daysOverdue(inv) > 30 ? 'text-red-700' : 'text-amber-600'}">· {daysOverdue(inv)}d mora</span>{/if}
+              </div>
+              <div class="mt-1 text-xs text-slate-500">
+                Vence {fmtDate(inv.dueDate)}{inv.paidDate ? ` · Pagada ${fmtDate(inv.paidDate)}` : ''}{invMethods(inv).length ? ` · ${METHOD_PT[invMethods(inv)[0]] || invMethods(inv)[0]}` : ''}
+              </div>
+              <div class="mt-2 flex items-center gap-1">
+                <a href="/invoices/{inv.id}" class="btn-icon" title="Ver"><Eye size={16} /></a>
+                {#if isPayable(inv)}<button class="btn-icon hover:!text-emerald-600" title="Registrar pago" on:click={() => openPayRow(inv)}><CreditCard size={16} /></button>{/if}
+                {#if inv.status !== 'PAID'}<button class="btn-icon" title="Editar" on:click={() => openEdit(inv)}><Pencil size={16} /></button>{/if}
+                <button class="btn-icon hover:!text-red-600" title="Eliminar" on:click={() => deleteInvoice(inv)}><Trash2 size={16} /></button>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/each}
+    {/if}
+  </div>
+
+  <!-- ── Vista escritorio: tabla ── -->
+  <div class="overflow-x-auto hidden sm:block">
     <table class="data-table">
       <thead>
         <tr>

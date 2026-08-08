@@ -184,6 +184,23 @@
     ? conciliationItems
     : conciliationItems.filter(i => i.type === conciliationTypeFilter);
 
+  /** @type {string|null} */
+  let reconcilingId = null;
+  /** Conciliar un intento COMPLETED sin Payment: crea el pago y re-liquida. @param {any} item */
+  async function reconcile(item) {
+    if (!item?.attemptId || reconcilingId) return;
+    if (!confirm(`Conciliar el pago de ${item.client?.name || 'este cliente'} por ${fmtCOP(item.amountInCents)}?\n\nSe registrará el Payment WOMPI y se marcará la factura ${item.invoice?.invoiceNumber || ''}.`)) return;
+    reconcilingId = item.attemptId;
+    try {
+      const d = await paymentLinksApi.reconcile(item.attemptId);
+      if (d?.alreadyReconciled) alert('Ese intento ya estaba conciliado.');
+      else alert(`Conciliado ✓ — factura ${d?.invoiceStatus === 'PAID' ? 'PAGADA' : 'parcial'}${d?.collection?.reactivated ? ' · servicio reactivado' : ''}.`);
+      await loadConciliation();
+    } catch (/** @type {any} */ e) {
+      alert('No se pudo conciliar: ' + (e?.message || 'error'));
+    } finally { reconcilingId = null; }
+  }
+
   // ── Init ────────────────────────────────────────────────
   onMount(() => { loadLinks(); });
 </script>
@@ -494,6 +511,7 @@
               <th class="text-right">Monto</th>
               <th class="text-center">Estado Link</th>
               <th class="text-center">Estado Attempt</th>
+              <th class="text-right">Acción</th>
             </tr>
           </thead>
           <tbody>
@@ -532,6 +550,17 @@
                       <svelte:component this={attemptIcon(item.attemptStatus)} size={12} />
                       {attemptLabel(item.attemptStatus)}
                     </span>
+                  {:else}
+                    <span class="text-xs text-text-muted">—</span>
+                  {/if}
+                </td>
+                <td class="text-right">
+                  {#if item.reconcilable && item.attemptId}
+                    <button type="button" class="btn-primary btn-sm inline-flex items-center gap-1.5"
+                            disabled={reconcilingId === item.attemptId} on:click={() => reconcile(item)}>
+                      {#if reconcilingId === item.attemptId}<Loader2 size={13} class="animate-spin" />{:else}<CheckCircle size={13} />{/if}
+                      Conciliar
+                    </button>
                   {:else}
                     <span class="text-xs text-text-muted">—</span>
                   {/if}

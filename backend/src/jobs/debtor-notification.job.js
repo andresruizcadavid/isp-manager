@@ -9,11 +9,17 @@ class DebtorNotificationJob {
   }
 
   setupSchedules() {
-    // Run daily at 10:00 — only active from day 25 to end of month
+    // ═══════════════════════════════════════════════════════════
+    // NOTIFICACIONES AUTOMÁTICAS DESHABILITADAS por solicitud del
+    // operador (2026-06-09). No se envían recordatorios a deudores
+    // hasta nuevo aviso.
+    // ═══════════════════════════════════════════════════════════
+    // Para re-activar: descomentar los cron.schedule de abajo
+    // ═══════════════════════════════════════════════════════════
+
+    // [NOTIF] Recordatorios a deudores — deshabilitados
+    /*
     cron.schedule('0 10 * * *', async () => {
-      // Kill-switch: recordatorios automáticos a deudores deshabilitados por
-      // defecto. Re-activar poniendo REMINDERS_ENABLED=true en el .env y
-      // reiniciando el proceso. Ver migración histórica de deuda (77 clientes).
       if (process.env.REMINDERS_ENABLED !== 'true') {
         console.log('⏸️ Debtor reminders disabled (REMINDERS_ENABLED!=true), skipping');
         return;
@@ -21,30 +27,26 @@ class DebtorNotificationJob {
       const today = new Date();
       const day = today.getDate();
       const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-
       if (day < 25) {
         console.log(`📅 Debtor notification: day ${day} < 25, skipping (active from day 25 to ${lastDay})`);
         return;
       }
-
       console.log(`🔄 Starting debtor notifications (day ${day}/${lastDay})...`);
       await this.sendDebtorNotifications();
     });
 
-    // Also run at 18:00 for extra reach during the window
     cron.schedule('0 18 * * *', async () => {
-      if (process.env.REMINDERS_ENABLED !== 'true') return; // kill-switch (ver run 10:00)
+      if (process.env.REMINDERS_ENABLED !== 'true') return;
       const today = new Date();
       const day = today.getDate();
       const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-
       if (day < 25) return;
-
       console.log(`🔄 Starting debtor notifications evening run (day ${day}/${lastDay})...`);
       await this.sendDebtorNotifications();
     });
+    */
 
-    console.log('📅 Debtor notification job scheduled (active day 25–EOM)');
+    console.log('📅 Debtor notification jobs — DESHABILITADOS');
   }
 
   async sendDebtorNotifications() {

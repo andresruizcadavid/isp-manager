@@ -2,7 +2,7 @@ import { prisma } from '../config/database.js';
 import { env } from '../config/env.js';
 import { AppError, asyncHandler } from '../middleware/error.middleware.js';
 import { notificationService } from '../services/notification.service.js';
-import { getMikrotikService, getMikrotikServiceForClient } from '../services/mikrotik.service.js';
+import { getMikrotikService, getMikrotikServiceForClient, collectionLists, buildMikrotikService } from '../services/mikrotik.service.js';
 import { generateToken as generateUpdateToken, dispatchLinkToClient } from '../services/client-update-token.service.js';
 import { bulkChangePlan } from '../services/bulk-plan-change.service.js';
 import { paymentLinkService } from '../services/payment-link.service.js';
@@ -181,6 +181,7 @@ class ClientsController {
           id: true, name: true, email: true, phone: true, address: true,
           neighborhood: true, city: true, documentNumber: true, status: true,
           monthlyFee: true, balance: true, reminderSentAt: true, reminderChannel: true,
+          suspendedViews: true, suspendedViewedAt: true, avisoViews: true, avisoViewedAt: true,
           plan: { select: { id: true, name: true, price: true } },
           mikrotikAccount: { select: { remoteAddress: true, localAddress: true } },
           invoices: {
@@ -231,6 +232,10 @@ class ClientsController {
         totalDebt:      debtMap.get(c.id) || 0,
         reminderSentAt:  c.reminderSentAt,
         reminderChannel: c.reminderChannel,
+        suspendedViews:    c.suspendedViews,
+        suspendedViewedAt: c.suspendedViewedAt,
+        avisoViews:        c.avisoViews,
+        avisoViewedAt:     c.avisoViewedAt,
         months
       };
     });
@@ -353,7 +358,122 @@ class ClientsController {
       ? { invoiceId: finalInv.id, invoiceNumber: finalInv.invoiceNumber, status: finalInv.status, amount: finalInv.total ?? finalInv.amount, balanceDue: finalInv.balanceDue }
       : null;
 
-    res.json({ success: true, data: { month: m, cell, totalDebt: debtAgg._sum.balanceDue || 0, paymentId: createdPaymentId } });
+    // #5: al registrar un pago, levantar cobranza (quita aviso; reactiva si ya
+    // no debe). Best-effort — nunca rompe el registro del pago.
+    let collection = null;
+    if (action === 'pay') {
+      try {
+        const { liftCollectionOnPayment } = await import('../services/aviso-portal.service.js');
+        collection = await liftCollectionOnPayment(id);
+      } catch (e) { console.error('[sheetCell] liftCollection failed:', e.message); }
+    }
+
+    res.json({ success: true, data: { month: m, cell, totalDebt: debtAgg._sum.balanceDue || 0, paymentId: createdPaymentId, collection } });
+  });
+
+  // POST /clients/:id/reprice — conciliación ordenada de un cambio de precio.
+  // body: { newFeeCents, planAction:'none'|'attach'|'create', planId?, newPlanName?, invoiceIds:[] }
+  //   1) actualiza Client.monthlyFee (fuente de cobro por cliente),
+  //   2) opcional: crea un Plan a ese valor (speeds 0, editables luego) o asigna uno existente,
+  //   3) re-liquida SOLO las facturas ABIERTAS seleccionadas (jamás PAGADAS/CANCELADAS):
+  //      recalcula amount/total/balanceDue e ítem, respetando pagos parciales.
+  // Todo en una transacción interactiva → o se aplica completo, o nada.
+  reprice = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const newFee = Math.round(Number(req.body.newFeeCents));
+    if (!Number.isInteger(newFee) || newFee <= 0) throw new AppError('El nuevo precio debe ser mayor a 0', 400, 'BAD_FEE');
+    const planAction = ['attach', 'create'].includes(req.body.planAction) ? req.body.planAction : 'none';
+    const invoiceIds = Array.isArray(req.body.invoiceIds) ? req.body.invoiceIds.filter(x => typeof x === 'string') : [];
+
+    const client = await prisma.client.findUnique({ where: { id }, include: { plan: true } });
+    if (!client) throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
+
+    // Validaciones de plan ANTES de abrir la transacción.
+    let attachPlan = null;
+    if (planAction === 'attach') {
+      if (!req.body.planId) throw new AppError('Falta el plan a asignar', 400, 'NO_PLAN_ID');
+      attachPlan = await prisma.plan.findUnique({ where: { id: req.body.planId } });
+      if (!attachPlan) throw new AppError('Plan no encontrado', 404, 'PLAN_NOT_FOUND');
+    }
+
+    const now = new Date();
+    const reconciled = [];
+    const skipped = [];
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1) Plan (crear o asignar) → obtenemos el planId final.
+      let finalPlanId = client.planId;
+      let planInfo = client.plan ? { id: client.plan.id, name: client.plan.name, created: false } : null;
+
+      if (planAction === 'create') {
+        const cop = Math.round(newFee / 100);
+        const created = await tx.plan.create({
+          data: {
+            name: (req.body.newPlanName && String(req.body.newPlanName).trim()) || `Plan $${cop.toLocaleString('es-CO')}`,
+            price: newFee,
+            monthlyPrice: newFee,
+            downloadSpeed: 0,
+            uploadSpeed: 0,
+            connectionType: client.connectionType || 'FIBER',
+            isActive: true
+          }
+        });
+        finalPlanId = created.id;
+        planInfo = { id: created.id, name: created.name, created: true };
+      } else if (planAction === 'attach' && attachPlan) {
+        finalPlanId = attachPlan.id;
+        planInfo = { id: attachPlan.id, name: attachPlan.name, created: false };
+      }
+
+      // 2) Precio del cliente (fuente de cobro) + plan.
+      await tx.client.update({
+        where: { id },
+        data: { monthlyFee: newFee, ...(finalPlanId !== client.planId ? { planId: finalPlanId } : {}) }
+      });
+
+      // 3) Re-liquidar facturas abiertas seleccionadas (nunca PAGADAS).
+      for (const invId of invoiceIds) {
+        const inv = await tx.invoice.findUnique({ where: { id: invId }, include: { payments: true, items: true } });
+        if (!inv || inv.clientId !== id) { skipped.push({ invoiceId: invId, reason: 'no_pertenece' }); continue; }
+        if (['PAID', 'CANCELLED', 'REFUNDED'].includes(inv.status)) { skipped.push({ invoiceId: invId, reason: `no_editable_${inv.status}` }); continue; }
+
+        const paid = inv.payments.reduce((s, p) => s + (p.status === 'COMPLETED' ? p.amount : 0), 0);
+        if (newFee < paid) { skipped.push({ invoiceId: invId, reason: 'nuevo_menor_a_pagado' }); continue; }
+
+        const newBalance = newFee - paid;
+        const newStatus = newBalance === 0 ? 'PAID' : (paid > 0 ? 'PARTIAL' : (inv.dueDate < now ? 'OVERDUE' : 'PENDING'));
+        await tx.invoice.update({
+          where: { id: inv.id },
+          data: {
+            amount: newFee, total: newFee, balanceDue: newBalance, status: newStatus,
+            ...(newStatus === 'PAID' ? { paidDate: inv.paidDate || now } : { paidDate: null })
+          }
+        });
+        if (inv.items[0]) await tx.invoiceItem.update({ where: { id: inv.items[0].id }, data: { price: newFee, total: newFee } });
+        else await tx.invoiceItem.create({ data: { invoiceId: inv.id, description: `Mensualidad ${inv.periodMonth ? MONTHS_ES[inv.periodMonth - 1] : ''} ${inv.periodYear || ''}`.trim(), quantity: 1, price: newFee, total: newFee } });
+
+        reconciled.push({ invoiceId: inv.id, month: inv.periodMonth, oldTotal: inv.total ?? inv.amount, newTotal: newFee, status: newStatus });
+      }
+
+      return { planInfo, finalPlanId };
+    });
+
+    const debtAgg = await prisma.invoice.aggregate({
+      where: { clientId: id, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] }, balanceDue: { gt: 0 } },
+      _sum: { balanceDue: true }
+    });
+
+    res.json({
+      success: true,
+      message: 'Precio conciliado',
+      data: {
+        monthlyFee: newFee,
+        plan: result.planInfo,
+        reconciled,
+        skipped,
+        totalDebt: debtAgg._sum.balanceDue || 0
+      }
+    });
   });
 
   // GET /clients/archive — list deleted-client archive rows (snapshot + financial
@@ -1463,41 +1583,41 @@ class ClientsController {
       }
     }
 
-    // Push the change to the router: disable the PPPoE secret, kick any active
-    // session, and add the assigned IP to the "Moroso" address-list (enabled).
-    // Best-effort: if the router is unreachable, we keep the DB change and log
-    // the failure so it can be retried manually.
+    // Push to the router — SUSPENSIÓN CAUTIVA: NO deshabilitamos el PPPoE (el
+    // cliente debe seguir conectado para VER la página de suspensión en sus
+    // dispositivos). Solo lo agregamos a la address-list de corte del router
+    // (que redirige su tráfico al portal). El nombre de la lista es el del
+    // router del cliente (varía por WISP). Best-effort.
     const mikrotikResult = { attempted: false, secret: null, kick: null, addressList: null, error: null };
     if (client.mikrotikAccount) {
       mikrotikResult.attempted = true;
       try {
-        const { service } = await getMikrotikServiceForClient(client.id);
+        const { collectionService, collectionRouter } = await getMikrotikServiceForClient(client.id);
+        const lists = collectionLists(collectionRouter);
         const username = client.mikrotikAccount.username;
         const remoteAddress = (client.mikrotikAccount?.remoteAddress || '').split('/')[0];
 
-        // 1) Disable PPPoE secret + kick active session
-        try {
-          mikrotikResult.secret = await service.disablePPPoESecret(username);
-        } catch (e) {
-          mikrotikResult.secret = { error: e.message };
-        }
-        try {
-          mikrotikResult.kick = await service.kickActivePPPoE(username);
-        } catch (e) {
-          mikrotikResult.kick = { error: e.message };
-        }
-
-        // 2) Add to Moroso address-list (enabled)
+        // Agregar a la lista de corte (cautiva) EN EL ROUTER DE COBRANZA. Sin PPPoE.
         if (remoteAddress) {
           try {
-            mikrotikResult.addressList = await service.addToAddressList({
-              list: MOROSO_LIST,
+            mikrotikResult.addressList = await collectionService.addToAddressList({
+              list: lists.moroso,
               address: remoteAddress,
               comment: username
             });
           } catch (e) {
             mikrotikResult.addressList = { error: e.message };
           }
+          // Asegurar la regla proxy-access → NUESTRA página de suspensión (para
+          // que el captivo muestre nuestra página y no el fallback). Best-effort.
+          try {
+            const { makeToken } = await import('../services/suspended-portal.service.js');
+            mikrotikResult.proxy = await collectionService.ensureProxyRedirect({
+              srcAddress: remoteAddress,
+              actionData: `10.2.3.6/suspendido/${makeToken(client.id)}`,
+              comment: `${username}-Moroso`
+            });
+          } catch (e) { mikrotikResult.proxy = { error: e.message }; }
         } else {
           mikrotikResult.addressList = { skipped: true, reason: 'no_remote_address' };
         }
@@ -1548,16 +1668,18 @@ class ClientsController {
       }
     }
 
-    // Push reactivation to the router: enable the PPPoE secret and remove the
-    // entry from the "Moroso" address-list. Best-effort.
+    // Push reactivation to the router: quitar de la lista de corte del router y
+    // habilitar el PPPoE por si quedó deshabilitado (modelo viejo). Best-effort.
     const mikrotikResult = { attempted: false, secret: null, addressList: null, error: null };
     if (client.mikrotikAccount) {
       mikrotikResult.attempted = true;
       try {
-        const { service } = await getMikrotikServiceForClient(client.id);
+        const { service, collectionService, collectionRouter } = await getMikrotikServiceForClient(client.id);
+        const lists = collectionLists(collectionRouter);
         const username = client.mikrotikAccount.username;
         const remoteAddress = (client.mikrotikAccount?.remoteAddress || '').split('/')[0];
 
+        // Idempotente: habilitar el secret EN EL ROUTER DEL CLIENTE (PPPoE).
         try {
           mikrotikResult.secret = await service.enablePPPoESecret(username);
         } catch (e) {
@@ -1566,10 +1688,10 @@ class ClientsController {
 
         if (remoteAddress) {
           try {
-            mikrotikResult.addressList = await service.removeFromAddressList({
-              list: MOROSO_LIST,
-              address: remoteAddress
-            });
+            // Quitar de corte y AvisoOK EN EL ROUTER DE COBRANZA.
+            await collectionService.removeFromAddressList({ list: lists.moroso, address: remoteAddress });
+            await collectionService.removeFromAddressList({ list: lists.avisoOk, address: remoteAddress }).catch(() => {});
+            mikrotikResult.addressList = { removed: true };
           } catch (e) {
             mikrotikResult.addressList = { error: e.message };
           }
@@ -1589,6 +1711,121 @@ class ClientsController {
       message: 'Servicio activado exitosamente',
       data: { mikrotik: mikrotikResult }
     });
+  });
+
+  // POST /clients/:id/aviso — poner al cliente en "recordatorio de pago" (Aviso).
+  // NO cambia Client.status ni corta el servicio: solo agrega la IP a la
+  // address-list `Aviso` del router → el cliente ve la página interstitial con
+  // la cuenta regresiva hasta que reconoce (AvisoOK) o paga. Best-effort.
+  setAviso = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    // #3: recurrencia global del recordatorio (timeout de AvisoOK). Se guarda
+    // como config para que el "continuar" del portal la aplique.
+    const rec = req.body?.recurrence;
+    if (['1d', '12h', '8h', '6h', '4h', '2h', '1h'].includes(rec)) {
+      const { setValue } = await import('../services/system-config.service.js');
+      await setValue('aviso_recurrence', rec, 'string').catch(() => {});
+    }
+    const client = await prisma.client.findUnique({ where: { id }, include: { mikrotikAccount: true } });
+    if (!client) throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
+
+    const mikrotik = { attempted: false, addressList: null, error: null };
+    const remoteAddress = (client.mikrotikAccount?.remoteAddress || '').split('/')[0];
+    if (!client.mikrotikAccount || !remoteAddress) {
+      throw new AppError('El cliente no tiene cuenta Mikrotik / IP asignada', 400, 'NO_MIKROTIK');
+    }
+    mikrotik.attempted = true;
+    try {
+      const { collectionService, collectionRouter } = await getMikrotikServiceForClient(client.id);
+      mikrotik.addressList = await collectionService.addToAddressList({
+        list: collectionLists(collectionRouter).aviso, address: remoteAddress, comment: client.mikrotikAccount.username || client.name
+      });
+      // Regla proxy-access → NUESTRA página de aviso. Best-effort.
+      try {
+        const { makeToken } = await import('../services/suspended-portal.service.js');
+        await collectionService.ensureProxyRedirect({
+          srcAddress: remoteAddress,
+          actionData: `10.2.3.6/aviso/${makeToken(client.id)}`,
+          comment: `${client.mikrotikAccount.username || client.name}-Aviso`
+        });
+      } catch (e) { /* best-effort */ }
+    } catch (error) {
+      console.error('[aviso] set failed:', error.message);
+      mikrotik.error = error.message;
+    }
+    res.json({ success: true, message: 'Cliente puesto en aviso', data: { mikrotik } });
+  });
+
+  // POST /clients/:id/aviso/clear — quitar del aviso (y de AvisoOK). Best-effort.
+  clearAviso = asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const client = await prisma.client.findUnique({ where: { id }, include: { mikrotikAccount: true } });
+    if (!client) throw new AppError('Cliente no encontrado', 404, 'CLIENT_NOT_FOUND');
+
+    const mikrotik = { attempted: false, removed: [], error: null };
+    const remoteAddress = (client.mikrotikAccount?.remoteAddress || '').split('/')[0];
+    if (client.mikrotikAccount && remoteAddress) {
+      mikrotik.attempted = true;
+      try {
+        const { collectionService, collectionRouter } = await getMikrotikServiceForClient(client.id);
+        const lists = collectionLists(collectionRouter);
+        for (const list of [lists.aviso, lists.avisoOk]) {
+          try { await collectionService.removeFromAddressList({ list, address: remoteAddress }); mikrotik.removed.push(list); }
+          catch (e) { /* entry may not exist */ }
+        }
+      } catch (error) {
+        console.error('[aviso] clear failed:', error.message);
+        mikrotik.error = error.message;
+      }
+    }
+    res.json({ success: true, message: 'Aviso retirado', data: { mikrotik } });
+  });
+
+  // POST /clients/sync-collection-status — #4: reconciliar el estado del sistema
+  // con la realidad del router. Lee la lista de corte (Moroso) de cada router y
+  // marca SUSPENDED a quien esté en la lista, ACTIVE a quien salió de ella. Así
+  // el sistema "sabe" si alguien fue suspendido/reactivado directo en el Mikrotik.
+  syncCollectionStatus = asyncHandler(async (req, res) => {
+    const routers = await prisma.router.findMany({ where: { isActive: true }, include: { routes: { orderBy: { priority: 'asc' } } } });
+    const summary = { checked: 0, setSuspended: 0, setActive: 0, byRouter: [], errors: [] };
+    for (const router of routers) {
+      // El corte de los clientes de ESTE router puede enforzarse en otro (cobranza).
+      let colRouter = router;
+      if (router.collectionRouterId) {
+        const cr = await prisma.router.findUnique({ where: { id: router.collectionRouterId }, include: { routes: { orderBy: { priority: 'asc' } } } });
+        if (cr) colRouter = cr;
+      }
+      const lists = collectionLists(colRouter);
+      let morosoIps;
+      try {
+        const svc = buildMikrotikService(colRouter);
+        const al = await svc.request('/ip/firewall/address-list', 'GET', null, { retries: 1, timeoutMs: 9000 });
+        morosoIps = new Set(
+          al.filter(e => e.list === lists.moroso && e.disabled !== 'true' && e.disabled !== true)
+            .map(e => String(e.address || '').split('/')[0])
+        );
+      } catch (e) {
+        summary.errors.push(`${router.name}: ${e.message}`);
+        continue;
+      }
+      const accts = await prisma.mikrotikAccount.findMany({
+        where: { routerId: router.id, clientId: { not: null } },
+        select: { remoteAddress: true, clientId: true, client: { select: { status: true } } }
+      });
+      let s = 0, a = 0;
+      for (const acc of accts) {
+        const ip = String(acc.remoteAddress || '').split('/')[0];
+        const inMoroso = ip && morosoIps.has(ip);
+        const cur = acc.client?.status;
+        if (inMoroso && cur !== 'SUSPENDED') { await prisma.client.update({ where: { id: acc.clientId }, data: { status: 'SUSPENDED' } }); s++; }
+        else if (!inMoroso && cur === 'SUSPENDED') { await prisma.client.update({ where: { id: acc.clientId }, data: { status: 'ACTIVE' } }); a++; }
+      }
+      summary.checked += accts.length;
+      summary.setSuspended += s;
+      summary.setActive += a;
+      summary.byRouter.push({ router: router.name, enMoroso: morosoIps.size, aSuspendido: s, aActivo: a });
+    }
+    res.json({ success: true, message: 'Estado sincronizado', data: summary });
   });
 
   changePlan = asyncHandler(async (req, res) => {

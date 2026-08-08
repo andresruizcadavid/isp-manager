@@ -27,6 +27,12 @@ export const BRAND = {
   email:    'contacto@internetonline.co',
   phone:    '+57 323 632 9425',
   phoneRaw: '573236329425',          // for tel:/wa.me links
+  // WhatsApp de atención al cliente (chat) — distinto al fijo de contacto.
+  whatsapp:    '+57 302 265 3148',
+  whatsappRaw: '573022653148',       // for wa.me links
+  // Nequi para pagos directos (transferencia P2P desde la app Nequi).
+  nequi:       '318 871 7811',
+  nequiRaw:    '3188717811',
   web:      'www.internetonline.co',
   webUrl:   'https://internetonline.co',
 

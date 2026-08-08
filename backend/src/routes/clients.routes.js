@@ -126,6 +126,8 @@ router.get('/bulk-history', requireOperatorOrAdmin, clientController.getBulkHist
 // a year. Literal path MUST precede `/:id` so Express does not match "sheet"
 // as a client id.
 router.get('/sheet', clientController.getSheet);
+// #4: reconciliar Client.status con la lista de corte real del router.
+router.post('/sync-collection-status', requireOperatorOrAdmin, clientController.syncCollectionStatus);
 
 // Deleted-client archive. Literal paths MUST precede `/:id`.
 router.get('/archive', requireOperatorOrAdmin, clientController.getArchive);
@@ -156,7 +158,22 @@ router.delete('/:id/devices/:deviceId', requireOperatorOrAdmin, validateParams(z
 // Service management
 router.post('/:id/suspend', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.suspendService);
 router.post('/:id/activate', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.activateService);
+// Aviso (recordatorio de pago) — NO corta servicio; solo lista Aviso del router.
+router.post('/:id/aviso',       requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.setAviso);
+router.post('/:id/aviso/clear', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), clientController.clearAviso);
 router.post('/:id/change-plan', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(z.object({ planId: z.string() })), clientController.changePlan);
+
+// Reprice — conciliación ordenada de un cambio de precio desde la Planilla.
+// Actualiza monthlyFee del cliente, opcionalmente crea/asigna un Plan a ese
+// valor, y re-liquida SOLO las facturas abiertas seleccionadas (jamás PAGADAS).
+const repriceSchema = z.object({
+  newFeeCents: z.number().int().positive('El nuevo precio debe ser mayor a 0'),
+  planAction:  z.enum(['none', 'attach', 'create']).optional(),
+  planId:      z.string().optional(),
+  newPlanName: z.string().max(120).optional(),
+  invoiceIds:  z.array(z.string()).max(24).optional()
+});
+router.post('/:id/reprice', requireOperatorOrAdmin, validateParams(commonSchemas.idParam), validateBody(repriceSchema), clientController.reprice);
 
 // Notification history for this client (Centro de Notificaciones ↔ Clientes).
 router.get('/:id/notifications', validateParams(commonSchemas.idParam), clientController.getClientNotifications);

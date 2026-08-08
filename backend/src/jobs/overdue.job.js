@@ -15,6 +15,13 @@ class OverdueJob {
   }
 
   setupSchedules() {
+    // ═══════════════════════════════════════════════════════════
+    // NOTIFICACIONES AUTOMÁTICAS DESHABILITADAS por solicitud del
+    // operador (2026-06-09). Las reactivaciones automáticas siguen
+    // funcionando pero SIN enviar notificación al cliente.
+    // ═══════════════════════════════════════════════════════════
+    // Para re-activar: descomentar las líneas marcadas con [NOTIF]
+    // ═══════════════════════════════════════════════════════════
     // POLICY: NO AUTO-SUSPENSIONS. Per the operator's standing directive,
     // suspending a client's service is a MANUAL action only — never on a
     // schedule, never gated by a flag that could be flipped by accident.
@@ -26,22 +33,22 @@ class OverdueJob {
     // Auto-reactivation IS allowed: when a customer pays, restoring service
     // promptly is desirable and reversible. The scheduled check looks for
     // SUSPENDED clients whose invoices are now all paid and reactivates them.
+    // [NOTIF] reactivación automática — la notificación al cliente está deshabilitada
+    //         (notificationService.sendServiceActivation está comentada abajo)
     cron.schedule('0 10 * * *', async () => {
       console.log('🔄 Starting reactivation check job...');
       await this.checkReactivations();
     });
 
-    // Send final warnings - Run daily at 6:00 PM
-    cron.schedule('0 18 * * *', async () => {
-      // Kill-switch: "última advertencia" deshabilitada por defecto (mismo flag
-      // que los recordatorios de deudores). Re-activar con REMINDERS_ENABLED=true.
-      if (process.env.REMINDERS_ENABLED !== 'true') {
-        console.log('⏸️ Final warnings disabled (REMINDERS_ENABLED!=true), skipping');
-        return;
-      }
-      console.log('🔄 Starting final warnings job...');
-      await this.sendFinalWarnings();
-    });
+    // [NOTIF] Final warnings — completamente deshabilitado
+    // cron.schedule('0 18 * * *', async () => {
+    //   if (process.env.REMINDERS_ENABLED !== 'true') {
+    //     console.log('⏸️ Final warnings disabled (REMINDERS_ENABLED!=true), skipping');
+    //     return;
+    //   }
+    //   console.log('🔄 Starting final warnings job...');
+    //   await this.sendFinalWarnings();
+    // });
 
     // Clean up old notification logs - Run weekly on Sunday at 2:00 AM
     cron.schedule('0 2 * * 0', async () => {
@@ -208,8 +215,9 @@ class OverdueJob {
       }
     }
 
-    try { await notificationService.sendServiceActivation(client); }
-    catch (e) { console.error('Reactivation notification failed:', e.message); }
+    // [NOTIF] notificación al cliente deshabilitada
+    // try { await notificationService.sendServiceActivation(client); }
+    // catch (e) { console.error('Reactivation notification failed:', e.message); }
 
     await this.logReactivation(client.id, 'AUTOMATIC', 'All invoices paid');
     console.log(`✅ Client ${client.name} (ID: ${client.id}) reactivated automatically`);

@@ -20,6 +20,20 @@ function dateFilter(start, end) {
   return Object.keys(f).length ? f : undefined;
 }
 
+// PaymentLink solo tiene el escalar `paymentAttemptId` (no relación) → adjunta
+// el PaymentAttempt correspondiente por join manual, mutando cada link.
+async function attachAttempts(links) {
+  const ids = [...new Set(links.map(l => l.paymentAttemptId).filter(Boolean))];
+  if (!ids.length) { for (const l of links) l.paymentAttempt = null; return links; }
+  const atts = await prisma.paymentAttempt.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, status: true, checkoutUrl: true, externalId: true, createdAt: true }
+  });
+  const map = new Map(atts.map(a => [a.id, a]));
+  for (const l of links) l.paymentAttempt = l.paymentAttemptId ? (map.get(l.paymentAttemptId) || null) : null;
+  return links;
+}
+
 // ── 1. Links de Pago ──────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
@@ -45,12 +59,15 @@ router.get('/', async (req, res, next) => {
         where, skip, take, orderBy: { createdAt: 'desc' },
         include: {
           client: { select: { id: true, name: true, email: true, documentNumber: true, documentType: true } },
-          invoice: { select: { id: true, invoiceNumber: true, total: true, status: true, dueDate: true } },
-          paymentAttempt: { select: { id: true, status: true, checkoutUrl: true, externalId: true, createdAt: true } }
+          invoice: { select: { id: true, invoiceNumber: true, total: true, status: true, dueDate: true } }
         }
       }),
       prisma.paymentLink.count({ where })
     ]);
+
+    // PaymentLink no tiene relación `paymentAttempt` (solo el escalar
+    // paymentAttemptId) → join manual para no romper con include inválido.
+    await attachAttempts(links);
 
     const summary = await prisma.paymentLink.groupBy({ by: ['status'], _count: true });
 
@@ -120,106 +137,113 @@ router.get('/attempts/:id', async (req, res, next) => {
 // ── 4. Conciliación ──────────────────────────────────────────────────
 router.get('/conciliation', async (req, res, next) => {
   try {
-    // (A) Links expirados SIN Payment completo asociado
-    const expiredOrphans = await prisma.paymentLink.findMany({
-      where: { status: { in: ['expired', 'cancelled'] } },
-      include: {
-        client: { select: { id: true, name: true, email: true } },
-        invoice: { select: { id: true, invoiceNumber: true, total: true, status: true } },
-        paymentAttempt: { select: { id: true, status: true } }
-      }
-    });
+    const cli = { select: { id: true, name: true, email: true, documentType: true, documentNumber: true } };
+    const inv = { select: { id: true, invoiceNumber: true, total: true, balanceDue: true, status: true } };
 
-    // Filter: only those without a COMPLETED payment on the invoice
+    // (A) Links expirados/cancelados con la factura AÚN sin pago completado.
+    const expiredLinks = await prisma.paymentLink.findMany({
+      where: { status: { in: ['expired', 'cancelled'] } },
+      include: { client: cli, invoice: inv }
+    });
     const expiredNoPayment = [];
-    for (const link of expiredOrphans) {
+    for (const link of expiredLinks) {
       if (!link.invoice) continue;
-      const completedPayments = await prisma.payment.count({
-        where: { invoiceId: link.invoice.id, status: 'COMPLETED' }
+      const cnt = await prisma.payment.count({ where: { invoiceId: link.invoice.id, status: 'COMPLETED' } });
+      if (cnt === 0) expiredNoPayment.push({
+        type: 'link_expirado_sin_pago', reference: link.reference, client: link.client, invoice: link.invoice,
+        amountInCents: link.amountInCents, linkStatus: link.status, attemptStatus: null,
+        linkId: link.id, attemptId: link.paymentAttemptId || null, linkCreatedAt: link.createdAt, reconcilable: false
       });
-      if (completedPayments === 0) {
-        expiredNoPayment.push({
-          type: 'link_expirado_sin_pago',
-          reference: link.reference,
-          client: link.client,
-          invoice: link.invoice,
-          amountInCents: link.amountInCents,
-          linkStatus: link.status,
-          attemptStatus: link.paymentAttempt?.status || null,
-          linkId: link.id,
-          linkCreatedAt: link.createdAt
-        });
-      }
     }
 
-    // (B) Payments WOMPI SIN PaymentLink asociado (huérfanos)
-    const orphanPayments = await prisma.payment.findMany({
-      where: { method: 'WOMPI', paymentLinks: { none: {} } },
-      include: {
-        invoice: { select: { id: true, invoiceNumber: true, total: true, status: true } },
-        client: { select: { id: true, name: true, email: true } }
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 100
+    // (B) Pagos WOMPI cuya factura NO tiene ningún PaymentLink (pago manual sin link).
+    const wompiPayments = await prisma.payment.findMany({
+      where: { method: 'WOMPI', status: 'COMPLETED' },
+      include: { invoice: inv, client: cli }, orderBy: { createdAt: 'desc' }, take: 200
     });
+    const orphanPayments = [];
+    for (const pay of wompiPayments) {
+      const linkCnt = await prisma.paymentLink.count({ where: { invoiceId: pay.invoiceId } });
+      if (linkCnt === 0) orphanPayments.push({
+        type: 'pago_huerfano_sin_link', reference: pay.transactionId || pay.id, client: pay.client, invoice: pay.invoice,
+        amountInCents: pay.amount, linkStatus: null, attemptStatus: 'COMPLETED',
+        linkId: null, attemptId: null, linkCreatedAt: pay.createdAt, reconcilable: false
+      });
+    }
 
-    const orphanPaymentRows = orphanPayments.map(p => ({
-      type: 'pago_huertfano_sin_link',
-      reference: p.transactionId || p.id,
-      client: p.client,
-      invoice: p.invoice,
-      amountInCents: p.amount,
-      linkStatus: null,
-      attemptStatus: 'COMPLETED',
-      linkId: null,
-      linkCreatedAt: null
-    }));
-
-    // (C) PaymentAttempt COMPLETED sin Payment (error conciliación)
+    // (C) Intentos COMPLETADOS sin Payment WOMPI → el dinero entró pero no se
+    //     registró el pago ni se marcó la factura. CONCILIABLE (acción 1-clic).
     const completedAttempts = await prisma.paymentAttempt.findMany({
       where: { status: 'COMPLETED' },
-      include: {
-        invoice: { select: { id: true, invoiceNumber: true, total: true, status: true } },
-        client: { select: { id: true, name: true, email: true } }
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 100
+      include: { invoice: inv, client: cli }, orderBy: { createdAt: 'desc' }, take: 200
     });
-
     const attemptNoPayment = [];
     for (const att of completedAttempts) {
-      const paymentExists = await prisma.payment.findFirst({
-        where: { invoiceId: att.invoiceId, method: 'WOMPI' }
+      const pay = await prisma.payment.findFirst({ where: { invoiceId: att.invoiceId, method: 'WOMPI', status: 'COMPLETED' } });
+      if (!pay) attemptNoPayment.push({
+        type: 'attempt_completado_sin_payment', reference: att.reference, client: att.client, invoice: att.invoice,
+        amountInCents: att.amount, linkStatus: null, attemptStatus: att.status,
+        linkId: null, attemptId: att.id, linkCreatedAt: att.createdAt, reconcilable: true
       });
-      if (!paymentExists) {
-        attemptNoPayment.push({
-          type: 'attempt_completado_sin_payment',
-          reference: att.reference,
-          client: att.client,
-          invoice: att.invoice,
-          amountInCents: att.amount,
-          linkStatus: null,
-          attemptStatus: att.status,
-          linkId: null,
-          linkCreatedAt: null
-        });
-      }
     }
 
-    const allItems = [...expiredNoPayment, ...orphanPaymentRows, ...attemptNoPayment];
-    allItems.sort((a, b) => (b.linkCreatedAt || 0) - (a.linkCreatedAt || 0));
+    const items = [...expiredNoPayment, ...orphanPayments, ...attemptNoPayment];
+    items.sort((a, b) => new Date(b.linkCreatedAt || 0).getTime() - new Date(a.linkCreatedAt || 0).getTime());
 
     res.json({
       success: true,
       data: {
-        items: allItems,
+        items,
         counts: {
           expiredNoPayment: expiredNoPayment.length,
-          orphanPayments: orphanPaymentRows.length,
+          orphanPayments: orphanPayments.length,
           attemptNoPayment: attemptNoPayment.length
         }
       }
     });
+  } catch (e) { next(e); }
+});
+
+// ── 4b. Conciliar: crear el Payment faltante de un intento COMPLETED ──────
+// Registra el Payment WOMPI, re-liquida la factura, marca el link como pagado
+// y levanta la cobranza (aviso/suspensión) del cliente. Idempotente.
+router.post('/conciliation/reconcile', async (req, res, next) => {
+  try {
+    const { attemptId } = req.body || {};
+    if (!attemptId) return res.status(400).json({ success: false, error: { message: 'attemptId requerido' } });
+    const att = await prisma.paymentAttempt.findUnique({ where: { id: attemptId }, include: { invoice: true } });
+    if (!att) return res.status(404).json({ success: false, error: { message: 'Intento no encontrado' } });
+    if (att.status !== 'COMPLETED') return res.status(400).json({ success: false, error: { message: 'El intento no está COMPLETED' } });
+    if (!att.invoice) return res.status(400).json({ success: false, error: { message: 'El intento no tiene factura' } });
+
+    const existing = await prisma.payment.findFirst({ where: { invoiceId: att.invoiceId, method: 'WOMPI', status: 'COMPLETED' } });
+    if (existing) return res.json({ success: true, data: { alreadyReconciled: true, paymentId: existing.id } });
+
+    const inv = att.invoice;
+    const total = inv.total ?? inv.amount ?? 0;
+    const paidAgg = await prisma.payment.aggregate({ where: { invoiceId: inv.id, status: 'COMPLETED' }, _sum: { amount: true } });
+    const paid = paidAgg._sum.amount || 0;
+    const payAmount = Math.min(att.amount, Math.max(0, total - paid)) || att.amount;
+    const remaining = Math.max(0, total - (paid + payAmount));
+    const newStatus = remaining === 0 ? 'PAID' : 'PARTIAL';
+
+    const [payment] = await prisma.$transaction([
+      prisma.payment.create({ data: {
+        invoiceId: inv.id, clientId: att.clientId, amount: payAmount, method: 'WOMPI', status: 'COMPLETED',
+        transactionId: att.externalId || att.reference, notes: 'Conciliado desde Trazabilidad WOMPI',
+        createdByUserName: req.user?.name || 'Conciliación'
+      }}),
+      prisma.invoice.update({ where: { id: inv.id }, data: {
+        balanceDue: remaining, status: newStatus, ...(remaining === 0 ? { paidDate: new Date() } : {})
+      }})
+    ]);
+    await prisma.paymentLink.updateMany({ where: { paymentAttemptId: att.id }, data: { status: 'paid', paidAt: new Date() } }).catch(() => {});
+
+    // Levantar cobranza (quita aviso; reactiva si ya no debe). Best-effort.
+    let collection = null;
+    try { const { liftCollectionOnPayment } = await import('../services/aviso-portal.service.js'); collection = await liftCollectionOnPayment(att.clientId); } catch { /* noop */ }
+
+    res.json({ success: true, data: { reconciled: true, paymentId: payment.id, invoiceStatus: newStatus, amount: payAmount, collection } });
   } catch (e) { next(e); }
 });
 
@@ -252,13 +276,16 @@ router.get('/:id', async (req, res, next) => {
       include: {
         client: { select: { id: true, name: true, email: true, phone: true, documentNumber: true, documentType: true } },
         invoice: { include: { payments: { orderBy: { createdAt: 'desc' } } } },
-        paymentAttempt: true,
         campaign: true
       }
     });
     if (!link) {
       return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Link de pago no encontrado' } });
     }
+    // PaymentLink no tiene relación paymentAttempt → adjuntar por join manual.
+    link.paymentAttempt = link.paymentAttemptId
+      ? await prisma.paymentAttempt.findUnique({ where: { id: link.paymentAttemptId } })
+      : null;
     res.json({ success: true, data: link });
   } catch (e) { next(e); }
 });

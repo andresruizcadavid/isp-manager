@@ -222,15 +222,25 @@ export async function getDebtPayLink(rawToken) {
   if (!row || row.status !== 'pending' || row.expiresAt.getTime() < Date.now()) {
     const e = new Error('Enlace inválido o expirado'); e.code = 'TOKEN_NOT_FOUND'; e.status = 404; throw e;
   }
+  return debtPayLinkForClient(row.clientId, { redirectUrl: `${(env.FRONTEND_URL || '').replace(/\/+$/, '')}/update/pago-ok` });
+}
 
+/**
+ * Core: idempotent Wompi pay-link for a client's current debt, keyed by
+ * clientId (no token). Reused by the self-update flow (getDebtPayLink) and by
+ * the suspended-client captive portal. Throws NO_DEBT if nothing is owed.
+ * @param {string} clientId
+ * @param {{ redirectUrl?: string }} [opts]
+ */
+export async function debtPayLinkForClient(clientId, opts = {}) {
   let invoice = await prisma.invoice.findFirst({
-    where:   { clientId: row.clientId, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] }, balanceDue: { gt: 0 } },
+    where:   { clientId, status: { in: ['PENDING', 'OVERDUE', 'PARTIAL'] }, balanceDue: { gt: 0 } },
     orderBy: { dueDate: 'asc' }
   });
 
   if (!invoice) {
     const client = await prisma.client.findUnique({
-      where: { id: row.clientId }, select: { balance: true }
+      where: { id: clientId }, select: { balance: true }
     });
     if (!client || !(client.balance > 0)) {
       const e = new Error('No hay deuda pendiente'); e.code = 'NO_DEBT'; e.status = 400; throw e;
@@ -241,7 +251,7 @@ export async function getDebtPayLink(rawToken) {
       const inv = await tx.invoice.create({
         data: {
           invoiceNumber: number,
-          clientId:      row.clientId,
+          clientId,
           amount:        client.balance,
           total:         client.balance,
           balanceDue:    client.balance,
@@ -252,7 +262,7 @@ export async function getDebtPayLink(rawToken) {
         }
       });
       // Move the debt off client.balance and onto the invoice (avoid double count).
-      await tx.client.update({ where: { id: row.clientId }, data: { balance: 0 } });
+      await tx.client.update({ where: { id: clientId }, data: { balance: 0 } });
       return inv;
     });
   }
@@ -267,7 +277,7 @@ export async function getDebtPayLink(rawToken) {
     const { paymentLinkService } = await import('./payment-link.service.js');
     const link = await paymentLinkService.createForInvoice(invoice.id, {
       expiresInDays: 30,
-      redirectUrl:   `${(env.FRONTEND_URL || '').replace(/\/+$/, '')}/update/pago-ok`
+      redirectUrl:   opts.redirectUrl || `${(env.FRONTEND_URL || '').replace(/\/+$/, '')}/update/pago-ok`
     });
     checkoutUrl = link.checkoutUrl;
   }

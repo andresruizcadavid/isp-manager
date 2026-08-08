@@ -29,6 +29,8 @@ import networkRoutes from './routes/network.routes.js';
 import telegramRoutes from './routes/telegram.routes.js';
 import whatsappRoutes, { webhookRouter as whatsappWebhookRouter } from './routes/whatsapp.routes.js';
 import publicClientUpdatesRoutes from './routes/public.client-updates.routes.js';
+import publicSuspendedRoutes from './routes/public.suspended.routes.js';
+import publicAvisoRoutes from './routes/public.aviso.routes.js';
 import clientAuthRoutes from './routes/client-auth.routes.js';
 import portalRoutes from './routes/portal.routes.js';
 import paymentLinksRoutes, { pixelRouter as paymentLinksPixelRouter } from './routes/payment-links.routes.js';
@@ -85,6 +87,8 @@ app.use('/api/v1/portal',            portalRoutes);
 // PUBLIC — customer self-service update flow. No auth: the random token in
 // the URL is the credential. Has its own per-token rate limiter.
 app.use('/api/v1/public/client-updates', publicClientUpdatesRoutes);
+app.use('/api/v1/public/suspended',       publicSuspendedRoutes);
+app.use('/api/v1/public/aviso',           publicAvisoRoutes);
 
 // PUBLIC — payment provider webhooks. Wompi and any future PSP. Auth is
 // signature-based inside the controller; MUST NOT sit behind authMiddleware.
